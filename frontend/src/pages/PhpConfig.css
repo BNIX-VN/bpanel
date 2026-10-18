@@ -1,0 +1,67 @@
+/* Ported from SNPanel's pages/PhpConfig.css, out of its cascade layer: BPanel's
+   element rules are unlayered and would win over a layered class. */
+/* The PHP Configuration page's limits: each says its floor under it, in red
+   when the value is below it. See pages/PhpConfig.jsx. */
+
+/* A row holding a note is taller; the fields keep their height at its top. */
+.php-config-card>label{align-content:start}
+.php-limit-note{font-size:var(--text-xs);font-weight:500;color:var(--text-muted);line-height:1.35}
+.php-limit-note.bad{color:var(--danger-text);font-weight:600}
+.php-limit input[aria-invalid="true"]{border-color:var(--danger-border);background:var(--danger-bg)}
+
+/* The chosen version's extensions: the catalogue, a row each - its name,
+   and Install, or Installed and Remove. */
+/* One column, not the settings card's four: a heading and the list. */
+.php-ext-card{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-3)}
+.php-ext-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);flex-wrap:wrap}
+.php-ext-head h2{margin:0}
+.php-ext-find{flex:0 1 260px;min-width:180px}
+/* Wide enough for a name beside Installed and Remove, unbroken. */
+.php-ext-grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:var(--space-2)}
+.php-ext{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);min-width:0;min-height:48px;padding:6px 8px 6px 12px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface)}
+.php-ext.on{border-color:var(--info-border)}
+.php-ext code{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-family:var(--font-mono);font-size:var(--text-sm);font-weight:700;color:var(--text)}
+.php-ext-state{display:flex;align-items:center;gap:6px;flex:none}
+
+/* The PHP tab (Web server & PHP): the version first - what every card
+   below is about - and the versions to install beside it. */
+.php-page>.section{margin-bottom:var(--space-4)}
+.php-versions-title{margin:0;font-size:var(--text-lg)}
+.php-versions-row{display:flex;flex-wrap:wrap;align-items:end;gap:var(--space-3) var(--space-5)}
+.php-version-pick{display:grid;gap:6px;flex:0 1 220px;min-width:160px;font-weight:600;color:var(--text-secondary)}
+.php-version-pick span,.php-install>span{font-size:var(--text-sm);font-weight:600;color:var(--text-secondary)}
+.php-install{display:grid;gap:6px;min-width:0}
+.php-install-grid{display:flex;flex-wrap:wrap;gap:8px}
+.php-config-actions{grid-column:1/-1;display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}
+
+/* Auto tune: a table of what it would change, and one button. */
+.php-tune-section{display:grid;gap:var(--space-3)}
+.php-tune-section>.section-title{margin-bottom:0}
+.php-tune-lead{display:flex;align-items:center;gap:6px;margin:0;font-weight:600;color:var(--warning-text)}
+.php-tune-table td{vertical-align:top}
+.php-tune-table code{font-weight:700}
+.php-tune-why{display:block;max-width:70ch;margin-top:2px;color:var(--text-muted);font-size:var(--text-xs);line-height:1.4}
+.php-tune-now{color:var(--text-secondary);white-space:nowrap;font-family:var(--font-mono);font-size:var(--text-sm)}
+.php-tune-new{white-space:nowrap;font-family:var(--font-mono);font-size:var(--text-sm);color:var(--success-text)}
+.php-tune-section .php-tune-diff{margin:0}
+.php-tune-section .hint{margin:0}
+
+/* OPcache's three sizes in the php.ini limits (round 8): a row of their
+   own under a small heading, each with its unit beside the number. */
+.php-config-sub{grid-column:1/-1;display:grid;gap:2px;padding-top:var(--space-3);border-top:1px solid var(--border)}
+.php-config-sub h3{display:flex;align-items:center;gap:8px;margin:0;font-size:var(--text-base)}
+.php-config-sub .hint{margin:0}
+/* Its heading, whether it is on, and the switch - at the end of the row. */
+.php-opcache-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.php-opcache-head>button{margin-left:auto}
+.php-limit-unit{display:flex;align-items:center;gap:6px;min-width:0}
+.php-limit-unit input{flex:1 1 auto;min-width:0}
+.php-limit-unit>span{flex:none;color:var(--text-secondary);font-size:var(--text-sm)}
+
+@media (max-width:640px){
+  .php-ext-find{flex:1 1 100%}
+  .php-ext-grid{grid-template-columns:1fr}
+  .php-version-pick{flex:1 1 100%}
+  .php-config-actions>button{flex:1 1 0}
+  .php-tune-table th:first-child,.php-tune-table td:first-child{min-width:190px}
+}

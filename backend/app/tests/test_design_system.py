@@ -55,67 +55,75 @@ def _dashboard():
 
 def test_the_dashboard_is_laid_out_as_cpanels_home():
     """cPanel's home page (operator, 2026-10-04, following OPanel: customers
-    come from cPanel and DirectAdmin). The tools are back, but as cPanel has
-    them - in groups that fold, with a search - rather than the old blocks
-    that repeated the sidebar item for item (2026-09-25). On the right, what
-    the sidebar cannot say: how much is used, and how things stand."""
+    come from cPanel and DirectAdmin), in SNPanel's shape since 2026-10-18:
+    every feature a tile with its picture, in sections that fold, with a
+    search; on the right, how things stand. What needs attention is the top
+    bar's bell."""
     dashboard = _dashboard()
     assert "featureGroups" not in APP and "function FeatureTile(" not in APP
     assert 'className="dashboard cp-layout"' in dashboard
-    # The server's CPU, RAM, disk and network moved to the top bar (2026-10-06).
     assert "dash-resources" not in dashboard
     assert 'className={`status-row tone-${card.tone}`}' in dashboard
     for key in ("services", "ssl", "firewall", "waf", "malware", "backups"):
         assert f"key: '{key}'" in dashboard, key
-    assert "<h2>{t('Needs attention')}</h2>" in dashboard and "t('Everything looks fine.')" in dashboard
+    bell = (SRC / "components" / "NotificationBell.jsx").read_text(encoding="utf-8")
+    assert "t('Needs attention')" in bell
     assert "{t('Statistics')}" in dashboard and "{t('General information')}" in dashboard
-    # The tools: grouped, searchable, and "New website" and "New database"
-    # arrive with their form open.
-    tools = APP.split("function dashboardToolGroups()")[1].split("\n  function ")[0]
-    assert "setCreateFormOpen(true); navigateToPage('websites');" in tools
-    assert "setDbCreateOpen(true); navigateToPage('databases');" in tools
+    # The tiles (lib/features.jsx): grouped, searchable, and "New website" and
+    # "New database" arrive with their form open.
+    features = (SRC / "lib" / "features.jsx").read_text(encoding="utf-8")
+    assert "before: 'newWebsite'" in features and "before: 'newDatabase'" in features
+    assert "newWebsite: () => setCreateFormOpen(true)," in APP and "newDatabase: () => setDbCreateOpen(true)," in APP
     assert "t('Search tools (press /)')" in APP and "normalizeSearch(" in APP
 
 
 def test_a_customer_is_not_shown_the_server():
     """Server state is an administrator's: the endpoint leaves it out for a
-    customer, and what reads it sits in the administrator's branch."""
+    customer, and what reads it sits in the administrator's branch. Every
+    account's use is Server › Account resources, an administrator's page."""
     dashboard = _dashboard()
     services = dashboard.index("status.push({ key: 'services'")
     assert dashboard[:services].rfind("if (isAdmin) {") > dashboard[:services].rfind("} else {")
     admin_page, customer_page = dashboard.split("if (!currentUser) return null;", 1)
     assert "t('Server information')" in admin_page and "t('Server information')" not in customer_page
-    assert "renderTopAccounts()" in admin_page and "renderTopAccounts()" not in customer_page
+    assert "if (page === 'account-resources') return isAdmin ? renderAccountResources() : renderDashboard();" in APP
     customer_status = dashboard.split("} else {\n      const wafOn", 1)[1].split("\n    }\n", 1)[0]
     assert "key: 'waf'" in customer_status and "key: 'security'" in customer_status
 
 
 def test_the_sidebar_holds_what_is_used_every_day():
-    """OPanel's sidebar (operator, 2026-09-29: BPanel follows OPanel exactly):
-    one plain list - the everyday pages, the addons that are on in OPanel's
-    order, then Settings. Everything else is one click further, on the
-    Settings page, which is a page and not a collapsed submenu."""
-    sidebar = APP.split("const navSections = [")[1].split("].filter(section")[0]
-    keys = re.findall(r"\['([a-z-]+)', '", sidebar)
-    # Git is an addon (2026-10-10): in the sidebar only while installed.
-    assert keys == ["dashboard", "websites", "applications", "ssl", "databases", "cron", "files",
-                    "sftp", "backups", "users", "mail", "dns", "git", "mcp", "notifications", "malware", "settings"]
-    assert sidebar.count("{ key: ") == 1, "one list, no groups"
-    assert "sidebar-subnav" not in APP and "settingsMenuOpen" not in APP
-    hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
-    hub_keys = re.findall(r"\['([a-z-]+)', '", hub)
-    assert hub_keys == ["firewall", "waf", "access-logs", "security",
-                        "processes", "ram-usage", "disk-usage", "traffic",
-                        "panel-settings", "services", "php", "updates", "addons"]
-    assert not set(keys) & set(hub_keys), "a page in both places"
-    assert "if (page === 'settings') return renderSettingsHub();" in APP
-    assert 'className="section settings-hub"' in APP and 'className="settings-tile"' in APP
+    """The sidebar holds the everyday pages and the hubs (SNPanel-style shell,
+    2026-10-18); a hub's pages are its tabs, and an addon is opened from its
+    Dashboard tile, never from the sidebar (operator, 2026-10-18)."""
+    navigation = (SRC / "lib" / "navigation.jsx").read_text(encoding="utf-8")
+    sidebar = navigation.split("export function sidebarItems(")[1].split("\n}\n")[0]
+    keys = re.findall(r"\['([a-z-]+)', ", sidebar)
+    # The WordPress Manager is the one addon there, last, while installed
+    # (operator, 2026-10-19), as SNPanel has it.
+    assert keys == ["wordpress", "dashboard", "websites", "ssl", "databases", "cron", "files", "backups",
+                    "users", "server", "security-center", "config", "users"]
+    assert "const wordpress = ctx.wordpressAddonInstalled ? [['wordpress'," in sidebar
+    assert "      ...wordpress,\n    ];" in sidebar and "return [...common, ...wordpress];" in sidebar
+    for addon in ("mail", "dns", "git", "mcp", "applications"):
+        assert f"'{addon}'" not in sidebar, addon
+    hubs = navigation.split("export const HUBS = [")[1].split("\n];")[0]
+    tabs = re.findall(r"\{ page: '([a-z-]+)'", hubs)
+    for page in ("processes", "ram-usage", "disk-usage", "traffic", "account-resources", "php", "services", "updates",
+                 "firewall", "waf", "access-logs", "malware", "panel-settings", "addons", "notifications",
+                 "files", "sftp", "terminal"):
+        assert page in tabs, page
+    assert not set(keys) & set(tabs) - {"files"}, "a page in both places"
+
 
 def test_a_settings_page_keeps_its_own_name_and_lights_up_settings():
-    assert "const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage === 'usage' ? 'dashboard' : basePage;" in APP
-    assert "<h1>{pageItem?.[1] ? t(pageItem[1])" in APP
-    # As in OPanel, its title is a crumb back to the Settings page.
-    assert '<h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage(\'settings\')}>' in APP
+    """A hub's page keeps its own name, after the hub's, and the hub's entry
+    in the sidebar lights up (lib/navigation.jsx sidebarKeyOf)."""
+    assert "const activeHub = hubOf(page, navCtx);" in APP
+    assert "<button type=\"button\" onClick={() => navigateToPage(activeHub.tabs[0].page)}>{t(activeHub.hub.title)}</button>" in APP
+    assert '<span className="page-crumb-current">{pageTitle}</span>' in APP
+    navigation = (SRC / "lib" / "navigation.jsx").read_text(encoding="utf-8")
+    assert "if (found && keys.has(found.hub.key)) return found.hub.key;" in navigation
+
 
 def test_panel_settings_is_opanels_tabs():
     """OPanel's page (operator, 2026-09-30: tabs as BPanel had them): General,
@@ -144,15 +152,13 @@ def test_sign_out_lives_in_the_account_menu():
 
 def test_the_create_website_form_is_not_in_front_of_the_list():
     """Making a site is occasional; finding one is why the page gets opened.
-    The form was four hundred pixels of it above the list. As in OPanel it is
-    a create-panel section, closed by an icon-only X, and "New website" on
-    the list (or its empty state) opens it."""
+    As in SNPanel the form is a side sheet, closed by its own X, and "New
+    website" on the list (or its empty state) opens it; with no website yet
+    it is open, the only thing to do."""
     assert "const [createFormOpen, setCreateFormOpen] = useState(false);" in APP
     assert "const createOpen = createFormOpen || websites.length === 0;" in APP
-    # An empty panel is the exception: there the form is the only thing to do.
-    assert "{createOpen && <section className=\"section create-panel\">" in APP
-    page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl() {")[0]
-    assert 'className="secondary icon-only mini" onClick={() => setCreateFormOpen(false)}' in page
+    page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl(")[0]
+    assert "<Drawer open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}" in page
     assert "action={{ label: t('New website'), icon: Plus, onClick: openCreate }}" in page
 
 
@@ -181,6 +187,10 @@ def test_a_label_from_an_array_goes_through_the_dictionary():
         "{label}</span><strong title",
         # Product and file names: "Claude Code", "Cursor - .cursor/mcp.json".
         "{label}</strong>",
+        # Account resources' column headings and a website's log tabs: built
+        # with t() in the arrays they come from.
+        "{label}",
+        "{label}</button>)}",
     }
     unexpected = sorted(text for text in drawn_raw if text not in allowed)
     assert not unexpected, f"labels drawn without t(): {unexpected}"
@@ -190,29 +200,21 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     """Having the words in the dictionary is not the same as using them.
 
     Every group heading was a key with a Vietnamese translation, and the
-    dictionary check passed - while the page drew {group.title} raw, so the
-    sidebar read "Tổng quan" beside a heading that read "Dashboard". The
-    launcher's headings and tile names go through t() where drawn, and the
-    nav array still feeds the page title in the topbar.
+    dictionary check passed - while the page drew {group.title} raw. The
+    sections' titles and the tiles' names go through t() where drawn, and the
+    navigation's titles where the top bar shows them.
     """
-    dashboard = _dashboard()
-    assert "<h2>{t('Needs attention')}</h2>" in dashboard
-    # Card labels are translated where they are built; the one left raw is
-    # WAF, which reads the same in both languages.
-    assert re.findall(r"label: '([^']+)'", dashboard) == ["WAF", "WAF"]
-    assert "<p className=\"sidebar-section-title\">{t(section.title)}</p>" in APP
-    assert "{pageItem?.[1] ? t(pageItem[1])" in APP
-
+    assert ".map(([key, title, keys]) => ({ key, title: t(title)," in APP
+    assert "{t(tileLabel(item, ctx))}" in APP
+    assert "{t(activeHub.hub.title)}" in APP
 
 # --- the operator's list, 2026-09-25 -----------------------------------------
 
 def test_the_file_list_says_when_each_file_was_changed():
     """The API has sent every entry's mtime all along; nothing drew it. As in
-    OPanel the date has a column of its own, and moves beside the size once
-    the columns stack on a narrow screen."""
-    row = APP.split('<div className="file-list">')[1].split("</div>)}")[0]
-    assert '<span className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>' in row
-    assert '<span className="file-date-inline"> · {formatFileTime(item.modified)}</span>' in row
+    OPanel the date has a column of its own."""
+    files = APP.split("  function renderFiles() {")[1].split("\n  }\n")[0]
+    assert '<time className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</time>' in files
 
 
 def test_permissions_open_in_opanels_dialog_and_keep_what_bpanel_adds():
@@ -223,31 +225,31 @@ def test_permissions_open_in_opanels_dialog_and_keep_what_bpanel_adds():
     assert '<div className="modal-card chmod-card"' in dialog and '<div className="chmod-mode-row">' in dialog
     assert "special: bits.special === 2 ? 0 : 2" in dialog, "setgid on folders"
     files = APP.split("  function renderFiles() {")[1].split("\n  }\n")[0]
-    assert "onClick={() => openChmodDialog(selectedChmodItems)}" in files
+    assert "onClick={() => openChmodDialog(selectedItems)}" in files
     assert "chmod-backdrop" not in APP and "file-modified" not in APP
 
 
 def test_a_scan_from_the_history_opens_its_own_page():
     """Clicking a past run used to unfold its details at the foot of a long page.
 
-    As in OPanel it opens as a sub-page of the scanner, with a back button on
-    the left; the address it used to have (/malware-scan) shows the scanner.
+    As in OPanel it opens as a sub-page of the scanner, the way back in its
+    breadcrumbs; the address it used to have (/malware-scan) shows the scanner.
     """
     malware = APP.split("  function renderMalware() {")[1].split("\n  function ")[0]
     assert "onClick={() => openMalwareScanDetail(job)}" in malware
     assert "if (malwareDetailJob) {" in malware
-    assert "<button className=\"secondary\" onClick={() => setMalwareDetailJob(null)}><ArrowLeft size={14}/> {t('Malware scanner')}</button>" in malware
+    assert "breadcrumbs={[{ label: t('Malware scanner'), onClick: () => setMalwareDetailJob(null) }" in malware
     assert "'malware-scan': '/malware-scan'" in APP
     assert "!['malware', 'malware-scan'].includes(page)" in APP
 
 
 def test_updating_wordpress_asks_first():
     """The card's Update button ran core, plugins and themes at once. As in
-    OPanel it opens the inline WordPress panel, and "Update All" there runs it."""
-    page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl() {")[0]
-    card = page.split('<div className="site-feature-actions">')[1].split("</article>")[0]
-    assert "onClick={() => openWordPressUpdate(site)}" in card and "updateWordPressAll" not in card
-    panel = page.split('<div className="wp-manager-panel">')[1]
+    OPanel it opens the WordPress panel, and "Update All" there runs it."""
+    page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl(")[0]
+    menu = page.split("const siteMenuItems = (site) => [")[1].split("];")[0]
+    assert "onClick: () => openWordPressUpdate(site)" in menu and "updateWordPressAll" not in menu
+    panel = APP.split("  function renderWordPressPanel(site) {")[1].split("\n  }\n")[0]
     assert "onClick={() => updateWordPressAll(site)}><RefreshCw size={14}/> {t('Update All')}" in panel
 
 
@@ -257,12 +259,12 @@ def test_a_cron_schedule_is_picked_rather_than_typed():
     The list names each schedule and shows the expression beside it."""
     assert "const CRON_PRESETS = [" in APP
     picker = APP.split("  function renderSchedulePicker(key, value, onChange, inputId) {")[1].split("\n  }\n")[0]
-    assert '<div className="schedule-picker">' in picker
+    assert '<div className="schedule-picker cron-schedule">' in picker
     assert "{CRON_PRESETS.map(([expr, label]) => <option key={expr} value={expr}>{t(label)}</option>)}" in picker
     assert "<option value=\"custom\">{t('Custom…')}</option>" in picker
     cron = APP.split("  function renderCron() {")[1].split("\n  }\n")[0]
     assert "renderSchedulePicker('cron', cronSchedule, setCronSchedule, 'cron-schedule-input')" in cron
-    assert '<code className="cron-expr">{item.schedule}</code>' in cron
+    assert '<code className="cron-item-expr">{item.schedule}</code>' in cron
 
 
 def test_a_new_page_opens_at_its_top():
@@ -295,12 +297,10 @@ def test_the_updates_page_prints_no_stray_zero():
 
 def test_a_panel_user_row_keeps_its_columns_in_line():
     """Every row of the users table is a subgrid of the table's columns, as in
-    OPanel, so role, disk and CPU line up whatever a row holds. A sixth cell
-    once pushed the buttons onto a line of their own (operator, 2026-09-30);
-    BPanel's package and 2FA still sit under the name, not in a column."""
-    row = APP.split('<div className="users-row">', 1)[1].split('<div className="users-actions">', 1)[0]
-    account = row.split('<div className="users-meta">', 1)[0]
-    assert "user.package_name" in account and "user.totp_enabled" in account
-    assert 'className="users-cell" data-label' in row
-    css = (SRC / "shared" / "ui.css").read_text(encoding="utf-8")
+    OPanel and SNPanel, so role, package, disk and status line up whatever a
+    row holds (operator, 2026-09-30)."""
+    users = APP.split("  function renderUsers() {")[1].split("\n  function ")[0]
+    assert "user.package_name" in users and "user.totp_enabled" in users
+    assert 'role="cell" className="ust-package" data-label' in users
+    css = (SRC / "pages" / "Users.css").read_text(encoding="utf-8")
     assert "grid-template-columns:subgrid" in css

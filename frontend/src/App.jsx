@@ -13,14 +13,51 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket, LayoutDashboard, SlidersHorizontal, Gauge, LineChart } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
+import HubTabs from './components/HubTabs';
+import Tabs from './components/Tabs.jsx';
+import NotificationBell from './components/NotificationBell.jsx';
+import Drawer from './components/Drawer.jsx';
+import { DialogHost, confirmDialog, promptDialog } from './components/Dialog.jsx';
+import { Checkbox, Field, PasswordField } from './components/Form.jsx';
+import ActionMenu from './components/ActionMenu.jsx';
+import PageHeader from './components/PageHeader.jsx';
+import EmptyState from './components/EmptyState.jsx';
+import Switch from './components/Switch.jsx';
+import ProcessesPage from './pages/Processes.jsx';
+import WordPressPage from './pages/WordPress.jsx';
+import { PanelContext } from './lib/panel-context.jsx';
+import { PAGE_TITLES, hubLanding, hubOf, isHubKey, sidebarItems, sidebarKeyOf } from './lib/navigation';
+import { FeatureIcon } from './icons/feature/index.js';
+import { TILES, dashboardSections, tileLabel, tileVisible } from './lib/features.jsx';
+import { ADDON_META, addonFeatureIcon, addonLabel } from './lib/addons.jsx';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './shared/style.css';
 import './shared/brand.css';
 import './shared/ui.css';
 import './shared/file-manager.css';
+import './shared/sn-local.css';
+import './sn-tokens.css';
+import './dashboard.css';
+import './pages/Databases.css';
+import './pages/Sftp.css';
+import './pages/Cron.css';
+import './pages/Git.css';
+import './pages/Users.css';
+import './pages/Files.css';
+import './pages/Backups.css';
+import './pages/Processes.css';
+import './pages/Updates.css';
+import './pages/PhpConfig.css';
+import './pages/Firewall.css';
+import './pages/Waf.css';
+import './pages/WafAccessLogs.css';
+import './pages/Addons.css';
+import './pages/Malware.css';
+import './pages/WebsiteDetail.css';
+import './pages/AccountResources.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -63,13 +100,6 @@ function composeWebPorts(plan, wanted) {
   return service?.container_ports || [];
 }
 
-// Pages opened from inside another page instead of the sidebar. They have no
-// nav entry of their own, so without this the header falls back to the first
-// item and titles the page "Dashboard".
-const NAV_PARENT_PAGE = { 'waf-site': 'waf', 'malware-scan': 'malware' };
-
-// 'waf-site' is reached from the WAF overview rather than the sidebar, but it
-// still belongs to Settings so the menu stays open and WAF stays highlighted.
 // Which tool groups a viewer folded on the dashboard (a convenience, per browser).
 const DASHBOARD_COLLAPSED_KEY = 'bpanel.dashboard.collapsedTools';
 
@@ -84,9 +114,12 @@ const PAGE_ROUTES = {
   files: '/filemanager',
   backups: '/backups',
   users: '/users',
-  settings: '/settings',
   'panel-settings': '/panel-settings',
   security: '/security',
+  // The hubs' own addresses (lib/navigation.jsx): each opens its first tab.
+  server: '/server',
+  'security-center': '/security-center',
+  config: '/settings',
   php: '/php',
   firewall: '/firewall',
   waf: '/waf',
@@ -103,9 +136,12 @@ const PAGE_ROUTES = {
   mail: '/email',
   usage: '/resource-usage',
   git: '/git',
+  wordpress: '/wordpress',
+  terminal: '/terminal',
   // The server's own pages, behind the top bar's status chips (admin only).
   processes: '/processes',
   'ram-usage': '/ram-usage',
+  'account-resources': '/account-resources',
   'disk-usage': '/disk-usage',
   traffic: '/traffic',
 };
@@ -224,6 +260,20 @@ function LanguageToggle({ language, onChange, className = '' }) {
   </button>;
 }
 
+// A line of the last readings, scaled to 0-100 (or to its own peak). The
+// Dashboard's Server card draws CPU/RAM/Disk/Network this way.
+function Sparkline({ values: readings, max = 100 }) {
+  if (!readings || readings.length === 0) return <svg className="dash-spark" viewBox="0 0 80 22" aria-hidden="true"/>;
+  const values = readings.length === 1 ? [readings[0], readings[0]] : readings;
+  const top = Math.max(max || 0, ...values, 1);
+  const step = 80 / (values.length - 1);
+  const points = values.map((value, i) => `${(i * step).toFixed(1)},${(20 - (Math.max(0, value) / top) * 18).toFixed(1)}`);
+  return <svg className="dash-spark" viewBox="0 0 80 22" aria-hidden="true" preserveAspectRatio="none">
+    <polyline className="dash-spark-area" points={`0,22 ${points.join(' ')} 80,22`}/>
+    <polyline className="dash-spark-line" points={points.join(' ')}/>
+  </svg>;
+}
+
 const EDITOR_FONT_FAMILY = "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace";
 const WAF_ACCESS_LOG_DEFAULTS = {
   websiteId: '',
@@ -246,7 +296,22 @@ const ROUTE_PAGES = new Map([
   ['/api-tokens', 'panel-settings'],
 ]);
 
+// One website's page: /website/<domain>, or /website/<domain>/<tab>.
+const WEBSITE_TABS = ['overview', 'domains', 'ssl', 'php', 'security', 'logs', 'advanced'];
+
+function websiteFromPathname(pathname) {
+  const match = /^\/website\/([^/]+)(?:\/([a-z]+))?\/?$/i.exec(String(pathname || ''));
+  if (!match) return null;
+  const tab = String(match[2] || 'overview').toLowerCase();
+  return { domain: decodeURIComponent(match[1]).toLowerCase(), tab: WEBSITE_TABS.includes(tab) ? tab : 'overview' };
+}
+
+function websiteRoute(domain, tab = 'overview') {
+  return `/website/${encodeURIComponent(domain)}${tab && tab !== 'overview' ? `/${tab}` : ''}`;
+}
+
 function pageFromPathname(pathname) {
+  if (websiteFromPathname(pathname)) return 'website';
   const normalized = `/${String(pathname || '').replace(/^\/+|\/+$/g, '')}`.toLowerCase();
   return ROUTE_PAGES.get(normalized) || 'dashboard';
 }
@@ -752,6 +817,8 @@ function App() {
   const [aliasModes, setAliasModes] = useState({});
   const [databases, setDatabases] = useState([]);
   const [dbCreateOpen, setDbCreateOpen] = useState(false);
+  // Create was pressed: the sheet then says under each field what is wrong.
+  const [dbCreateTried, setDbCreateTried] = useState(false);
   const [dbSearch, setDbSearch] = useState('');
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
   const [createdDbInfo, setCreatedDbInfo] = useState(null);
@@ -759,8 +826,15 @@ function App() {
   const [users, setUsers] = useState([]);
   const [packages, setPackages] = useState([]);
   const [userTab, setUserTab] = useState('list');
+  // The users page: its role filter, the resellers unfolded, and its sheets.
+  const [userFilter, setUserFilter] = useState('all');
+  const [expandedResellers, setExpandedResellers] = useState([]);
+  const [packageSheet, setPackageSheet] = useState(false);
+  const [moveDomainOpen, setMoveDomainOpen] = useState(false);
   const [userSearch, setUserSearch] = useState('');
   const [resourceUsage, setResourceUsage] = useState(null);
+  // The last 30 readings of loadResourceUsage, for the Dashboard's sparklines.
+  const [usageHistory, setUsageHistory] = useState([]);
   // The server pages behind the top bar's status chips (admin only).
   const [processTop, setProcessTop] = useState(null);
   const [processPaused, setProcessPaused] = useState(false);
@@ -769,6 +843,7 @@ function App() {
   const [diskInfo, setDiskInfo] = useState(null);
   const [trafficSamples, setTrafficSamples] = useState([]);
   const [dashSummary, setDashSummary] = useState(null);
+  const [dashSummaryChecking, setDashSummaryChecking] = useState(false);
   // Notifications addon: my own settings, and (administrators) the server's.
   const [notifyMe, setNotifyMe] = useState(null);
   const [notifySettings, setNotifySettings] = useState(null);
@@ -858,7 +933,6 @@ function App() {
   const [limitsHistory, setLimitsHistory] = useState(null);
   const [dashRange, setDashRange] = useState('day');
   const [dashScope, setDashScope] = useState('account');
-  const [topAccountsSort, setTopAccountsSort] = useState('cpu');
   // An account picked on the dashboard, opened for editing once Users has loaded.
   const [pendingEditUserId, setPendingEditUserId] = useState(null);
   // The dashboard's tool panel: the search, and which groups are folded.
@@ -903,6 +977,8 @@ function App() {
   const [mailboxEdit, setMailboxEdit] = useState(null);
   const [forwarderEdit, setForwarderEdit] = useState(null);
   const [mailDomainForm, setMailDomainForm] = useState({ domain: '', owner_id: '' });
+  // Turn on email: a domain typed by hand instead of picked from the list.
+  const [mailDomainOther, setMailDomainOther] = useState(false);
   const [catchAllDraft, setCatchAllDraft] = useState({});
   const [mailDns, setMailDns] = useState(null);
   const [mailRelays, setMailRelays] = useState(null);
@@ -950,6 +1026,26 @@ function App() {
   const [fileContent, setFileContent] = useState('');
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
+  // Server › Account resources: the find box, the sort, and the account
+  // whose charts are open with their history and period.
+  const [arFind, setArFind] = useState('');
+  const [arSort, setArSort] = useState({ key: 'cpu', desc: true });
+  const [arOpen, setArOpen] = useState(null);
+  const [arHistory, setArHistory] = useState(null);
+  const [arRange, setArRange] = useState('day');
+  // One website's page: which website and tab its address names, and
+  // whether its Advanced tab has the terminal open.
+  const [siteWhere, setSiteWhere] = useState(() => websiteFromPathname(window.location.pathname) || { domain: '', tab: 'overview' });
+  const [siteTermOpen, setSiteTermOpen] = useState(false);
+  // The firewall's one address form: whether it allows or blocks.
+  const [firewallRuleAction, setFirewallRuleAction] = useState('allow');
+  // The PHP page's extension filter.
+  const [phpExtFind, setPhpExtFind] = useState('');
+  // The backups page's side sheets: a new schedule, a new destination.
+  const [scheduleSheet, setScheduleSheet] = useState(false);
+  const [destinationSheet, setDestinationSheet] = useState(false);
+  // The file list's order: a column and a direction, folders always first.
+  const [fileSort, setFileSort] = useState({ key: 'name', dir: 'asc' });
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false, cpu_percent: 0, memory_mb: 0, process_limit: 0, io_read_mbps: 0, io_write_mbps: 0, group_cpu_percent: 0, group_memory_mb: 0, group_process_limit: 0, group_io_read_mbps: 0, group_io_write_mbps: 0 });
   // A reseller's share of the server and what it has handed out (GET /users/pool).
@@ -989,6 +1085,12 @@ function App() {
   // The global list as typed, one bot per line; the backend splits and
   // cleans it.
   const [globalBotText, setGlobalBotText] = useState('');
+  // The WAF page's global bot editor: open or not, the one being added, the
+  // list's filter and a pasted list.
+  const [wafBotsOpen, setWafBotsOpen] = useState(false);
+  const [wafNewBot, setWafNewBot] = useState('');
+  const [wafBotFilter, setWafBotFilter] = useState('');
+  const [wafBotPaste, setWafBotPaste] = useState('');
   const [crs, setCrs] = useState(null);
   // The list for the one site being configured.
   const [siteBotText, setSiteBotText] = useState('');
@@ -1051,6 +1153,11 @@ function App() {
   // A reseller manages its customers and packages, never the server.
   const isReseller = currentUser?.role === 'reseller';
   const canManageUsers = isAdmin || isReseller;
+  // The browser terminal: the server says whether this session may open one
+  // (a customer whose package has it, or an admin logged in as one). A reseller
+  // puts it in its packages only if the administrator gave it the right to.
+  const canOpenTerminal = !!currentUser?.terminal;
+  const canGrantTerminal = isAdmin || (isReseller && !!currentUser?.terminal_enabled);
 
   useEffect(() => {
     setAssignPreview(null);
@@ -1068,6 +1175,7 @@ function App() {
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
   // Git is an addon (2026-10-10): in the sidebar only while installed.
   const gitAddonInstalled = !!addons.items.find(item => item.slug === 'git')?.installed;
+  const wordpressAddonInstalled = !!addons.items.find(item => item.slug === 'wordpress')?.installed;
   const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
   const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
   const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
@@ -1089,10 +1197,18 @@ function App() {
     ? `${currentUser?.username || username} - ${currentUser.package_name}`
     : (currentUser?.username || username);
 
+  // The role's navigation facts, kept current for navigateToPage, which is
+  // made once (see navCtx below).
+  const navCtxRef = useRef({});
   const navigateToPage = useCallback((nextPage, options = {}) => {
-    const route = routeForPage(nextPage);
+    // A hub's own address opens its first tab this role may see.
+    if (isHubKey(nextPage)) nextPage = hubLanding(nextPage, navCtxRef.current) || 'dashboard';
+    // A page with an address of its own (one website's) passes it as `path`.
+    const route = options.path || routeForPage(nextPage);
     if (!route) return;
     const nextUrl = route;
+    const where = websiteFromPathname(route);
+    if (where) setSiteWhere(where);
     if (!options.replace && window.location.pathname !== route) {
       window.history.pushState({}, '', nextUrl);
     } else if (options.replace && window.location.pathname !== route) {
@@ -1402,7 +1518,7 @@ function App() {
   }
 
   async function removePasskey(credential) {
-    if (!confirm(`Delete passkey ${credential.name}? That device will no longer be able to sign in.`)) return;
+    if (!(await confirmDialog({ message: `Delete passkey ${credential.name}? That device will no longer be able to sign in.`, danger: true }))) return;
     await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, t('Deleting passkey...'));
     await loadPasskeyStatus();
   }
@@ -1693,7 +1809,7 @@ function App() {
   }
 
   async function revokeApiToken(token) {
-    if (!confirm(t('Delete API token {name}? WHMCS using it stops working at once.', { name: token.name }))) return;
+    if (!(await confirmDialog({ message: t('Delete API token {name}? WHMCS using it stops working at once.', { name: token.name }), danger: true }))) return;
     const data = await request(`/provisioning/v1/tokens/${token.id}`, { method: 'DELETE' }, t('Deleting token...'));
     if (data) {
       setNotice(t('API token {name} deleted.', { name: token.name }));
@@ -1822,13 +1938,22 @@ function App() {
   }
 
   async function loadDashboardSummary() {
+    setDashSummaryChecking(true);
     const data = await request('/dashboard/summary', { silent: true });
     if (data) setDashSummary(data);
+    setDashSummaryChecking(false);
   }
 
   async function loadResourceUsage() {
     const data = await request('/services/resource-usage', { silent: true });
-    if (data) setResourceUsage(data);
+    if (data) {
+      setResourceUsage(data);
+      const network = data.network || {};
+      setUsageHistory(prev => [...prev, {
+        cpu: Number(data.cpu?.percent) || 0, memory: Number(data.memory?.percent) || 0, disk: Number(data.disk?.percent) || 0,
+        network: (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0),
+      }].slice(-30));
+    }
   }
 
   async function loadProcessTop() {
@@ -2009,11 +2134,11 @@ function App() {
   async function submitPasswordChange(user, password) {
     const payload = { password };
     if (user.id === currentUser?.id) {
-      const currentPassword = prompt(t('Enter your current password to confirm:'));
+      const currentPassword = await promptDialog({ label: t('Enter your current password to confirm:'), type: 'password' });
       if (!currentPassword) return false;
       payload.current_password = currentPassword;
       if (currentUser?.totp_enabled) {
-        const code = prompt(t('Enter your 2FA code:'));
+        const code = await promptDialog({ label: t('Enter your 2FA code:'), type: 'code' });
         if (!code) return false;
         payload.code = code.trim();
       }
@@ -2036,13 +2161,14 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(limitsOn ? limitValues(newPackage) : {}) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), ...(limitsOn ? limitValues(newPackage) : {}) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
       setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 5 });
       await loadPackages();
     }
+    return !!data;
   }
 
   function startEditingPackage(item) {
@@ -2053,6 +2179,7 @@ function App() {
       storage_limit_mb: item.storage_limit_mb ?? 1024,
       mail_accounts_limit: item.mail_accounts_limit ?? 10,
       database_limit: item.database_limit ?? 5,
+      terminal_enabled: !!item.terminal_enabled,
       ...limitValues(item),
     });
   }
@@ -2076,7 +2203,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -2088,7 +2215,7 @@ function App() {
   }
 
   async function deletePackage(item) {
-    if (!confirm(`Delete package ${item.name}?`)) return;
+    if (!(await confirmDialog({ message: `Delete package ${item.name}?`, danger: true }))) return;
     const data = await request(`/packages/${item.id}`, { method: 'DELETE' }, `Deleting ${item.name}...`);
     if (data) {
       setNotice(`Deleted package ${item.name}.`);
@@ -2098,16 +2225,17 @@ function App() {
   }
 
   async function changeUserPassword(user) {
-    const password = prompt(`Enter a new password for ${user.username} (minimum 12 characters):`);
+    const password = await promptDialog({ title: t('New password for {name}', { name: user.username }), label: t('New password'),
+      type: 'password', minLength: 12, generate: true, hint: t('At least 12 characters.') });
     if (!password) return;
     if (password.length < 12) { setError(t('Password must be at least 12 characters.')); return; }
     const payload = { password };
     if (user.id === currentUser?.id) {
-      const currentPassword = prompt('Enter your current password to confirm this change:');
+      const currentPassword = await promptDialog({ label: 'Enter your current password to confirm this change:', type: 'password' });
       if (!currentPassword) return;
       payload.current_password = currentPassword;
       if (currentUser?.totp_enabled) {
-        const code = prompt('Enter the 6-digit code from your authenticator:');
+        const code = await promptDialog({ label: 'Enter the 6-digit code from your authenticator:', type: 'code' });
         if (!code) return;
         payload.code = code.trim();
       }
@@ -2118,7 +2246,7 @@ function App() {
 
   async function deletePanelUser(user) {
     if (!user || user.id === currentUser?.id) return;
-    if (!confirm(`Delete panel user ${user.username} and permanently delete all owned websites, files, databases, SSL certificates, and Linux user data?`)) return;
+    if (!(await confirmDialog({ message: `Delete panel user ${user.username} and permanently delete all owned websites, files, databases, SSL certificates, and Linux user data?`, danger: true }))) return;
     const data = await request(`/users/${user.id}`, { method: 'DELETE' }, `Deleting user ${user.username}...`);
     if (data) {
       const count = data.deleted_websites?.length || 0;
@@ -2133,7 +2261,7 @@ function App() {
   async function suspendUser(user) {
     if (!user || user.id === currentUser?.id) return;
     const siteCount = websites.filter(w => w.owner_id === user.id).length;
-    if (!confirm(t('Suspend user {name}? This will block login, disable all {n} website(s), lock SFTP, and kill active sessions.', { name: user.username, n: siteCount }))) return;
+    if (!(await confirmDialog(t('Suspend user {name}? This will block login, disable all {n} website(s), lock SFTP, and kill active sessions.', { name: user.username, n: siteCount })))) return;
     const data = await request(`/users/${user.id}/suspend`, { method: 'POST' }, `Suspending user ${user.username}...`);
     if (data) {
       await loadUsers();
@@ -2143,7 +2271,7 @@ function App() {
 
   async function unsuspendUser(user) {
     if (!user || user.id === currentUser?.id) return;
-    if (!confirm(`Unsuspend user ${user.username}? This will restore login, websites, and SFTP access.`)) return;
+    if (!(await confirmDialog(`Unsuspend user ${user.username}? This will restore login, websites, and SFTP access.`))) return;
     const data = await request(`/users/${user.id}/unsuspend`, { method: 'POST' }, `Unsuspending user ${user.username}...`);
     if (data) {
       await loadUsers();
@@ -2154,13 +2282,13 @@ function App() {
   async function quickLoginUser(user) {
     if (!user) return;
     const suspendedNote = user.is_active ? '' : ' This user is SUSPENDED — websites and SFTP are disabled.';
-    if (!confirm(`Login as ${user.username}?${suspendedNote}`)) return;
+    if (!(await confirmDialog(`Login as ${user.username}?${suspendedNote}`))) return;
     // Impersonation re-prompts TOTP when the calling admin has 2FA enabled.
     // Try without the code first; if the backend says one is required, ask
     // and resend. Sending the OTP via FormData keeps it out of the URL.
     let body;
     if (currentUser?.totp_enabled) {
-      const code = prompt(`Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`);
+      const code = await promptDialog({ label: `Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`, type: 'code' });
       if (!code) return;
       body = new URLSearchParams({ otp: code.trim() });
     }
@@ -2173,7 +2301,7 @@ function App() {
     );
     // Handle case where backend says 2FA is required (e.g., stale user object).
     if (data?.requires_2fa) {
-      const code = prompt(`Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`);
+      const code = await promptDialog({ label: `Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`, type: 'code' });
       if (!code) return;
       const retryBody = new URLSearchParams({ otp: code.trim() });
       const retryData = await request(
@@ -2217,11 +2345,11 @@ function App() {
   }
 
   async function setupTwoFactorAuth() {
-    const currentPassword = prompt('Enter your current password to generate a new 2FA secret:');
+    const currentPassword = await promptDialog({ label: 'Enter your current password to generate a new 2FA secret:', type: 'password' });
     if (!currentPassword) return;
     const payload = { current_password: currentPassword };
     if (currentUser?.totp_enabled) {
-      const code = prompt('Enter the 6-digit code from your authenticator:');
+      const code = await promptDialog({ label: 'Enter the 6-digit code from your authenticator:', type: 'code' });
       if (!code) return;
       payload.code = code.trim();
     }
@@ -2244,7 +2372,7 @@ function App() {
   }
 
   async function disableTwoFactorAuth() {
-    const currentPassword = prompt('Enter your current password to disable 2FA:');
+    const currentPassword = await promptDialog({ label: 'Enter your current password to disable 2FA:', type: 'password' });
     if (!currentPassword) return;
     const data = await request(
       '/auth/2fa/disable',
@@ -2260,7 +2388,7 @@ function App() {
   }
 
   async function resetUserTwoFactor(user) {
-    if (!confirm(`Reset 2FA for ${user.username}?`)) return;
+    if (!(await confirmDialog(`Reset 2FA for ${user.username}?`))) return;
     const data = await request(`/users/${user.id}/2fa/reset`, { method: 'POST' }, `Resetting 2FA for ${user.username}...`);
     if (data?.message) { setNotice(data.message); await loadUsers(); }
   }
@@ -2276,9 +2404,9 @@ function App() {
       setError(ipv6.detail || 'This server has no IPv6 address, so this feature cannot be used.');
       return;
     }
-    if (!confirm(t(enable
+    if (!(await confirmDialog(t(enable
       ? 'Enable IPv6 for every website and the panel?\n\nBPanel adds listen [::] to every website\'s nginx config, checks it with nginx -t, and rolls back on any error. The panel restarts.'
-      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.'))) return;
+      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.')))) return;
     const data = await request('/panel-settings/ipv6', {
       method: 'POST',
       body: JSON.stringify({ enabled: enable }),
@@ -2302,7 +2430,7 @@ function App() {
   async function saveMalwareSchedule(scope) {
     const entry = malwareSchedulesForm[scope] || {};
     if (scope === 'server' && entry.enabled && malwareScanStatus?.memory_warning) {
-      if (!confirm(`${malwareScanStatus.memory_warning}\n\nSchedule the whole-server scan anyway?`)) return;
+      if (!(await confirmDialog(`${malwareScanStatus.memory_warning}\n\nSchedule the whole-server scan anyway?`))) return;
     }
     const body = { [scope]: { enabled: !!entry.enabled, weekday: Number(entry.weekday ?? 6), hour: Number(entry.hour ?? 3) } };
     const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, t('Saving scan schedule...'));
@@ -2314,17 +2442,16 @@ function App() {
   }
 
   async function toggleMalwareRealtime(enabled) {
-    if (enabled && !confirm(t('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).'))) return;
+    if (enabled && !(await confirmDialog(t('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).')))) return;
     const data = await request('/malware/realtime', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on real-time protection...' : 'Turning off...');
     if (data) { setMalwareScanStatus(data); setNotice(t(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.')); }
   }
 
   async function toggleMalwareScanOnUpload(enabled) {
-    if (enabled && !malwareScanStatus?.clamd_running && !confirm(
-      'This server has no resident clamd, so every uploaded file reloads the whole signature database: '
+    if (enabled && !malwareScanStatus?.clamd_running && !(await confirmDialog('This server has no resident clamd, so every uploaded file reloads the whole signature database: '
       + 'measured at 28 seconds and over 1 GB of RAM for a 20 MB file. The scan runs in the background so nobody waits on it, '
-      + 'but the server pays that for every file. Turn it on anyway?')) return;
+      + 'but the server pays that for every file. Turn it on anyway?'))) return;
     const data = await request('/malware/scan-on-upload', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on scan-on-upload...' : 'Turning off...');
     if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Uploaded files are scanned.' : 'Uploaded files are no longer scanned.'); }
@@ -2343,7 +2470,7 @@ function App() {
   async function runMalwareScan() {
     if (!scanTargetWebsiteId) return;
     if (scanTargetWebsiteId === 'server' && malwareScanStatus?.memory_warning) {
-      if (!confirm(`${malwareScanStatus.memory_warning}\n\nScan the whole server anyway?`)) return;
+      if (!(await confirmDialog(`${malwareScanStatus.memory_warning}\n\nScan the whole server anyway?`))) return;
     }
     setScanResults(null);
     setScanJob(null);
@@ -2429,6 +2556,7 @@ function App() {
     if (!assignWebsiteId || !assignUserId) return;
     const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, t('Assigning domain to user...'));
     if (data) { setNotice(`Assigned domain ${data.domain} to user ID ${assignUserId}`); await refreshAll(); }
+    return !!data;
   }
 
   async function assignDatabaseToUser() {
@@ -2438,8 +2566,10 @@ function App() {
       const user = users.find(item => String(item.id) === String(assignDbUserId));
       setNotice(t('Assigned database {name} to {user}', { name: data.db_name, user: user?.username || assignDbUserId }));
       setAssignDbId('');
+      setAssignDbUserId('');
       await loadDatabases();
     }
+    return !!data;
   }
 
   async function createWordPress() {
@@ -2481,10 +2611,27 @@ function App() {
     }
   }
 
+  // Its vhost and certificate always go; its files and its databases as the
+  // dialog's boxes say - unticked, they stay with the account.
   async function deleteWebsite(id) {
-    if (!confirm(t('Delete this website including files, vhost, database, and its SSL certificate?'))) return;
-    const data = await request(`/websites/${id}?delete_files=true&delete_database=true`, { method: 'DELETE' }, t('Deleting website...'));
-    if (data) refreshAll();
+    const site = websites.find(item => String(item.id) === String(id));
+    const dbs = databases.filter(db => String(db.website_id) === String(id));
+    const choice = await confirmDialog({
+      title: t('Delete website'), subject: site?.domain, danger: true, typeToConfirm: site?.domain,
+      message: t('Its web server configuration and certificate are removed. Untick what should stay with the account.'),
+      options: [
+        { name: 'files', label: t('Delete its files'), hint: site?.root_path, checked: true },
+        { name: 'databases', label: t('Delete its databases'), hint: dbs.length ? dbs.map(db => db.db_name).join(', ') : t('No database is attached to this website.'), checked: true, disabled: dbs.length === 0 },
+      ],
+      confirmLabel: t('Delete website'),
+    });
+    if (!choice) return false;
+    const data = await request(`/websites/${id}?delete_files=${!!choice.files}&delete_database=${!!choice.databases}`, { method: 'DELETE' }, t('Deleting website...'));
+    if (data) {
+      setNotice(t('Deleted {domain}.', { domain: site?.domain || '' }));
+      refreshAll();
+    }
+    return !!data;
   }
 
   async function enableSsl(id) {
@@ -2577,7 +2724,7 @@ function App() {
 
   async function deleteWebsiteAlias(site, alias) {
     const label = alias.mode === 'redirect' ? 'redirect' : 'alias';
-    if (!confirm(`Remove ${label} ${alias.domain} from ${site.domain}?`)) return;
+    if (!(await confirmDialog({ message: `Remove ${label} ${alias.domain} from ${site.domain}?`, danger: true, confirmLabel: t('Remove') }))) return;
     const data = await request(`/websites/${site.id}/aliases/${alias.id}`, { method: 'DELETE' }, `Removing ${label} ${alias.domain}...`);
     if (data) {
       setNotice(`Removed ${label} ${alias.domain}.`);
@@ -2772,7 +2919,7 @@ function App() {
     const question = record.mail
       ? t('The Email addon keeps this record for {domain} and writes it again when the email settings of {domain} change. Delete the {type} record of {name} anyway?', { domain: record.mail, type: record.type, name: record.name })
       : t('Delete the {type} record of {name}: {value}?', { type: record.type, name: record.name, value: record.value });
-    if (!confirm(question)) return;
+    if (!(await confirmDialog(question))) return;
     const data = await request(`${dnsPath(dnsZone.zone)}/records/delete`, { method: 'POST', body: JSON.stringify(dnsRecordKey(record)) }, t('Deleting the record...'));
     if (!data) return;
     applyDnsRecords(data);
@@ -2781,7 +2928,7 @@ function App() {
   }
 
   async function restoreDnsDefaults() {
-    if (!confirm(t('Put back the records the panel manages for {zone}: nameservers, websites and email. Records you added are kept.', { zone: dnsZone.zone.name }))) return;
+    if (!(await confirmDialog(t('Put back the records the panel manages for {zone}: nameservers, websites and email. Records you added are kept.', { zone: dnsZone.zone.name })))) return;
     const data = await request(`${dnsPath(dnsZone.zone)}/defaults`, { method: 'POST' }, t("Restoring the panel's records..."));
     if (!data) return;
     applyDnsRecords(data);
@@ -2789,9 +2936,11 @@ function App() {
   }
 
   async function deleteDnsZone(zone) {
-    const typed = prompt(t('Every record of {zone} is deleted, and the domain stops resolving once its nameservers point here. Type the domain name to confirm.', { zone: zone.name }));
-    if (typed === null) return;
-    if (typed.trim().toLowerCase().replace(/\.$/, '') !== zone.name) { setError(t('The name did not match; nothing was deleted.')); return; }
+    const ok = await confirmDialog({
+      title: t('Delete zone'), subject: zone.name, danger: true, typeToConfirm: zone.name,
+      message: t('Every record of {zone} is deleted, and the domain stops resolving once its nameservers point here.', { zone: zone.name }),
+    });
+    if (!ok) return;
     const data = await request(dnsPath(zone), { method: 'DELETE' }, t('Deleting the zone...'));
     if (!data) return;
     setNotice(t('Zone {zone} deleted.', { zone: zone.name }));
@@ -2889,9 +3038,11 @@ function App() {
   }
 
   async function deleteMailDomain(domain) {
-    const typed = prompt(t('This deletes every mailbox of {domain} with all its mail, and its forwarders. It cannot be undone.\n\nType the domain name to confirm:', { domain: domain.domain }));
-    if (typed === null) return;
-    if (typed.trim().toLowerCase() !== domain.domain) { setError(t('The name did not match; nothing was deleted.')); return; }
+    const ok = await confirmDialog({
+      title: t('Delete email for {domain}', { domain: domain.domain }), subject: domain.domain, danger: true, typeToConfirm: domain.domain,
+      message: t('This deletes every mailbox of {domain} with all its mail, and its forwarders. It cannot be undone.', { domain: domain.domain }),
+    });
+    if (!ok) return;
     const data = await request(`/mail/domains/${domain.id}?confirm=${encodeURIComponent(domain.domain)}`, { method: 'DELETE' }, t('Deleting...'));
     if (data) {
       setNotice(t('Email for {domain} deleted.', { domain: domain.domain }));
@@ -2913,14 +3064,14 @@ function App() {
   }
 
   async function rotateMailDkim(domain) {
-    if (!confirm(t('Make a new DKIM key for {domain}?\n\nMail is signed with the new key at once, so update the DKIM record in DNS right away: until you do, receivers cannot verify the signature.', { domain: domain.domain }))) return;
+    if (!(await confirmDialog(t('Make a new DKIM key for {domain}?\n\nMail is signed with the new key at once, so update the DKIM record in DNS right away: until you do, receivers cannot verify the signature.', { domain: domain.domain })))) return;
     const data = await request(`/mail/domains/${domain.id}/dkim/rotate`, { method: 'POST' }, t('Creating a new key...'));
     if (data) { setNotice(t('New DKIM key created. Update the DKIM record.')); openMailDns(domain); }
   }
 
   async function toggleWebmailHost(domain, enabled) {
-    if (enabled && !confirm(t("Serve webmail at webmail.{domain}?\n\nIts A record must already point at this server: a Let's Encrypt certificate is issued for it now.", { domain: domain.domain }))) return;
-    if (!enabled && !confirm(t("Stop serving webmail at webmail.{domain}? Webmail stays available on the server's own address.", { domain: domain.domain }))) return;
+    if (enabled && !(await confirmDialog(t("Serve webmail at webmail.{domain}?\n\nIts A record must already point at this server: a Let's Encrypt certificate is issued for it now.", { domain: domain.domain })))) return;
+    if (!enabled && !(await confirmDialog(t("Stop serving webmail at webmail.{domain}? Webmail stays available on the server's own address.", { domain: domain.domain })))) return;
     const data = await request(`/mail/domains/${domain.id}/webmail-host`, { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? t('Issuing a certificate for webmail.{domain}...', { domain: domain.domain }) : t('Removing...'));
     if (data) {
@@ -2953,13 +3104,13 @@ function App() {
   }
 
   async function setMailboxEnabled(box, enabled) {
-    if (!enabled && !confirm(t('Suspend {address}?\n\nIt keeps receiving mail, but nobody can sign in to it or send from it until it is resumed.', { address: box.address }))) return;
+    if (!enabled && !(await confirmDialog(t('Suspend {address}?\n\nIt keeps receiving mail, but nobody can sign in to it or send from it until it is resumed.', { address: box.address })))) return;
     const data = await request(`/mail/mailboxes/${box.id}`, { method: 'PUT', body: JSON.stringify({ enabled }) }, t('Saving...'));
     if (data) { setNotice(enabled ? t('{address} resumed.', { address: box.address }) : t('{address} suspended.', { address: box.address })); loadMailboxes(); }
   }
 
   async function deleteMailbox(box) {
-    if (!confirm(t('Delete {address} and all of its mail?\n\nThis cannot be undone.', { address: box.address }))) return;
+    if (!(await confirmDialog({ message: t('Delete {address} and all of its mail?\n\nThis cannot be undone.', { address: box.address }), danger: true }))) return;
     const data = await request(`/mail/mailboxes/${box.id}`, { method: 'DELETE' }, t('Deleting...'));
     if (data) { setNotice(t('{address} deleted.', { address: box.address })); loadMailboxes(); loadMailInfo(); }
   }
@@ -2994,7 +3145,7 @@ function App() {
   }
 
   async function deleteForwarder(item) {
-    if (!confirm(t('Delete the forwarder {address}?', { address: item.address }))) return;
+    if (!(await confirmDialog({ message: t('Delete the forwarder {address}?', { address: item.address }), danger: true }))) return;
     const data = await request(`/mail/forwarders/${item.id}`, { method: 'DELETE' }, t('Deleting...'));
     if (data) { setNotice(t('{address} deleted.', { address: item.address })); loadForwarders(); loadMailInfo(); }
   }
@@ -3050,7 +3201,7 @@ function App() {
   }
 
   async function deleteRelay(relay) {
-    if (!confirm(t('Delete the relay {name}?\n\nDomains that use it go back to the default relay.', { name: relay.name }))) return;
+    if (!(await confirmDialog({ message: t('Delete the relay {name}?\n\nDomains that use it go back to the default relay.', { name: relay.name }), danger: true }))) return;
     const data = await request(`/mail/relays/${relay.id}`, { method: 'DELETE' }, t('Deleting...'));
     if (data) { setMailRelays(data); setNotice(t('{name} deleted.', { name: relay.name })); }
   }
@@ -3096,7 +3247,7 @@ function App() {
   }
 
   async function allowMailSender(value) {
-    if (!confirm(t('Never block mail from {sender}?', { sender: value }))) return;
+    if (!(await confirmDialog(t('Never block mail from {sender}?', { sender: value })))) return;
     const data = await request('/mail/rspamd/allow', { method: 'POST', body: JSON.stringify({ value }) }, t('Saving...'));
     if (data) {
       setNotice(t('{sender} is on the allowlist. Ask the sender to send the message again.', { sender: value }));
@@ -3146,13 +3297,12 @@ function App() {
     const label = addon?.name || slug;
     if (!install) {
       // Removing an addon takes what it does away, so the admin types its
-      // name rather than clicking through a generic confirm. The name shown
-      // (in either language) or the slug is accepted.
-      const typed = window.prompt(t('Remove {name} and stop what it is doing?\n\nType the addon name to confirm:', { name: t(label) }));
-      if (typed === null) return;
-      const answer = typed.trim().toLowerCase();
-      const accepted = [label, t(label), slug].map(name => String(name || '').trim().toLowerCase());
-      if (!accepted.includes(answer)) { setError(t('Name did not match; nothing was removed.')); return; }
+      // name rather than clicking through a generic confirm.
+      const ok = await confirmDialog({
+        title: t('Remove {name}?', { name: t(label) }), subject: t(label), danger: true, confirmLabel: t('Remove'),
+        message: t('It stops what it is doing.'), typeToConfirm: t(label),
+      });
+      if (!ok) return;
     }
     const data = await request(`/addons/${slug}/${install ? 'install' : 'uninstall'}`, { method: 'POST' },
       install ? t('Installing {name}...', { name: t(label) }) : t('Removing {name}...', { name: t(label) }));
@@ -3331,7 +3481,7 @@ function App() {
   }
 
   async function deleteSiteApp(app) {
-    if (!confirm(`Delete application ${app.name}? Its files stay on disk; only the runtime is removed.`)) return;
+    if (!(await confirmDialog({ message: `Delete application ${app.name}? Its files stay on disk; only the runtime is removed.`, danger: true }))) return;
     const data = await request(`/site-apps/${app.id}`, { method: 'DELETE' }, t('Deleting application...'));
     if (data) {
       setNotice(`Deleted ${app.name}.`);
@@ -3412,7 +3562,7 @@ function App() {
 
   async function resetNginxDefault() {
     if (!nginxCustomEditing) return;
-    if (!confirm(`Clear Custom Nginx for ${nginxCustomEditing.domain}?`)) return;
+    if (!(await confirmDialog({ message: `Clear Custom Nginx for ${nginxCustomEditing.domain}?`, danger: true, confirmLabel: t('Clear') }))) return;
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
       method: 'PUT',
       body: JSON.stringify({ nginx_custom: '' }),
@@ -3570,13 +3720,14 @@ function App() {
   }
 
   async function changeDbPassword(id) {
-    const newPass = prompt('Enter a new database password, minimum 12 characters:');
+    const newPass = await promptDialog({ title: t('Change database password'), label: t('New password'),
+      type: 'password', minLength: 12, generate: true, hint: t('At least 12 characters.') });
     if (!newPass) return;
     await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, t('Changing database password...'));
   }
 
   async function deleteDatabase(id, dbName) {
-    if (!confirm(`Delete database "${dbName}"? This action cannot be undone.`)) return;
+    if (!(await confirmDialog({ message: `Delete database "${dbName}"? This action cannot be undone.`, danger: true }))) return;
     const data = await request(`/databases/${id}`, { method: 'DELETE' }, t('Deleting database...'));
     if (data) {
       setNotice(`Database "${dbName}" deleted successfully.`);
@@ -3612,6 +3763,7 @@ function App() {
       setNewDatabase({ db_name: '', db_user: '', db_password: '' });
       await refreshAll();
     }
+    return !!data;
   }
 
   async function addCron() {
@@ -3684,14 +3836,14 @@ function App() {
   }
 
   async function regenerateGitKey() {
-    if (!confirm(t('Make a new deploy key? The old one stops working: add the new key on the remote.'))) return;
+    if (!(await confirmDialog(t('Make a new deploy key? The old one stops working: add the new key on the remote.')))) return;
     const repo = gitRepo?.repo;
     const data = await request(`/git/repos/${repo.id}/ssh-key`, { method: 'POST' }, t('Making a new key...'));
     if (data) { setNotice(t('New deploy key made.')); await openGitRepo(repo.id, true); }
   }
 
   async function rotateGitWebhook() {
-    if (!confirm(t('Make a new webhook URL? The old one stops working: update it on the remote.'))) return;
+    if (!(await confirmDialog(t('Make a new webhook URL? The old one stops working: update it on the remote.')))) return;
     const repo = gitRepo?.repo;
     const data = await request(`/git/repos/${repo.id}/webhook-token`, { method: 'POST' }, t('Saving...'));
     if (data) { setNotice(t('New webhook URL made.')); await openGitRepo(repo.id, true); }
@@ -3708,7 +3860,7 @@ function App() {
 
   async function deleteGitRepo() {
     const repo = gitRepo?.repo;
-    if (!repo || !confirm(t('Remove {name} from the panel? Its files stay in {path}.', { name: repo.name, path: repo.path }))) return;
+    if (!repo || !(await confirmDialog({ message: t('Remove {name} from the panel? Its files stay in {path}.', { name: repo.name, path: repo.path }), danger: true, confirmLabel: t('Remove') }))) return;
     const data = await request(`/git/repos/${repo.id}`, { method: 'DELETE' }, t('Removing...'));
     if (data) { setNotice(t('{name} removed from the panel.', { name: repo.name })); closeGitRepo(); }
   }
@@ -3764,14 +3916,14 @@ function App() {
   }
 
   async function deleteSftpAccount(account) {
-    if (!confirm(t('Delete SFTP account {name}? Files in its folder are kept.', { name: account.username }))) return;
+    if (!(await confirmDialog({ message: t('Delete SFTP account {name}? Files in its folder are kept.', { name: account.username }), danger: true }))) return;
     await request(`/sftp-accounts/${account.id}`, { method: 'DELETE' }, t('Removing SFTP account...'));
     if (createdSftpInfo?.id === account.id) setCreatedSftpInfo(null);
     await loadSftpAccounts();
   }
 
   async function deleteCron(index) {
-    if (!confirm(`Delete cron #${index}?`)) return;
+    if (!(await confirmDialog({ message: `Delete cron #${index}?`, danger: true }))) return;
     index = Number(index);
     if (Number.isNaN(index)) return;
     const data = await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, t('Deleting cron job...'));
@@ -3839,7 +3991,7 @@ function App() {
 
   async function makeFileDirectory() {
     if (!hasFileTarget()) return;
-    const name = prompt('Folder name:');
+    const name = await promptDialog({ label: 'Folder name:' });
     if (!name) return;
     const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, t('Creating folder...'));
     if (data) await listFiles(fileListPath);
@@ -3847,7 +3999,7 @@ function App() {
 
   async function makeFile() {
     if (!hasFileTarget()) return;
-    const name = prompt('File name:', 'new-file.txt');
+    const name = await promptDialog({ label: 'File name:', defaultValue: 'new-file.txt', select: 'name' });
     if (!name) return;
     const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, t('Creating file...'));
     if (data) {
@@ -3859,7 +4011,7 @@ function App() {
 
   async function renameFileItem(item) {
     if (!item) return;
-    const newName = prompt('New name:', item.name);
+    const newName = await promptDialog({ label: 'New name:', defaultValue: item.name, select: 'name' });
     if (!newName || newName === item.name) return;
     const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: item.path, new_name: newName }) }, t('Renaming...'));
     if (data) await listFiles(fileListPath);
@@ -3901,17 +4053,20 @@ function App() {
     await listFiles(fileListPath);
   }
 
-  async function deleteSelectedFiles() {
-    if (selectedFilePaths.length === 0) return;
-    if (!confirm(t('Delete {n} selected item(s)?', { n: selectedFilePaths.length }))) return;
-    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths: selectedFilePaths }) }, t('Deleting selected files...'));
+  async function deleteSelectedFiles(paths = selectedFilePaths) {
+    if (paths.length === 0) return;
+    const message = paths.length === 1
+      ? t('Delete {name}?', { name: paths[0].split('/').pop() })
+      : t('Delete {n} selected item(s)?', { n: paths.length });
+    if (!(await confirmDialog({ message, danger: true }))) return;
+    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths }) }, t('Deleting selected files...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
   async function transferFileItems(action, paths) {
     if (!hasFileTarget() || !paths?.length) return;
     const verb = action === 'copy' ? 'Copy' : 'Move';
-    const destination = prompt(`${verb} to folder:`, fileListPath || 'public_html');
+    const destination = await promptDialog({ label: `${verb} to folder:`, defaultValue: fileListPath || 'public_html' });
     if (destination === null) return;
     const targetPath = destination.trim() || fileListPath || 'public_html';
     const data = await request(`/maintenance/files/${action}`, {
@@ -3921,29 +4076,30 @@ function App() {
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
-  async function copySelectedFiles() {
-    await transferFileItems('copy', selectedFilePaths);
+  // A row's own menu passes its one path; the selection bar passes none.
+  async function copySelectedFiles(paths = selectedFilePaths) {
+    await transferFileItems('copy', paths);
   }
 
-  async function moveSelectedFiles() {
-    await transferFileItems('move', selectedFilePaths);
+  async function moveSelectedFiles(paths = selectedFilePaths) {
+    await transferFileItems('move', paths);
   }
 
-  async function archiveSelectedFiles() {
+  async function archiveSelectedFiles(format = archiveFormat) {
     if (selectedFilePaths.length === 0) return;
-    const ext = archiveFormat === 'tar.gz' ? 'tar.gz' : 'zip';
-    const outputName = prompt('Archive file name:', `archive-${Date.now()}.${ext}`);
+    const ext = format === 'tar.gz' ? 'tar.gz' : 'zip';
+    const outputName = await promptDialog({ label: 'Archive file name:', defaultValue: `archive-${Date.now()}.${ext}`, select: 'name' });
     if (!outputName) return;
     const data = await request('/maintenance/files/archive', {
       method: 'POST',
-      body: JSON.stringify({ ...fileTargetBody(), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
+      body: JSON.stringify({ ...fileTargetBody(), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: ext }),
     }, t('Creating archive...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
   async function extractArchiveFile(path) {
     if (!hasFileTarget() || !path) return;
-    const destination = prompt('Extract to folder:', fileListPath || '.');
+    const destination = await promptDialog({ label: 'Extract to folder:', defaultValue: fileListPath || '.' });
     if (destination === null) return;
     const targetPath = destination.trim() || fileListPath || '.';
     const data = await request('/maintenance/files/extract', {
@@ -4175,6 +4331,7 @@ function App() {
       setNotice(t('Backup schedule saved.'));
       await loadBackupSchedules();
     }
+    return !!data;
   }
 
   // Component level on purpose: renderBackups draws with these and
@@ -4188,7 +4345,7 @@ function App() {
 
   async function runBackupScheduleNow(item) {
     const who = scheduleUserLabel(item);
-    if (!confirm(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`)) return;
+    if (!(await confirmDialog(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`))) return;
     const data = await request(`/maintenance/backup-schedules/${item.id}/run`, { method: 'POST' }, t('Starting...'));
     if (data) {
       setNotice(data.detail || 'Running now.');
@@ -4215,7 +4372,7 @@ function App() {
   }
 
   async function deleteBackupSchedule(id) {
-    if (!confirm(t('Delete this backup schedule?'))) return;
+    if (!(await confirmDialog({ message: t('Delete this backup schedule?'), danger: true }))) return;
     const data = await request(`/maintenance/backup-schedules/${id}`, { method: 'DELETE' }, t('Deleting backup schedule...'));
     if (data) await loadBackupSchedules();
   }
@@ -4251,6 +4408,7 @@ function App() {
       setNewSftpTarget({ name: '', kind: newSftpTarget.kind, host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true });
       await loadSftpTargets();
     }
+    return !!data;
   }
 
   // A source is 'local', 'target:<id>' (a Backup Destination) or 'remote'.
@@ -4342,7 +4500,7 @@ function App() {
   }
 
   async function deleteRestoreArchive(item) {
-    if (!confirm(t('Delete {name} from this server?', { name: item.name }))) return;
+    if (!(await confirmDialog({ message: t('Delete {name} from this server?', { name: item.name }), danger: true }))) return;
     const data = await request(`/maintenance/restore/local?key=${encodeURIComponent(item.key)}`, { method: 'DELETE' },
       t('Deleting...'));
     if (data) {
@@ -4359,7 +4517,7 @@ function App() {
     const picked = restoreGroupsOf(restoreListing).filter(group => restorePicks.includes(group.id));
     if (picked.length === 0) return;
     const names = picked.map(group => group.username || chosenRestoreBackup(group).name).join(', ');
-    if (!confirm(`${t('Restore {n} user(s)? An account that already exists on this server is overwritten with what is in its backup.', { n: picked.length })}\n\n${names}`)) return;
+    if (!(await confirmDialog(`${t('Restore {n} user(s)? An account that already exists on this server is overwritten with what is in its backup.', { n: picked.length })}\n\n${names}`))) return;
     const data = await request('/maintenance/restore/run', {
       method: 'POST',
       body: JSON.stringify({
@@ -4379,7 +4537,7 @@ function App() {
   }
 
   async function deleteSftpTarget(id) {
-    if (!confirm(t('Delete this SFTP target?'))) return;
+    if (!(await confirmDialog({ message: t('Delete this SFTP target?'), danger: true }))) return;
     const data = await request(`/maintenance/sftp-targets/${id}`, { method: 'DELETE' }, t('Deleting SFTP target...'));
     if (data) await loadSftpTargets();
   }
@@ -4400,7 +4558,7 @@ function App() {
   }
 
   async function restoreBackup(file) {
-    if (!confirm(`Restore this backup to the current website?\n${file}`)) return;
+    if (!(await confirmDialog(`Restore this backup to the current website?\n${file}`))) return;
     await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file }) }, t('Restoring backup...'));
   }
 
@@ -4438,7 +4596,7 @@ function App() {
   }
 
   async function restoreUserBackup(file) {
-    if (!confirm(`Restore this full user backup? Missing panel user and websites will be created.\n${file}`)) return;
+    if (!(await confirmDialog(`Restore this full user backup? Missing panel user and websites will be created.\n${file}`))) return;
     const data = await request('/maintenance/user-restore', { method: 'POST', body: JSON.stringify({ backup_file: file }) }, t('Restoring full user backup...'));
     if (data) {
       setNotice(`Restored user ${data.username}. Websites: ${data.websites?.length || 0}`);
@@ -4450,7 +4608,7 @@ function App() {
   }
 
   async function deleteUserBackup(file) {
-    if (!confirm(`Delete this full user backup?\n${file}`)) return;
+    if (!(await confirmDialog({ message: `Delete this full user backup?\n${file}`, danger: true }))) return;
     const data = await request(`/maintenance/user-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting full user backup...'));
     if (data) {
       await listUserBackups();
@@ -4459,7 +4617,7 @@ function App() {
   }
 
   async function deleteRestoreBackup(file) {
-    if (!confirm(`Delete this restore backup?\n${file}`)) return;
+    if (!(await confirmDialog({ message: `Delete this restore backup?\n${file}`, danger: true }))) return;
     const data = await request(`/maintenance/user-restore-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting restore backup...'));
     if (data) {
       await loadRestoreBackups();
@@ -4528,7 +4686,7 @@ function App() {
   }
 
   async function deleteBackup(file) {
-    if (!confirm(`Delete this backup?\n${file}`)) return;
+    if (!(await confirmDialog({ message: `Delete this backup?\n${file}`, danger: true }))) return;
     const data = await request(`/maintenance/backups/${selectedWebsiteId}?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting backup...'));
     if (data) await listBackups();
   }
@@ -4630,7 +4788,7 @@ function App() {
   }
 
   async function restorePhpDefaults() {
-    if (!confirm(`Restore default PHP ${phpConfig.php_version} values?`)) return;
+    if (!(await confirmDialog(`Restore default PHP ${phpConfig.php_version} values?`))) return;
     const data = await request('/maintenance/php-config/defaults', {
       method: 'POST',
       body: JSON.stringify({ php_version: phpConfig.php_version }),
@@ -4669,7 +4827,7 @@ function App() {
   }
 
   async function installPhpVersion(version) {
-    if (!confirm(`Install PHP ${version}? This will install php${version}-fpm via apt.`)) return;
+    if (!(await confirmDialog(`Install PHP ${version}? This will install php${version}-fpm via apt.`))) return;
     const data = await request(`/maintenance/php-versions/${version}/install`, { method: 'POST' }, `Installing PHP ${version}...`);
     if (data) { setNotice(`PHP ${version} installed successfully.`); await loadPhpVersions(); await loadServiceNames(); }
   }
@@ -4706,11 +4864,11 @@ function App() {
   }
 
   async function enableFirewall() {
-    if (!confirm(t('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.'))) return;
+    if (!(await confirmDialog(t('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.')))) return;
     await runFirewallAction('/firewall/enable', { method: 'POST' }, t('Enabling firewall...'));
   }
   async function disableFirewall() {
-    if (!confirm(t('Disable the firewall? Every port will be reachable again.'))) return;
+    if (!(await confirmDialog(t('Disable the firewall? Every port will be reachable again.')))) return;
     await runFirewallAction('/firewall/disable', { method: 'POST' }, t('Disabling firewall...'));
   }
   async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, t('Reloading firewall...')); }
@@ -4718,13 +4876,13 @@ function App() {
   async function openFirewallPort() { await runFirewallAction('/firewall/allow-port', { method: 'POST', body: JSON.stringify({ port: firewallPort, protocol: firewallProtocol }) }, t('Opening port...')); }
   async function allowFirewallIp() { await runFirewallAction('/firewall/allow-ip', { method: 'POST', body: JSON.stringify({ ip: firewallAllowIp, port: firewallAllowPort || null, protocol: firewallAllowProtocol }) }, t('Allowing IP...')); }
   async function blockFirewallIp() {
-    if (!confirm(`Block ${firewallBlockIp || 'this IP'}?`)) return;
+    if (!(await confirmDialog(`Block ${firewallBlockIp || 'this IP'}?`))) return;
     await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, t('Blocking IP...'));
   }
   async function deleteFirewallRule(numberOverride = firewallDeleteNumber) {
     const ruleNumber = String(numberOverride || '').trim();
     if (!ruleNumber) return;
-    if (!confirm(`Delete firewall rule #${ruleNumber}?`)) return;
+    if (!(await confirmDialog({ message: `Delete firewall rule #${ruleNumber}?`, danger: true }))) return;
     await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, t('Deleting rule...'));
     setFirewallDeleteNumber('');
   }
@@ -4759,7 +4917,7 @@ function App() {
   }
 
   async function deleteFirewallBlocklistUrl(url) {
-    if (!confirm(`Delete blocklist URL?\n${url}`)) return;
+    if (!(await confirmDialog({ message: `Delete blocklist URL?\n${url}`, danger: true }))) return;
     const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, t('Deleting IP blocklist URL...'));
     if (data) {
       setNotice((data.stdout || data.stderr || 'IP blocklist URL removed.').trim());
@@ -4869,10 +5027,8 @@ function App() {
   }
 
   async function saveCrsMode(mode) {
-    if (mode === 'block' && !confirm(
-      t('Switch OWASP CRS to blocking?') + '\n\n'
-      + t('Websites with CRS on will start refusing requests that score above the threshold. Run Detect only first and read the logs, or a request somebody depends on may be the one it stops.')
-    )) return;
+    if (mode === 'block' && !(await confirmDialog(t('Switch OWASP CRS to blocking?') + '\n\n'
+      + t('Websites with CRS on will start refusing requests that score above the threshold. Run Detect only first and read the logs, or a request somebody depends on may be the one it stops.')))) return;
     const data = await request('/waf/crs', {
       method: 'PUT',
       body: JSON.stringify({ mode }),
@@ -4883,7 +5039,7 @@ function App() {
   async function toggleSiteCrs(config) {
     const turningOn = !config.crs_enabled;
     const domain = config.domain;
-    if (turningOn && !confirm(t('Turn on OWASP CRS for {domain}? It uses about {n} MB of server RAM.', { domain, n: crs?.rss_mb_per_site || 50 }))) return;
+    if (turningOn && !(await confirmDialog(t('Turn on OWASP CRS for {domain}? It uses about {n} MB of server RAM.', { domain, n: crs?.rss_mb_per_site || 50 })))) return;
     const data = await request(`/waf/websites/${config.website_id}/crs`, {
       method: 'PUT',
       body: JSON.stringify({ enabled: turningOn }),
@@ -4949,7 +5105,7 @@ function App() {
   async function clearWafAccessLogs() {
     const selected = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
     const label = selected?.domain || 'all websites';
-    if (!confirm(`Clear access logs for ${label}?`)) return;
+    if (!(await confirmDialog({ message: `Clear access logs for ${label}?`, danger: true, confirmLabel: t('Clear') }))) return;
     const params = new URLSearchParams();
     if (wafAccessLogFilters.websiteId) params.set('website_id', wafAccessLogFilters.websiteId);
     const suffix = params.toString() ? `?${params.toString()}` : '';
@@ -4990,7 +5146,7 @@ function App() {
   }
 
   async function runOsUpdate() {
-    if (!confirm(t('Run apt-get update && apt-get upgrade now?'))) return;
+    if (!(await confirmDialog(t('Run apt-get update && apt-get upgrade now?')))) return;
     setOsUpdating(true);
     const data = await request('/updates/os/run', { method: 'POST' }, t('Updating OS packages...'));
     setOsUpdating(false);
@@ -5003,7 +5159,7 @@ function App() {
   }
 
   async function runPanelUpdate() {
-    if (!confirm(t('Update BPanel from GitHub now? The API may restart and this page will reload when done.'))) return;
+    if (!(await confirmDialog(t('Update BPanel from GitHub now? The API may restart and this page will reload when done.')))) return;
     setPanelUpdating(true);
     setShowUpdateLog(true);
     setPanelUpdateLog([]);
@@ -5051,7 +5207,11 @@ function App() {
 
   useEffect(() => {
     if (standaloneEditor) return undefined;
-    const syncPageFromLocation = () => setPage(pageFromPathname(window.location.pathname));
+    const syncPageFromLocation = () => {
+      const where = websiteFromPathname(window.location.pathname);
+      if (where) setSiteWhere(where);
+      setPage(pageFromPathname(window.location.pathname));
+    };
     syncPageFromLocation();
     window.addEventListener('popstate', syncPageFromLocation);
     return () => window.removeEventListener('popstate', syncPageFromLocation);
@@ -5077,9 +5237,16 @@ function App() {
     return () => window.removeEventListener('keydown', handler);
   }, [standaloneEditor, isAuthenticated, selectedWebsiteId, filePath, fileContent]);
 
+  // What needs attention (the header's bell) and the Dashboard's own cards:
+  // one summary, kept warm on every page, not only while the Dashboard
+  // itself is open.
   useEffect(() => {
-    if (isAuthenticated && page === 'dashboard') loadDashboardSummary();
-  }, [isAuthenticated, page]);
+    if (!isAuthenticated) return undefined;
+    loadDashboardSummary();
+    const tick = () => { if (!document.hidden) loadDashboardSummary(); };
+    const timer = setInterval(tick, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     // 'malware-scan' is the address a scan used to open at; a scan is now a
@@ -5113,7 +5280,8 @@ function App() {
     return () => clearInterval(timer);
   }, [isAuthenticated, page, gitRepo?.repo?.id, gitRepo?.repo?.busy, gitRepo?.operations?.[0]?.status, gitOpLog?.id]);
 
-  // The top bar's CPU, RAM, disk and network chips, on every page.
+  // CPU, RAM, disk and network: the Dashboard's figures and their
+  // sparklines, kept warm on every page an administrator is on.
   useEffect(() => {
     if (!isAuthenticated || !isAdmin) return undefined;
     loadResourceUsage();
@@ -5368,6 +5536,37 @@ function App() {
     loadWebsiteWafConfig(websites[0].id, false);
   }, [isAuthenticated, page, selectedWafWebsiteId, websites.length]);
 
+  // One website's page: the site becomes the panel's current one (SSL and
+  // files follow it), its settings load once, and each tab loads what it
+  // shows.
+  const siteDetailLoaded = useRef('');
+  useEffect(() => {
+    if (page !== 'website') { siteDetailLoaded.current = ''; setSiteTermOpen(false); return; }
+    if (!isAuthenticated) return;
+    const site = websites.find(item => String(item.domain || '').toLowerCase() === siteWhere.domain);
+    if (!site) return;
+    if (siteDetailLoaded.current !== String(site.id)) {
+      siteDetailLoaded.current = String(site.id);
+      setSelectedWebsiteId(String(site.id));
+      openNginxCustom(site);
+    }
+    if (siteWhere.tab === 'ssl') { loadCfZone(site.id); loadSslSources(site.id); }
+    if (siteWhere.tab === 'security') {
+      loadWebsiteWafConfig(site.id, false);
+      loadBotBlocks();
+      if (isAdmin) { loadWafRules(); loadCrs(); }
+    }
+    if (siteWhere.tab === 'logs') loadWebsiteLog(site, 'access', 200, site.domain);
+  }, [isAuthenticated, page, siteWhere.domain, siteWhere.tab, websites.length]);
+
+  // Account resources: read again every 10 seconds while the page is open.
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'account-resources' || !isAdmin || !limitsOn) return undefined;
+    loadLimitsInfo();
+    const timer = setInterval(loadLimitsInfo, 10000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, page, isAdmin, limitsOn]);
+
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
   // The account menu closes on a click anywhere else, on Escape, and on navigation.
@@ -5387,73 +5586,27 @@ function App() {
     return role === 'admin' ? 'Admin' : 'End user';
   }
 
-  // The sidebar in three labelled groups, as OPanel has it - what a site
-  // needs, what guards it, and the server itself - so nothing hides behind a
-  // collapsed "Settings". Labels are English and go through t() when drawn.
-  // The sidebar holds what is used every day (operator, 2026-09-27); the rest
-  // is one click further, on the Settings page. An addon shows only once it
-  // is on - Application, AI assistants, Notifications.
-  // One plain list, top to bottom, as in OPanel: the everyday pages, the
-  // addons that are on, then Settings.
-  const navSections = [
-    { key: 'main', items: [
-      ['dashboard', 'Dashboard', Home],
-      ['websites', 'Websites', Globe],
-      ...(appsFeatureEnabled ? [['applications', 'Applications', Boxes]] : []),
-      ['ssl', 'SSL', Lock],
-      ['databases', 'Databases', Database],
-      ['cron', 'Cron', Clock],
-      ['files', 'File manager', FolderOpen],
-      ['sftp', 'SFTP accounts', KeyRound],
-      ['backups', 'Backups', Archive],
-      ...(canManageUsers ? [['users', 'Panel users', Users]] : []),
-      ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
-      ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
-      ...(gitAddonInstalled ? [['git', 'Git', GitBranch]] : []),
-      ...(mcpAddonInstalled ? [['mcp', 'AI assistants (MCP)', Bot]] : []),
-      ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
-      ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware Scanner', Bug]] : []),
-      ['settings', 'Settings', SettingsIcon],
-    ] },
-  ].filter(section => section.items.length > 0)
-    // A reseller's "Panel users" are its customers, and the page says so.
-    .map(section => ({ ...section, items: section.items.map(item => (isReseller && item[0] === 'users' ? ['users', 'Customers', item[2]] : item)) }));
-
-  // Everything else, on the Settings page: [page, label, icon, summary].
-  const settingsGroups = [
-    { title: 'Security', items: [
-      isAdmin && ['firewall', 'Firewall', BrickWall, 'Open ports, blocked addresses and blocklists'],
-      ['waf', 'WAF', ShieldAlert, 'Web application firewall for each website'],
-      isAdmin && ['access-logs', 'Access logs', ScrollText, 'Visitors and what the WAF blocked'],
-      ['security', 'Account security', LockKeyhole, 'Password, two-factor authentication and passkeys'],
-    ] },
-    { title: 'Server status', items: [
-      isAdmin && ['processes', 'Process monitor', Cpu, 'What is running now, as top -c shows it'],
-      isAdmin && ['ram-usage', 'RAM usage', MemoryStick, "Where the server's memory is"],
-      isAdmin && ['disk-usage', 'Disk usage', HardDrive, 'Disks, and what takes the space'],
-      isAdmin && ['traffic', 'Traffic', Network, 'Network traffic of each interface'],
-    ] },
-    { title: 'System', items: [
-      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Branding, panel address and certificate'],
-      isAdmin && ['services', 'Services', Activity, "Start, stop and check the server's daemons"],
-      isAdmin && ['php', 'PHP config', Code2, 'PHP versions, limits and extensions'],
-      isAdmin && ['updates', 'Updates', RefreshCw, 'Panel and system updates'],
-      isAdmin && ['addons', 'Addons', PackageOpen, 'Install and turn on optional features'],
-    ] },
-  ].map(group => ({ ...group, items: group.items.filter(Boolean) })).filter(group => group.items.length > 0);
-  const settingsItems = settingsGroups.flatMap(group => group.items);
-
-  const navItems = navSections.flatMap(section => section.items);
-  const basePage = NAV_PARENT_PAGE[page] || page;
-  // A page reached from Settings lights up Settings in the sidebar...
-  // Resource usage is reached from the dashboard and keeps it lit.
-  const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage === 'usage' ? 'dashboard' : basePage;
-  const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
-  // ...and is still called by its own name at the top: "Firewall", not "Settings".
-  const hiddenPages = limitsOn && !isAdmin ? [['usage', 'Resource usage', Activity]] : [];
-  const pageItem = [...navItems, ...settingsItems, ...hiddenPages].find(([key]) => key === basePage) || activeNavItem;
-  // Its title is a crumb back to Settings, as in OPanel.
-  const settingsPageItem = settingsItems.find(([key]) => key === basePage);
+  // Where everything is (lib/navigation.jsx): the sidebar's everyday pages,
+  // and the Server/Security/Settings hubs with their pages as tabs, as
+  // SNPanel and OPanel's own current shell lay it out.
+  const navCtx = {
+    isAdmin, isReseller, canOpenTerminal, appsFeatureEnabled,
+    mailAddonInstalled, dnsAddonInstalled, gitAddonInstalled, mcpAddonInstalled,
+    notificationsAddonInstalled, malwareAddonInstalled, limitsOn, wordpressAddonInstalled,
+  };
+  navCtxRef.current = navCtx;
+  // A hub's own address typed or bookmarked (/server, /settings): its first
+  // tab, once the account is known.
+  useEffect(() => {
+    if (currentUser && isHubKey(page)) navigateToPage(page, { replace: true });
+  }, [page, currentUser, navigateToPage]);
+  const sideItems = sidebarItems(navCtx);
+  const sidebarPage = sidebarKeyOf(page, navCtx, sideItems);
+  const activeHub = hubOf(page, navCtx);
+  const litItem = sideItems.find(([key]) => key === sidebarPage) || sideItems[0];
+  const pageTitle = t(PAGE_TITLES[page] || litItem?.[1] || 'Dashboard');
+  // A newer release waiting: a dot on the avatar and its line in the menu.
+  const panelWaiting = isAdmin && resourceUsage?.panel_update?.update_available === true;
 
   function renderNotifications() {
     const errorMessage = formatApiError(error, '').trim();
@@ -5573,18 +5726,6 @@ function App() {
       <option value="">-- Select website --</option>
       {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
     </select>;
-  }
-
-  function EmptyState({ icon: Icon = AlertCircle, message = 'No data yet', action }) {
-    /* Translated here rather than at each call site. Several callers pass a
-     * ternary - message={searching ? 'No matches.' : 'None yet.'} - and a
-     * wrapper looking for message="..." cannot see inside one. Doing it here
-     * covers every caller, including the ones written tomorrow. */
-    return <div className="empty-state">
-      <Icon size={40} />
-      <p>{t(message)}</p>
-      {action && <button type="button" className="mini secondary-light" onClick={action.onClick}>{action.icon ? <action.icon size={14}/> : null} {action.label}</button>}
-    </div>;
   }
 
   function formatBytes(value) {
@@ -5739,72 +5880,40 @@ function App() {
     return String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\u0111/g, 'd').replace(/\u0110/g, 'D').toLowerCase();
   }
 
-  // The tools on the dashboard, in cPanel's groups. Each opens its page (and,
-  // where there is one, its tab or its create form). An addon's tools appear
-  // only while it is installed, as its sidebar entry does.
-  function dashboardToolGroups() {
-    const go = (target, before) => () => { if (before) before(); navigateToPage(target); };
-    const groups = [];
-    if (canManageUsers) {
-      groups.push({ key: 'accounts', title: isReseller ? t('Customers') : t('Accounts'), icon: Users, tools: [
-        { key: 'users', label: isReseller ? t('Customers') : t('Panel users'), icon: Users, run: go('users', () => setUserTab('list')) },
-        { key: 'user-add', label: isReseller ? t('Add customer') : t('Add User'), icon: Plus, run: go('users', () => setUserTab('add')) },
-        { key: 'packages', label: t('Packages'), icon: PackageOpen, run: go('users', () => setUserTab('packages')) },
-      ] });
-    }
-    groups.push({ key: 'websites', title: t('Websites'), icon: Globe, tools: [
-      { key: 'websites', label: t('Websites'), icon: Globe, run: go('websites') },
-      // "New website" and "New database" arrive with their form open.
-      { key: 'site-new', label: t('New website'), icon: Plus, run: () => { setCreateFormOpen(true); navigateToPage('websites'); } },
-      ...(appsFeatureEnabled ? [{ key: 'applications', label: t('Applications'), icon: Boxes, run: go('applications') }] : []),
-      { key: 'ssl', label: t('SSL'), icon: Lock, run: go('ssl') },
-      { key: 'waf', label: 'WAF', icon: ShieldAlert, run: go('waf') },
-      ...(isAdmin ? [{ key: 'logs', label: t('Access logs'), icon: ScrollText, run: go('access-logs') }] : []),
-      ...(isAdmin ? [{ key: 'php', label: t('PHP config'), icon: Code2, run: go('php') }] : []),
-    ] });
-    groups.push({ key: 'files', title: t('Files'), icon: FolderOpen, tools: [
-      { key: 'files', label: t('File manager'), icon: FolderOpen, run: go('files') },
-      { key: 'sftp', label: t('SFTP accounts'), icon: KeyRound, run: go('sftp') },
-      ...(gitAddonInstalled ? [{ key: 'git', label: t('Git'), icon: GitBranch, run: go('git') }] : []),
-      { key: 'sftp-new', label: t('New SFTP account'), icon: Plus, run: () => {
-        navigateToPage('sftp');
-        window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
-      } },
-      { key: 'backups', label: t('Backups'), icon: Archive, run: go('backups') },
-    ] });
-    groups.push({ key: 'databases', title: t('Databases'), icon: Database, tools: [
-      { key: 'databases', label: t('Databases'), icon: Database, run: go('databases') },
-      { key: 'db-new', label: t('New database'), icon: Plus, run: () => { setDbCreateOpen(true); navigateToPage('databases'); } },
-    ] });
-    if (mailAddonInstalled) {
-      groups.push({ key: 'email', title: t('Email'), icon: Mail, tools: [
-        { key: 'mailboxes', label: t('Mailboxes'), icon: Inbox, run: go('mail', () => setMailTab('mailboxes')) },
-        { key: 'forwarders', label: t('Forwarders'), icon: Forward, run: go('mail', () => setMailTab('forwarders')) },
-      ] });
-    }
-    if (dnsAddonInstalled) {
-      groups.push({ key: 'domains', title: t('Domains'), icon: Network, tools: [
-        { key: 'dns', label: t('DNS Manager'), icon: Network, run: go('dns') },
-      ] });
-    }
-    groups.push({ key: 'security', title: t('Security'), icon: ShieldCheck, tools: [
-      { key: 'account-security', label: t('Account security'), icon: LockKeyhole, run: go('security') },
-      ...(isAdmin ? [{ key: 'firewall', label: t('Firewall'), icon: BrickWall, run: go('firewall') }] : []),
-      ...(isAdmin && malwareAddonInstalled ? [{ key: 'malware', label: t('Malware Scanner'), icon: Bug, run: go('malware') }] : []),
-    ] });
-    groups.push({ key: 'advanced', title: t('Advanced'), icon: SettingsIcon, tools: [
-      { key: 'cron', label: t('Cron'), icon: Clock, run: go('cron') },
-      ...(limitsOn && !isAdmin ? [{ key: 'usage', label: t('Resource usage'), icon: Activity, run: go('usage') }] : []),
-      ...(mcpAddonInstalled ? [{ key: 'mcp', label: t('AI assistants (MCP)'), icon: Bot, run: go('mcp') }] : []),
-      ...(isAdmin ? [
-        { key: 'services', label: t('Services'), icon: Server, run: go('services') },
-        ...(notificationsAddonInstalled ? [{ key: 'notifications', label: t('Notifications'), icon: Bell, run: go('notifications') }] : []),
-        { key: 'updates', label: t('Updates'), icon: RefreshCw, run: go('updates') },
-        { key: 'addons', label: t('Addons'), icon: PackageOpen, run: go('addons') },
-        { key: 'panel-settings', label: t('Panel settings'), icon: SettingsIcon, run: go('panel-settings') },
-      ] : []),
-    ] });
-    return groups;
+  // The way a tile's `before`/`after` names resolve to an App action: the
+  // tab or form a page opens on, or a field focused once it has rendered.
+  function dashboardBeforeAction(name) {
+    const actions = {
+      usersList: () => setUserTab('list'),
+      usersAdd: () => setUserTab('add'),
+      usersPackages: () => setUserTab('packages'),
+      newWebsite: () => setCreateFormOpen(true),
+      newDatabase: () => setDbCreateOpen(true),
+      mailMailboxes: () => setMailTab('mailboxes'),
+      mailForwarders: () => setMailTab('forwarders'),
+      mailDomains: () => setMailTab('domains'),
+      mailRelay: () => setMailTab('relay'),
+      apiTokens: () => setPanelSettingsTab('api'),
+    };
+    actions[name]?.();
+  }
+  function dashboardAfterAction(name) {
+    if (name === 'focusSftpForm') window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
+  }
+  // A tile's own role/addon/package facts (lib/features.jsx).
+  function dashboardNavCtx() {
+    return {
+      isAdmin, isReseller, appsFeatureEnabled, canOpenTerminal, limitsOn,
+      installed: (slug) => !!addons.items.find(item => item.slug === slug)?.installed,
+    };
+  }
+  // Opens a tile's page, running its before/after action if it names one.
+  function openDashboardTile(key) {
+    const tile = TILES[key];
+    if (!tile) return;
+    if (tile.before) dashboardBeforeAction(tile.before);
+    navigateToPage(tile.page);
+    if (tile.after) dashboardAfterAction(tile.after);
   }
 
   function toggleToolGroup(key) {
@@ -5815,106 +5924,70 @@ function App() {
     });
   }
 
-  // `order` places the panel when the page folds into one column (see
-  // .cp-layout): after the statistics for a customer, lower for an admin.
-  function renderToolPanel(order) {
-    const query = normalizeSearch(toolQuery.trim());
-    const groups = dashboardToolGroups()
-      .map(group => ({ ...group, tools: query ? group.tools.filter(tool => normalizeSearch(`${tool.label} ${group.title}`).includes(query)) : group.tools }))
-      .filter(group => group.tools.length > 0);
-    return <section className="section dash-card tools-panel" style={{ '--cp-order': order }}>
+  // The Dashboard's features: one tile each (lib/features.jsx), in sections
+  // that fold, searchable with "/" - the picture each has from
+  // icons/feature. An administrator also sees each addon not installed yet,
+  // greyed, in Extensions, as the way to install it.
+  function renderFeaturesCard() {
+    const ctx = dashboardNavCtx();
+    const needle = normalizeSearch(toolQuery.trim());
+    const sections = dashboardSections(ctx)
+      .map(([key, title, keys]) => ({ key, title: t(title), tiles: keys.filter(tileKey => tileVisible(tileKey, ctx)) }))
+      .map(section => ({ ...section, tiles: section.tiles.filter(tileKey => !needle || normalizeSearch(`${t(tileLabel(TILES[tileKey], ctx))} ${section.title}`).includes(needle)) }));
+    const missingAddons = isAdmin
+      ? addons.items.filter(addon => !addon.installed && ADDON_META[addon.slug] && addon.slug !== 'demo'
+          && (!needle || normalizeSearch(`${addonLabel(addon, t)} ${t('Addons')}`).includes(needle)))
+      : [];
+    const shownSections = sections.filter(section => section.tiles.length > 0 || (section.key === 'extensions' && missingAddons.length > 0));
+    const sitesTotal = dashSummary?.websites?.total ?? websites.length;
+    const tile = (key) => {
+      const item = TILES[key];
+      return <div key={key} className="dash-tile">
+        <button type="button" className="dash-tile-link" onClick={() => openDashboardTile(key)}>
+          <FeatureIcon name={item.icon} size={40}/><span className="dash-tile-label">{t(tileLabel(item, ctx))}</span>
+        </button>
+      </div>;
+    };
+    const missingTile = (addon) => <div key={`addon-${addon.slug}`} className="dash-tile is-missing">
+      <button type="button" className="dash-tile-link" onClick={() => navigateToPage('addons')}
+        aria-label={t('{name}: not installed. Open Addons to install it.', { name: addonLabel(addon, t) })}>
+        <span className="dash-tile-art"><FeatureIcon name={addonFeatureIcon(addon.slug)} size={40} muted/>
+          <span className="dash-tile-badge" aria-hidden="true"><Download size={11}/></span></span>
+        <span className="dash-tile-label">{addonLabel(addon, t)}</span>
+        <small className="dash-tile-note">{t('Not installed')}</small>
+      </button>
+    </div>;
+    return <section className="section dash-card dash-features" aria-label={t('Features')}>
       <label className="tools-search">
         <Search size={16} aria-hidden="true"/>
         <input ref={toolSearchRef} type="search" value={toolQuery} onChange={e => setToolQuery(e.target.value)}
           placeholder={t('Search tools (press /)')} aria-label={t('Search tools')} />
       </label>
-      {groups.length === 0 && <p className="hint">{t('No tool matches your search.')}</p>}
-      {groups.map(group => {
-        const open = !!query || !collapsedTools.includes(group.key);
-        return <div className={`tool-group${open ? ' is-open' : ''}`} key={group.key}>
-          <button type="button" className="tool-group-head" aria-expanded={open} onClick={() => toggleToolGroup(group.key)}>
-            <span className="tool-group-icon"><group.icon size={15}/></span>
-            <h3>{group.title}</h3>
-            <ChevronDown size={16} className="tool-group-chevron" aria-hidden="true"/>
+      {shownSections.length === 0 && <p className="hint">{t('No tool matches your search.')}</p>}
+      {dashSummary && sitesTotal === 0 && !needle
+        && <p className="hint dash-first-hint"><Plus size={13} aria-hidden="true"/> {t('No website yet: start with New website.')}</p>}
+      {shownSections.map(section => {
+        const open = !!needle || !collapsedTools.includes(section.key);
+        return <div key={section.key} className={`dash-section${open ? ' is-open' : ''}`}>
+          <button type="button" className="dash-section-head" aria-expanded={open} aria-controls={`dash-section-${section.key}`}
+            onClick={() => toggleToolGroup(section.key)}>
+            <h3>{section.title}</h3>
+            <ChevronDown size={16} className="dash-section-chevron" aria-hidden="true"/>
           </button>
-          {open && <div className="tool-grid">
-            {group.tools.map(tool => <button type="button" key={tool.key} className="tool-tile" onClick={tool.run}>
-              <span className="tool-icon"><tool.icon size={17}/></span>
-              <span className="tool-label">{tool.label}</span>
-            </button>)}
+          {open && <div className="dash-tiles" id={`dash-section-${section.key}`}>
+            {section.tiles.map(tile)}
+            {section.key === 'extensions' && missingAddons.map(missingTile)}
           </div>}
         </div>;
       })}
     </section>;
   }
 
-  // --- The server's own pages, behind the top bar's status chips -------------------------
-  // (operator, 2026-10-06: CPU, RAM, disk and network sit in the top bar; each
-  // opens its page.) Administrators only.
-  function statTone(percent) {
-    const value = Number(percent) || 0;
-    return value >= 90 ? 'bad' : value >= 75 ? 'warn' : 'ok';
-  }
-
-  function renderTopStats() {
-    const cpu = resourceUsage?.cpu || {};
-    const memory = resourceUsage?.memory || {};
-    const disk = resourceUsage?.disk || {};
-    const network = resourceUsage?.network || {};
-    const rate = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
-    const known = !!resourceUsage;
-    const chips = [
-      ['processes', Cpu, 'CPU', known ? formatPercent(cpu.percent) : '--', statTone(cpu.percent), 'CPU: open the process monitor'],
-      ['ram-usage', MemoryStick, 'RAM', known ? formatPercent(memory.percent) : '--', statTone(memory.percent), 'RAM: where the memory is'],
-      ['disk-usage', HardDrive, 'Disk', known ? formatPercent(disk.percent) : '--', statTone(disk.percent), 'Disk: what takes the space'],
-      ['traffic', Network, 'Network', known ? `${formatBytes(rate)}/s` : '--', 'ok', 'Network: traffic of each interface'],
-    ];
-    return <nav className="top-stats" aria-label={t('Server status')}>
-      {chips.map(([key, Icon, label, value, tone, title]) => <button key={key} type="button"
-        className={`top-stat tone-${tone}${page === key ? ' active' : ''}`} onClick={() => navigateToPage(key)} title={t(title)} aria-label={`${t(label)} ${value}`}>
-        <Icon size={14}/><span className="top-stat-label">{t(label)}</span><b>{value}</b>
-      </button>)}
-    </nav>;
-  }
-
-  // The version opens Updates for an administrator, with a dot while a newer
-  // release waits; anyone else sees the number only.
-  function renderTopVersion() {
-    if (!isAdmin) return <span className="top-version" title={t('Panel version')}>v{appVersion}</span>;
-    const waiting = resourceUsage?.panel_update?.update_available === true;
-    const latest = resourceUsage?.panel_update?.latest_version;
-    const title = waiting ? t('Panel update {version} is available.', { version: latest }) : t('Updates');
-    return <button type="button" className={`top-version${waiting ? ' has-update' : ''}${page === 'updates' ? ' active' : ''}`}
-      onClick={() => navigateToPage('updates')} title={title} aria-label={`${t('Panel version')} ${appVersion}. ${title}`}>
-      v{appVersion}{waiting && <i className="top-version-dot" aria-hidden="true" />}
-    </button>;
-  }
-
+  // The process monitor, as SNPanel's: a table read from top -c that sorts
+  // by any column and filters by account and text (pages/Processes.jsx).
   function renderProcessMonitor() {
-    const output = processTop?.output || '';
-    const lines = output.replace(/\s+$/, '').split('\n');
-    const headerEnd = lines.findIndex(line => /^\s*PID\s+USER\b/.test(line));
-    const needle = processFilter.trim().toLowerCase();
-    const shown = headerEnd < 0 || !needle ? lines
-      : [...lines.slice(0, headerEnd + 1), ...lines.slice(headerEnd + 1).filter(line => line.toLowerCase().includes(needle))];
-    const when = processTop?.time ? new Date(processTop.time * 1000).toLocaleTimeString() : '';
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('Process monitor')}</h2>
-          <p className="hint">{t('What the server is running, as top -c shows it. It refreshes every 3 seconds.')}</p></div>
-        <div className="actions">
-          <input className="process-filter" value={processFilter} onChange={e => setProcessFilter(e.target.value)} placeholder={t('Filter processes')} aria-label={t('Filter processes')} />
-          <button type="button" className="secondary" onClick={() => setProcessPaused(paused => !paused)}>
-            {processPaused ? <><Play size={14}/> {t('Resume')}</> : <><Pause size={14}/> {t('Pause')}</>}
-          </button>
-        </div>
-      </div>
-      <div className="process-terminal-wrap">
-        <div className="process-terminal-head"><span>top -c</span><small>{processPaused ? t('Paused') : when}</small></div>
-        <pre className="process-terminal" aria-live="off">{currentUser?.demo ? t('This is a demo: the process list is not shown.')
-          : output ? shown.join('\n') : t('Reading processes...')}</pre>
-      </div>
-    </section>;
+    return <ProcessesPage currentUser={currentUser} formatBytes={formatBytes} processFilter={processFilter} processPaused={processPaused}
+      processTop={processTop} setProcessFilter={setProcessFilter} setProcessPaused={setProcessPaused}/>;
   }
 
   function renderRamUsage() {
@@ -5922,9 +5995,8 @@ function App() {
     const swap = memoryInfo?.swap || {};
     const workers = memoryInfo?.php_workers || {};
     return <>
+      <PageHeader subtitle={t("The server's memory now, and what takes it.")}/>
       <section className="section">
-        <div className="section-title"><div><h2>{t('RAM usage')}</h2>
-          <p className="hint">{t("The server's memory now, and what takes it.")}</p></div></div>
         {memory ? <RamBreakdown memory={memory} /> : <p className="hint">{t('Reading memory...')}</p>}
         <div className="info-rows ram-facts">
           <InfoRow label={t('Swap')} value={swap.total ? `${formatBytes(swap.used)} / ${formatBytes(swap.total)}` : t('None')} />
@@ -5932,7 +6004,6 @@ function App() {
           <InfoRow label={t('PHP-FPM workers at most (every pool)')} value={workers.pools ? t('{count} in {pools} pools', { count: workers.max_children, pools: workers.pools }) : '--'} />
         </div>
       </section>
-      {limitsOn && renderTopAccounts()}
     </>;
   }
 
@@ -5944,14 +6015,11 @@ function App() {
     };
     const measured = scan?.time ? new Date(scan.time * 1000).toLocaleString() : '';
     return <>
+      <PageHeader subtitle={diskInfo?.scanning ? t('Measuring what takes the space. On a large server this takes a few minutes.')
+        : measured ? t('What takes the space was measured at {time}.', { time: measured }) : t('What takes the space has not been measured yet.')}
+        onRefresh={rescanDisk} refreshing={!!diskInfo?.scanning} refreshDisabled={!!loading}
+        refreshLabel={diskInfo?.scanning ? t('Measuring...') : t('Measure again')}/>
       <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Disk usage')}</h2>
-            <p className="hint">{diskInfo?.scanning ? t('Measuring what takes the space. On a large server this takes a few minutes.')
-              : measured ? t('What takes the space was measured at {time}.', { time: measured }) : t('What takes the space has not been measured yet.')}</p></div>
-          <div className="actions"><button type="button" className="secondary" disabled={!!loading || diskInfo?.scanning} onClick={rescanDisk}>
-            <RefreshCw size={14}/> {diskInfo?.scanning ? t('Measuring...') : t('Measure again')}</button></div>
-        </div>
         {diskInfo?.scan_error && <p className="hint alarm">{diskInfo.scan_error}</p>}
         {!diskInfo && <p className="hint">{t('Reading disks...')}</p>}
         {(diskInfo?.filesystems || []).map(fs => {
@@ -5971,8 +6039,7 @@ function App() {
         })}
       </section>
       {(scan?.accounts || []).length > 0 && <section className="section">
-        <div className="section-title"><div><h2>{t('Largest accounts')}</h2>
-          <p className="hint">{t("Each account's websites on disk, measured with the rest.")}</p></div></div>
+        <PageHeader title={t('Largest accounts')} subtitle={t("Each account's websites on disk, measured with the rest.")}/>
         <div className="top-accounts disk-accounts">
           <div className="top-accounts-row is-head" aria-hidden="true"><span>{t('Account')}</span><span>{t('Used')}</span></div>
           {scan.accounts.map(row => {
@@ -5998,9 +6065,9 @@ function App() {
     const rateFormat = value => `${formatBytes(value)}/s`;
     const common = { when, emptyText: t('Collecting: a reading every 2 seconds.'), limitText: t('Limit'),
       peakText: t('Peak'), averageText: t('Average') };
-    return <section className="section">
-      <div className="section-title"><div><h2>{t('Traffic')}</h2>
-        <p className="hint">{t('Each network interface, live while this page is open, and in total since the server started.')}</p></div></div>
+    return <>
+      <PageHeader subtitle={t('Each network interface, live while this page is open, and in total since the server started.')}/>
+      <section className="section">
       {!last && <p className="hint">{t('Reading interfaces...')}</p>}
       {names.map(name => {
         const points = [];
@@ -6029,42 +6096,128 @@ function App() {
         </div>;
       })}
       {last?.uptime_seconds > 0 && <p className="hint">{t('The server started {time} ago.', { time: formatUptime(last.uptime_seconds) })}</p>}
-    </section>;
+      </section>
+    </>;
   }
 
-  // The administrator's view of the Resource limits addon: who uses most now.
-  function renderTopAccounts() {
-    const rows = Object.entries(limitsInfo?.accounts || {}).map(([id, entry]) => ({ ...entry, id: Number(id), now: entry.usage || {}, caps: entry.limits || {} }));
-    if (!rows.length) return null;
-    const measure = topAccountsSort === 'memory' ? row => Number(row.now.memory_mb) || 0 : row => Number(row.now.cpu_percent) || 0;
-    const top = rows.sort((a, b) => measure(b) - measure(a) || (b.oom_kills_day || 0) - (a.oom_kills_day || 0)).slice(0, 5);
-    const share = (used, limit) => limit > 0 ? clampPercent((Number(used) || 0) / limit * 100) : null;
-    const meter = (label, text, percent, limitText) => <span className="top-accounts-meter" data-label={label}>
-      <span>{text}{limitText && <small> / {limitText}</small>}</span>
-      {percent !== null && <span className={`resource-track${percent >= 90 ? ' tone-bad' : percent >= 75 ? ' tone-warn' : ''}`}><span style={{ width: `${percent}%` }}></span></span>}
+  // Server › Account resources, as SNPanel's (pages/AccountResources.jsx
+  // there): every account's CPU, RAM and processes beside its limits, and how
+  // often the RAM limit stopped it, in a table that sorts by any column and
+  // finds an account; a row opens its charts. It replaces the Dashboard's
+  // "Busiest accounts" (operator, 2026-10-18).
+  function renderAccountResources() {
+    if (!limitsOn) {
+      return <section className="section">
+        <EmptyState icon={Gauge} title={t('Resource limits are off')}
+          message={t('The panel does not hold accounts to CPU, RAM and process limits on this server, so there is nothing to measure them against.')}
+          action={{ label: t('Go to Addons'), icon: Boxes, onClick: () => navigateToPage('addons') }}/>
+      </section>;
+    }
+    const all = Object.entries(limitsInfo?.accounts || {}).map(([id, entry]) => ({ ...entry, id: Number(id), now: entry.usage || null, caps: entry.limits || {} }));
+    const needle = arFind.trim().toLowerCase();
+    const columns = [
+      ['username', t('Account'), row => row.username],
+      ['cpu', 'CPU', row => Number(row.now?.cpu_percent ?? -1)],
+      ['ram', 'RAM', row => Number(row.now?.memory_mb ?? -1)],
+      ['procs', t('Processes'), row => Number(row.now?.processes ?? -1)],
+      ['io', 'IO', row => Number(row.now?.io_read_mbps ?? -1) + Number(row.now?.io_write_mbps ?? 0)],
+      ['oom', t('Stopped (24 h)'), row => Number(row.oom_kills_day || 0)],
+    ];
+    const column = columns.find(([key]) => key === arSort.key) || columns[1];
+    const rows = all.filter(row => !needle || row.username.toLowerCase().includes(needle)).sort((a, b) => {
+      const x = column[2](a);
+      const y = column[2](b);
+      const order = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+      return (arSort.desc ? -order : order) || a.username.localeCompare(b.username);
+    });
+    const sortBy = key => setArSort(prev => (prev.key === key ? { key, desc: !prev.desc } : { key, desc: key !== 'username' }));
+    const share = (used, limit) => (limit > 0 && used != null ? clampPercent((Number(used) || 0) / limit * 100) : null);
+    const figure = (text, capText, percent) => <span className={`ar-figure${percent >= 90 ? ' tone-bad' : percent >= 75 ? ' tone-warn' : ''}`}>
+      <span className="ar-value">{text}</span>
+      {capText ? <span className="ar-cap">/ {capText}</span> : <span className="ar-cap is-none">{t('no limit')}</span>}
+      {percent !== null && <span className="ar-track" aria-hidden="true"><span style={{ width: `${percent}%` }}/></span>}
     </span>;
-    return <section className="section dash-card" style={{ '--cp-order': 4 }}>
-      <div className="dash-card-head">
-        <span className="dash-card-icon"><Boxes size={16}/></span><h2>{t('Busiest accounts')}</h2>
-        <div className="segmented-control compact" role="tablist" aria-label={t('Sort by')}>
-          <button type="button" role="tab" aria-selected={topAccountsSort === 'cpu'} className={topAccountsSort === 'cpu' ? 'active' : ''} onClick={() => setTopAccountsSort('cpu')}>CPU</button>
-          <button type="button" role="tab" aria-selected={topAccountsSort === 'memory'} className={topAccountsSort === 'memory' ? 'active' : ''} onClick={() => setTopAccountsSort('memory')}>RAM</button>
+    const head = (key, label) => <th key={key} scope="col" className={`ar-col-${key}`} aria-sort={arSort.key === key ? (arSort.desc ? 'descending' : 'ascending') : 'none'}>
+      <button type="button" className="ar-sort" onClick={() => sortBy(key)}>{label}
+        {arSort.key === key && (arSort.desc ? <ArrowDown size={12} aria-hidden="true"/> : <ArrowUp size={12} aria-hidden="true"/>)}</button>
+    </th>;
+    const open = all.find(row => row.id === arOpen);
+    return <>
+      <PageHeader subtitle={t('CPU, RAM and processes of every account beside its limits, and how often the RAM limit stopped it. A row opens its charts.')}
+        onRefresh={loadLimitsInfo} refreshDisabled={!!loading}/>
+      <section className="section ar-page">
+        <div className="ar-toolbar">
+          <label className="ar-field ar-find"><span className="sr-only">{t('Find an account')}</span>
+            <input type="search" value={arFind} onChange={e => setArFind(e.target.value)} placeholder={t('Find an account')} aria-label={t('Find an account')}/>
+          </label>
         </div>
+        {!limitsInfo && <p className="hint">{t('Loading…')}</p>}
+        {limitsInfo && !limitsInfo.running && <p className="hint">{t('The resource limits agent is not running, so these figures are not current.')}</p>}
+        {limitsInfo && <p className="hint ar-note">{t('{shown} of {total} accounts', { shown: rows.length, total: all.length })} · {t('Read again every 10 seconds while this page is open.')}</p>}
+        {limitsInfo && all.length === 0 && <EmptyState icon={Gauge} title={t('No account yet')} message={t('An account appears here once it is created.')}/>}
+        {all.length > 0 && <div className="data-table-wrap ar-table-wrap">
+          <table className="data-table ar-table">
+            <thead><tr>{columns.map(([key, label]) => head(key, label))}</tr></thead>
+            <tbody>
+              {rows.map(row => <tr key={row.id} className={row.oom_kills_day ? 'has-faults' : undefined}>
+                <td className="ar-col-username" data-label={t('Account')}>
+                  <button type="button" className="ar-open" onClick={() => openAccountResources(row.id)} title={t('Charts of {name}', { name: row.username })}>
+                    <LineChart size={14} aria-hidden="true"/> {row.username}
+                  </button>
+                  {row.role === 'reseller' && <em className="ar-role">{t('Reseller')}</em>}
+                </td>
+                <td className="ar-col-cpu" data-label="CPU">{figure(row.now ? formatCpuPercent(row.now.cpu_percent) : '—', row.caps.cpu_percent ? `${row.caps.cpu_percent}%` : '', share(row.now?.cpu_percent, row.caps.cpu_percent))}</td>
+                <td className="ar-col-ram" data-label="RAM">{figure(row.now ? formatMegabytes(row.now.memory_mb) : '—', row.caps.memory_mb ? formatMegabytes(row.caps.memory_mb) : '', share(row.now?.memory_mb, row.caps.memory_mb))}</td>
+                <td className="ar-col-procs" data-label={t('Processes')}>{figure(row.now ? String(row.now.processes ?? 0) : '—', row.caps.process_limit ? String(row.caps.process_limit) : '', share(row.now?.processes, row.caps.process_limit))}</td>
+                <td className="ar-col-io" data-label="IO">
+                  <span className="ar-io"><small>{t('Read')}</small> {row.now ? formatMbps(row.now.io_read_mbps) : '—'}</span>
+                  <span className="ar-io"><small>{t('Write')}</small> {row.now ? formatMbps(row.now.io_write_mbps) : '—'}</span>
+                </td>
+                <td className="ar-col-oom" data-label={t('Stopped (24 h)')}><span className={`ar-fault${row.oom_kills_day ? ' is-hit' : ''}`}>{row.oom_kills_day || 0}</span></td>
+              </tr>)}
+            </tbody>
+          </table>
+          {rows.length === 0 && <p className="hint ar-empty">{t('No account matches {text}.', { text: arFind.trim() })}</p>}
+        </div>}
+      </section>
+      {open && renderAccountResourceSheet(open)}
+    </>;
+  }
+
+  // One account's charts over the last day or week, in a side sheet.
+  function renderAccountResourceSheet(row) {
+    const points = (arRange === 'week' ? arHistory?.account?.week : arHistory?.account?.day) || [];
+    const caps = row.caps || {};
+    const formatWhen = (stamp, full) => {
+      const date = new Date(stamp * 1000);
+      if (full) return date.toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      return arRange === 'week' ? date.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    };
+    const formatCount = value => String(Math.round(Number(value) || 0));
+    const common = { points, when: formatWhen, emptyText: t('Not enough history yet: a point is added every 5 minutes.'),
+      limitText: t('Limit'), unlimitedText: t('Unlimited'), peakText: t('Peak'), averageText: t('Average') };
+    return <Drawer open wide onClose={() => setArOpen(null)} title={row.username}
+      subtitle={t('CPU, memory, processes and disk speed over the last day or week. The dashed line is the limit.')}
+      footer={<button type="button" className="secondary-light" onClick={() => setArOpen(null)}>{t('Close')}</button>}>
+      <div className="segmented-control compact" role="tablist" aria-label={t('Period')}>
+        <button type="button" role="tab" aria-selected={arRange === 'day'} className={arRange === 'day' ? 'active' : ''} onClick={() => setArRange('day')}>{t('24 hours')}</button>
+        <button type="button" role="tab" aria-selected={arRange === 'week'} className={arRange === 'week' ? 'active' : ''} onClick={() => setArRange('week')}>{t('7 days')}</button>
       </div>
-      {limitsInfo && !limitsInfo.running && <p className="hint">{t('The resource limits agent is not running, so these figures are not current.')}</p>}
-      <div className="top-accounts">
-        <div className="top-accounts-row is-head" aria-hidden="true">
-          <span>{t('Account')}</span><span>CPU</span><span>RAM</span><span>{t('Processes')}</span><span>{t('Stopped (24 h)')}</span>
-        </div>
-        {top.map(row => <button type="button" className="top-accounts-row" key={row.id} onClick={() => openUserFromDashboard(row.id)} title={t('Open {name}', { name: row.username })}>
-          <span className="top-accounts-name"><strong>{row.username}</strong>{row.role === 'reseller' && <em>{t('Reseller')}</em>}</span>
-          {meter('CPU', formatCpuPercent(row.now.cpu_percent), share(row.now.cpu_percent, row.caps.cpu_percent), row.caps.cpu_percent ? `${row.caps.cpu_percent}%` : '')}
-          {meter('RAM', formatMegabytes(row.now.memory_mb), share(row.now.memory_mb, row.caps.memory_mb), row.caps.memory_mb ? formatMegabytes(row.caps.memory_mb) : '')}
-          <span className="top-accounts-procs" data-label={t('Processes')}>{row.now.processes ?? 0}{row.caps.process_limit ? <small> / {row.caps.process_limit}</small> : null}</span>
-          <span className={`top-accounts-oom${row.oom_kills_day ? ' tone-bad' : ''}`} data-label={t('Stopped (24 h)')}>{row.oom_kills_day || 0}</span>
-        </button>)}
-      </div>
-    </section>;
+      {!arHistory ? <p className="hint">{t('Loading…')}</p> : <div className="usage-charts ar-charts">
+        <UsageChart {...common} title="CPU" pick={point => point.cpu} limit={caps.cpu_percent} format={formatCpuPercent} floor={10} />
+        <UsageChart {...common} title="RAM" pick={point => point.mem} limit={caps.memory_mb} format={formatMegabytes} floor={128} />
+        <UsageChart {...common} title={t('Processes')} pick={point => point.procs} limit={caps.process_limit} format={formatCount} floor={10} />
+        <UsageChart {...common} title={t('Disk read')} pick={point => point.io_r} limit={caps.io_read_mbps} format={formatMbps} floor={0.1} />
+        <UsageChart {...common} title={t('Disk write')} pick={point => point.io_w} limit={caps.io_write_mbps} format={formatMbps} floor={0.1} />
+      </div>}
+    </Drawer>;
+  }
+
+  async function openAccountResources(userId) {
+    setArOpen(userId);
+    setArHistory(null);
+    const data = await request(`/resource-limits/${userId}/history`, { silent: true });
+    if (data) setArHistory(data);
   }
 
   function renderDashboard() {
@@ -6133,41 +6286,9 @@ function App() {
         value: twoFactor ? t('On') : t('Off'), detail: t('Two-factor sign-in'), tone: twoFactor ? 'ok' : 'warn' });
     }
 
-    // Things that want a look, most urgent first.
-    const attention = [];
-    if (isAdmin && sum.services?.stopped?.length) attention.push({ tone: 'bad', text: t('Stopped: {names}', { names: sum.services.stopped.join(', ') }), action: t('Open'), target: 'services' });
-    if (isAdmin && sum.firewall?.enabled === false) attention.push({ tone: 'bad', text: t('The firewall is off.'), action: t('Open'), target: 'firewall' });
-    if (isAdmin && sum.malware?.last_scan?.infected) attention.push({ tone: 'bad', text: t('The last malware scan found {n} threat(s).', { n: sum.malware.last_scan.infected }), action: t('Open'), target: 'malware' });
-    if (isAdmin && sum.backups?.failed) attention.push({ tone: 'bad', text: t('{n} scheduled backup(s) failed on their last run.', { n: sum.backups.failed }), action: t('Open'), target: 'backups' });
-    if (ssl.unsecured_count) attention.push({ tone: 'warn', text: t('{n} website(s) without SSL: {domains}', {
-      n: ssl.unsecured_count, domains: ssl.unsecured.join(', ') + (ssl.unsecured_count > ssl.unsecured.length ? '…' : ''),
-    }), action: t('Set up SSL'), target: 'ssl' });
-    if (sites.suspended) attention.push({ tone: 'warn', text: t('{n} website(s) suspended.', { n: sites.suspended }), action: t('Open'), target: 'websites' });
-    if (isAdmin && sum.waf?.engine === 'off') attention.push({ tone: 'warn', text: t('The WAF engine is not installed.'), action: t('Open'), target: 'waf' });
-    // An addon that is off is not a fault: only the scanner's addon being on
-    // while LMD and ClamAV are missing wants a look.
-    if (isAdmin && sum.malware?.addon && !sum.malware.installed) attention.push({ tone: 'warn', text: t('The malware scanner is not installed.'), action: t('Open'), target: 'malware' });
-    if (!isAdmin && currentUser && !currentUser.totp_enabled) attention.push({ tone: 'info', text: t('Two-factor sign-in is off for your account.'), action: t('Turn on'), target: 'security' });
-    if (isAdmin && sum.updates?.update_available) attention.push({ tone: 'info', text: t('Panel update {version} is available.', { version: sum.updates.latest_version }), action: t('Open'), target: 'updates' });
+    // What needs attention is the header's bell (components/NotificationBell.jsx) now.
 
-    // Most urgent first; when nothing needs a look the administrator gets one
-    // quiet line, and a customer nothing at all.
-    const attentionCard = (attention.length > 0 || isAdmin) && <section className={`section dash-card cp-attention${attention.length ? '' : ' is-clear'}`} style={{ '--cp-order': 1 }}>
-      {attention.length === 0
-        ? <div className="attention-ok"><CheckCircle size={16}/> {dashSummary ? t('Everything looks fine.') : t('Checking…')}</div>
-        : <>
-            <div className="dash-card-head"><span className="dash-card-icon"><AlertCircle size={16}/></span><h2>{t('Needs attention')}</h2><span className="badge warn">{attention.length}</span></div>
-            <div className="attention-list">
-              {attention.map(item => <div className={`attention-item tone-${item.tone}`} key={item.text}>
-                {item.tone === 'info' ? <RefreshCw size={15}/> : <AlertCircle size={15}/>}
-                <span>{item.text}</span>
-                <button type="button" className="mini secondary" onClick={() => navigateToPage(item.target)}>{item.action}</button>
-              </div>)}
-            </div>
-          </>}
-    </section>;
-
-    const statusCard = <section className="section side-card" style={{ '--cp-order': isAdmin ? 3 : 5 }}>
+    const statusCard = <section className="section side-card">
       <h3 className="side-card-title">{t('Status')}</h3>
       <div className="status-list">
         {status.map(card => <button type="button" key={card.key} className={`status-row tone-${card.tone}`} onClick={() => navigateToPage(card.key)}>
@@ -6178,16 +6299,29 @@ function App() {
 
     if (isAdmin) {
       const accounts = sum.accounts || {};
+      const history = usageHistory || [];
+      const figureTone = (percent) => (percent === null ? 'ok' : percent >= 90 ? 'bad' : percent >= 75 ? 'warn' : 'ok');
+      const pct = value => (resourceUsage ? formatPercent(value) : '—');
+      const figure = (page, label, value, percent, values, max) => <button type="button" key={page}
+        className={`dash-figure tone-${figureTone(percent)}`} onClick={() => navigateToPage(page)}>
+        <span className="dash-figure-label">{label}</span>
+        <strong>{value}</strong>
+        <Sparkline values={values} max={max}/>
+      </button>;
       return <div className="dashboard cp-layout">
         <div className="cp-main">
-          {attentionCard}
-          {limitsOn && renderTopAccounts()}
-          {renderToolPanel(5)}
+          {renderFeaturesCard()}
         </div>
         <aside className="cp-side">
           {statusCard}
-          <section className="section side-card" style={{ '--cp-order': 6 }}>
+          <section className="section side-card">
             <h3 className="side-card-title">{t('Server information')}</h3>
+            <div className="dash-figures">
+              {figure('processes', 'CPU', pct(cpu.percent), resourceUsage ? Number(cpu.percent) || 0 : null, history.map(h => h.cpu))}
+              {figure('ram-usage', 'RAM', pct(memory.percent), resourceUsage ? Number(memory.percent) || 0 : null, history.map(h => h.memory))}
+              {figure('disk-usage', t('Disk'), pct(disk.percent), resourceUsage ? Number(disk.percent) || 0 : null, history.map(h => h.disk))}
+              {figure('traffic', t('Network'), resourceUsage ? `${formatBytes(networkTotal)}/s` : '—', null, history.map(h => h.network), 0)}
+            </div>
             <InfoRow label={t('Hostname')} value={server.hostname} />
             <InfoRow label={t('IP address')} value={server.ipv4} />
             <InfoRow label={t('Operating system')} value={server.os} />
@@ -6197,7 +6331,7 @@ function App() {
             <InfoRow label="RAM" value={memory.total ? formatBytes(memory.total) : ''} />
             <InfoRow label={t('Panel version')} value={server.panel_version} />
           </section>
-          <section className="section side-card" style={{ '--cp-order': 7 }}>
+          <section className="section side-card">
             <h3 className="side-card-title">{t('Statistics')}</h3>
             <StatRow label={t('Customers')} value={String(accounts.end_users ?? '—')} />
             <StatRow label={t('Resellers')} value={String(accounts.resellers ?? '—')} />
@@ -6238,11 +6372,10 @@ function App() {
 
     return <div className="dashboard cp-layout">
       <div className="cp-main">
-        {attentionCard}
-        {renderToolPanel(3)}
+        {renderFeaturesCard()}
       </div>
       <aside className="cp-side">
-        <section className="section side-card" style={{ '--cp-order': 2 }}>
+        <section className="section side-card">
           <div className="side-card-head">
             <h3 className="side-card-title">{t('Statistics')}</h3>
             {isReseller && limitEntry?.group_limits && <div className="segmented-control compact" role="tablist" aria-label={t('Show')}>
@@ -6271,7 +6404,7 @@ function App() {
             <button type="button" className="side-card-link" onClick={() => navigateToPage('usage')}><Activity size={14}/> {t('Resource usage over time')}</button>
           </>}
         </section>
-        <section className="section side-card" style={{ '--cp-order': 4 }}>
+        <section className="section side-card">
           <h3 className="side-card-title">{t('General information')}</h3>
           <InfoRow label={t('Account')} value={isReseller ? <>{currentUser.username} <span className="badge role-reseller">{t('Reseller')}</span></> : currentUser.username} title={currentUser.username} />
           <InfoRow label={t('Email')} value={currentUser.email} />
@@ -6389,17 +6522,14 @@ function App() {
     const pages = Math.max(1, Math.ceil(rows.length / size));
     const current = Math.min(notifyLogPage, pages);
     const shown = rows.slice((current - 1) * size, current * size);
-    return <section className="section notify-log-page">
-      <div className="section-title">
-        <div className="waf-detail-title">
-          <button className="secondary" onClick={() => setShowNotifyLog(false)}><ArrowLeft size={14}/> {t('Notifications')}</button>
-          <div><h2>{t('Send log')}</h2><p className="hint">{t('The last 100 messages sent, and the ones that failed.')}</p></div>
-        </div>
-        <select value={notifyLogStatus} aria-label={t('Show')} onChange={e => { setNotifyLogStatus(e.target.value); setNotifyLogPage(1); }}>
+    return <>
+      <PageHeader breadcrumbs={[{ label: t('Notifications'), onClick: () => setShowNotifyLog(false) }, { label: t('Send log') }]}
+        title={t('Send log')} subtitle={t('The last 100 messages sent, and the ones that failed.')}
+        actions={<select value={notifyLogStatus} aria-label={t('Show')} onChange={e => { setNotifyLogStatus(e.target.value); setNotifyLogPage(1); }}>
           <option value="">{t('All')}</option><option value="sent">{t('Sent')}</option>
           <option value="failed">{t('Failed')}</option>
-        </select>
-      </div>
+        </select>}/>
+      <section className="section notify-log-page">
       {shown.length > 0 ? <ul className="notify-log-list">
         {shown.map(row => <li key={row.id}>
           <span className={`badge ${row.status === 'sent' ? 'ok' : 'bad'}`}>{row.status === 'sent' ? t('Sent') : t('Failed')}</span>
@@ -6414,7 +6544,8 @@ function App() {
         <span className="hint">{t('Page {page} of {pages}', { page: current, pages })}</span>
         <button className="mini secondary" disabled={current >= pages} onClick={() => setNotifyLogPage(current + 1)}>{t('Next')}</button>
       </div>}
-    </section>;
+      </section>
+    </>;
   }
 
   function renderNotificationsPage() {
@@ -6428,16 +6559,9 @@ function App() {
       <span className="notify-event-text">{t(ev.label)}<small>{t(ev.hint)}</small></span>
     </label>;
     return <>
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('Notifications')}</h2>
-            <p className="hint">{t('Email and Telegram alerts for administrators. Hosting customers are not notified.')}</p>
-          </div>
-          <button className="secondary" disabled={!!loading} onClick={() => { loadNotifyMe(); loadNotifySettings(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        {!me && !s && <p className="hint">{t('Loading…')}</p>}
-      </section>
+      <PageHeader subtitle={t('Email and Telegram alerts for administrators. Hosting customers are not notified.')}
+        onRefresh={() => { loadNotifyMe(); loadNotifySettings(); }} refreshDisabled={!!loading}/>
+      {!me && !s && <section className="section"><p className="hint">{t('Loading…')}</p></section>}
 
       {s && <section className="section">
         <div className="section-title">
@@ -6568,38 +6692,23 @@ function App() {
     </>;
   }
 
-  function renderSettingsHub() {
-    return <section className="section settings-hub">
-      <div className="section-title">
-        <div><h2>{t('Settings')}</h2><p className="hint">{t('Security, server and panel configuration.')}</p></div>
-      </div>
-      {settingsGroups.map(group => <div className="settings-hub-group" key={group.title}>
-        <h3>{t(group.title)}</h3>
-        <div className="settings-hub-grid">
-          {group.items.map(([key, label, Icon, summary]) => <button key={key} type="button" className="settings-tile" onClick={() => navigateToPage(key)}>
-            <span className="settings-tile-icon"><Icon size={18}/></span>
-            <span className="settings-tile-text"><strong>{t(label)}</strong><small>{t(summary)}</small></span>
-          </button>)}
-        </div>
-      </div>)}
-    </section>;
-  }
-
-  // Which addon a page belongs to decides the words: this said
-  // "Applications" on the Malware, MCP and Notifications pages too.
+  // A page whose addon is not installed, as SNPanel's AddonMissing: what is
+  // missing, and for an administrator the way to the addon's row.
   function renderAddonMissing(slug = 'application') {
     const addon = addons.items.find(item => item.slug === slug);
-    const name = addon?.name || 'Application';
+    const name = addon ? addonLabel(addon, t) : t('Application');
     const installed = !!addon?.installed;
     // Until the list is in, which addon is missing is not known yet.
     if (!addons.loaded) return <section className="section"><p className="hint">{t('Loading…')}</p></section>;
     return <section className="section">
-      <h2>{t(name)}</h2>
-      <div className="info-box"><AlertCircle size={14}/> {slug === 'application' && installed
-        ? t('Your package does not include Applications. Contact an administrator to upgrade.')
-        : isAdmin ? t('The {name} addon is not installed. Install it on the Addons page.', { name: t(name) })
-          : t('{name} is not available on this server.', { name: t(name) })}</div>
-      {isAdmin && !installed && <div className="actions"><button onClick={() => navigateToPage('addons')}><PackageOpen size={14}/> {t('Open Addons')}</button></div>}
+      <EmptyState icon={Boxes}
+        message={slug === 'application' && installed
+          ? t('Your package does not include Applications. Contact an administrator to upgrade.')
+          : isAdmin ? t('The {name} addon is not installed. Install it on the Addons page.', { name })
+            : t('{name} is not available on this server.', { name })}
+        action={isAdmin && !installed
+          ? { label: t('Go to Addons'), icon: Boxes, disabled: !!loading, onClick: () => { navigateToPage('addons'); setTimeout(() => document.getElementById(`addon-${slug}`)?.scrollIntoView({ block: 'center' }), 300); } }
+          : undefined}/>
     </section>;
   }
 
@@ -6844,17 +6953,12 @@ function App() {
   function renderDns() {
     if (dnsZone) return renderDnsZone();
     if (isAdmin && dnsTab === 'settings') return renderDnsSettings();
-    return <section className="section dns-page">
-      <div className="section-title">
-        <div><h2>{t('DNS Manager')}</h2>
-          <p className="hint">{isAdmin ? t('Every domain on the panel, answered by this server.') : t('The DNS records of your domains, answered by this server.')}</p></div>
-        <div className="actions">
-          {isAdmin && <button type="button" className="secondary" onClick={() => setDnsTab('settings')}><SettingsIcon size={14}/> {t('Settings')}</button>}
-          <button type="button" className="secondary" disabled={!!loading} onClick={() => { loadDnsInfo(); loadDnsZones(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-      </div>
-      {renderDnsZones()}
-    </section>;
+    return <>
+      <PageHeader subtitle={isAdmin ? t('Every domain on the panel, answered by this server.') : t('The DNS records of your domains, answered by this server.')}
+        onRefresh={() => { loadDnsInfo(); loadDnsZones(); }} refreshDisabled={!!loading}
+        actions={isAdmin && <button type="button" className="secondary-light" onClick={() => setDnsTab('settings')}><SettingsIcon size={14}/> {t('Settings')}</button>}/>
+      <section className="section dns-page">{renderDnsZones()}</section>
+    </>;
   }
 
   function renderCopyBlock(title, text, { multiline = false, copiedMessage } = {}) {
@@ -7038,9 +7142,21 @@ function App() {
         <div className="mail-create-grid">
           {isAdmin
             ? <div className="field"><span className="field-label">{t('Domain')}</span>
-                <input list="mail-domain-candidates" value={mailDomainForm.domain} placeholder="example.com" spellCheck={false}
-                  onChange={e => setMailDomainForm(prev => ({ ...prev, domain: e.target.value.trim().toLowerCase() }))} />
-                <datalist id="mail-domain-candidates">{candidates.map(name => <option key={name} value={name} />)}</datalist>
+                {mailDomainOther || candidates.length === 0
+                  ? <div className="mail-domain-other">
+                    <input value={mailDomainForm.domain} placeholder="example.com" spellCheck={false} autoCapitalize="none" autoFocus={mailDomainOther}
+                      onChange={e => setMailDomainForm(prev => ({ ...prev, domain: e.target.value.trim().toLowerCase() }))} />
+                    {candidates.length > 0 && <button type="button" className="secondary-light"
+                      onClick={() => { setMailDomainOther(false); setMailDomainForm(prev => ({ ...prev, domain: '' })); }}>{t('Pick from the list')}</button>}
+                  </div>
+                  : <select value={mailDomainForm.domain} onChange={e => {
+                    if (e.target.value === '__other') { setMailDomainOther(true); setMailDomainForm(prev => ({ ...prev, domain: '' })); }
+                    else setMailDomainForm(prev => ({ ...prev, domain: e.target.value }));
+                  }}>
+                    <option value="">{t('Choose a domain on this server')}</option>
+                    {candidates.map(name => <option key={name} value={name}>{name}</option>)}
+                    <option value="__other">{t('Another domain…')}</option>
+                  </select>}
               </div>
             : <div className="field"><span className="field-label">{t('Domain')}</span>
                 <select value={mailDomainForm.domain} onChange={e => setMailDomainForm(prev => ({ ...prev, domain: e.target.value }))}>
@@ -7537,104 +7653,69 @@ function App() {
     </div>;
   }
 
+  // Addons, as SNPanel's (pages/Addons.jsx there): one row per addon - what
+  // it is, whether it is installed, the button that changes that - and what
+  // it does in detail, with what to know first, one click further down.
   function renderAddons() {
-    if (!isAdmin) return <section className="section"><h2>{t('Addons')}</h2><p className="hint">{t('No permission.')}</p></section>;
+    if (!isAdmin) return <section className="section"><EmptyState icon={Boxes} message={t('No permission.')} /></section>;
     const openMail = tab => { setMailTab(tab); navigateToPage('mail'); };
-    return <section className="section">
-      <div className="section-title">
-        <div>
-          <h2>{t('Addons')}</h2>
-          <p className="hint">{t('Optional components this panel release can install for you. Each one ships with the panel, so a new addon arrives with a panel update.')}</p>
-        </div>
-        <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/> {t('Refresh')}</button>
-      </div>
-
-      {addons.loaded && addons.items.length === 0 && <p className="hint">{t('No addons in this release.')}</p>}
-
-      <div className="addon-grid">
-        {addons.items.map(addon => {
-          const open = addonOpen === addon.slug;
-          // BPanel installs and removes within the request and has no
-          // start/stop, so an addon is installed or it is not.
-          const stateBadge = addon.installed
-            ? <span className="badge ok">{t('Installed')}</span>
-            : <span className="badge">{t('Not installed')}</span>;
-          const version = addon.installed ? (addon.installed_version || addon.version) : addon.version;
-          const installedAt = addon.installed_at ? new Date(addon.installed_at) : null;
-          return <div className="addon-card" key={addon.slug}>
-            <div className="addon-card-head">
-              <div className="addon-card-title">
-                <PackageOpen size={16}/>
-                <strong>{t(addon.name)}</strong>
-                {version && <span className="hint addon-version">v{version}</span>}
-              </div>
-              {stateBadge}
-            </div>
-            <p className="addon-summary">{t(addon.summary)}</p>
-            {addon.installed && addon.installed_version && addon.installed_version !== addon.version &&
-              <p className="hint">{t('v{version} available', { version: addon.version })}</p>}
-            {addon.installed && installedAt && <p className="hint">{t('Installed')} {Number.isNaN(installedAt.getTime()) ? addon.installed_at : installedAt.toLocaleString()}</p>}
-
-            <div className="actions addon-actions">
-              {!addon.installed && <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}>
-                <Download size={14}/> {t('Install')}</button>}
-              {/* What an addon installs and what to know first can be read
-                  before installing it, not only in Manage afterwards. */}
-              <button className="secondary-light" disabled={!!loading} onClick={() => setAddonOpen(open ? '' : addon.slug)}>
-                {addon.installed ? <SettingsIcon size={14}/> : <FileText size={14}/>} {open ? t('Hide') : addon.installed ? t('Manage') : t('Details')}</button>
-              {addon.installed && <button className="danger-light" disabled={!!loading}
-                onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/> {t('Remove')}</button>}
-            </div>
-
-            {open && <div className="addon-detail">
-              {addon.details?.length > 0 && <p className="addon-description">{addon.details.map(line => t(line)).join(' ')}</p>}
-              {addon.notes?.length > 0 && <ul className="addon-notes">
-                {addon.notes.map((note, idx) => <li key={idx}>{t(note)}</li>)}
-              </ul>}
-              {addon.slug === 'application' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Node.js apps, containers and Docker Compose')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('applications')}><Boxes size={13}/> {t('Open Applications')}</button></div>
-              </div>}
-              {addon.slug === 'fail2ban' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Status and banned addresses')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('firewall')}><Shield size={13}/> {t('Open Firewall')}</button></div>
-              </div>}
-              {addon.slug === 'mcp' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Tokens and client setup')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('mcp')}><Bot size={13}/> {t('Open AI assistants (MCP)')}</button></div>
-                <p className="hint">{t('Endpoint:')} <code>{`${window.location.origin}/api/mcp`}</code></p>
-              </div>}
-              {addon.slug === 'demo' && addon.installed && renderDemoAccounts()}
-              {addon.slug === 'mail' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Mailboxes, relays, the spam filter and server settings')}</strong></div>
-                <div className="actions">
-                  <button type="button" className="mini" onClick={() => openMail('mailboxes')}><Mail size={13}/> {t('Open Email')}</button>
-                  <button type="button" className="mini secondary" onClick={() => openMail('relay')}><Send size={13}/> {t('Relays')}</button>
-                  <button type="button" className="mini secondary" onClick={() => openMail('rspamd')}><ShieldCheck size={13}/> Rspamd</button>
-                  <button type="button" className="mini secondary" onClick={() => openMail('server')}><Server size={13}/> {t('Server')}</button>
+    return <>
+      <PageHeader subtitle={t('Optional components this panel release can install for you. Each one ships with the panel, so a new addon arrives with a panel update.')}
+        onRefresh={loadAddons} refreshDisabled={!!loading}/>
+      <section className="section">
+        <div className="addon-rows">
+          {addons.items.map(addon => {
+            const version = addon.installed ? (addon.installed_version || addon.version) : addon.version;
+            const installedAt = addon.installed_at ? new Date(addon.installed_at) : null;
+            const label = addonLabel(addon, t);
+            return <article id={`addon-${addon.slug}`} className={`addon-row${addon.installed ? ' installed' : ''}`} key={addon.slug}>
+              <div className="addon-row-main">
+                <span className="addon-row-icon has-feature-icon"><FeatureIcon name={addonFeatureIcon(addon.slug)} size={36} muted={!addon.installed}/></span>
+                <div className="addon-row-text">
+                  <div className="addon-row-head">
+                    <strong>{label}</strong>
+                    {version && <code>v{version}</code>}
+                    <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? t('Installed') : t('Not installed')}</span>
+                    {addon.installed && addon.installed_version && addon.installed_version !== addon.version
+                      && <span className="badge">{t('v{version} available', { version: addon.version })}</span>}
+                  </div>
+                  <p className="addon-row-summary">{t(addon.summary)}</p>
+                  {addon.installed && installedAt && <p className="addon-row-summary">{t('Installed')} {Number.isNaN(installedAt.getTime()) ? addon.installed_at : installedAt.toLocaleString()}</p>}
                 </div>
-              </div>}
-              {addon.slug === 'dns' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Zones, records and nameservers')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('dns')}><Network size={13}/> {t('Open DNS Manager')}</button></div>
-              </div>}
-              {addon.slug === 'malware' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Scans, schedules and real-time protection')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('malware')}><Bug size={13}/> {t('Open Malware Scanner')}</button></div>
-              </div>}
-              {addon.slug === 'git' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Repositories, deploys and webhooks')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('git')}><GitBranch size={13}/> {t('Open Git')}</button></div>
-              </div>}
-              {addon.slug === 'notifications' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Channels, recipients and events')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('notifications')}><Bell size={13}/> {t('Open Notifications')}</button></div>
-              </div>}
-            </div>}
-          </div>;
-        })}
-      </div>
-    </section>;
+                <div className="addon-row-actions">
+                  {addon.installed
+                    ? <>
+                      {ADDON_META[addon.slug]?.page && ADDON_META[addon.slug].page !== 'addons'
+                        && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => navigateToPage(ADDON_META[addon.slug].page)}>{t('Open')}</button>}
+                      <button type="button" className="secondary-light danger-hover" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}
+                        aria-label={t('Uninstall {name}', { name: label })} title={t('Uninstall {name}', { name: label })}><Trash2 size={14} aria-hidden="true"/> <span className="addon-row-label">{t('Uninstall')}</span></button>
+                    </>
+                    : <button type="button" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14} aria-hidden="true"/> {t('Install')}</button>}
+                </div>
+              </div>
+              <details className="addon-row-more">
+                <summary>{addon.installed ? t('Details') : t('Details and what to know first')}</summary>
+                {addon.details?.length > 0 && <ul className="addon-details">
+                  {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
+                </ul>}
+                {addon.notes?.length > 0 && <div className="addon-notes">
+                  <strong><AlertCircle size={13} aria-hidden="true"/> {addon.installed ? t('Keep in mind') : t('Before you turn it on')}</strong>
+                  <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
+                </div>}
+                {addon.slug === 'mcp' && addon.installed && <p className="hint">{t('Endpoint:')} <code>{`${window.location.origin}/api/mcp`}</code></p>}
+                {addon.slug === 'demo' && addon.installed && renderDemoAccounts()}
+                {addon.slug === 'mail' && addon.installed && <div className="actions">
+                  <button type="button" className="mini secondary-light" onClick={() => openMail('relay')}><Send size={13}/> {t('Relays')}</button>
+                  <button type="button" className="mini secondary-light" onClick={() => openMail('rspamd')}><ShieldCheck size={13}/> Rspamd</button>
+                  <button type="button" className="mini secondary-light" onClick={() => openMail('server')}><Server size={13}/> {t('Server')}</button>
+                </div>}
+              </details>
+            </article>;
+          })}
+          {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message={t('No addons in this release.')} />}
+        </div>
+      </section>
+    </>;
   }
 
   function renderApplications() {
@@ -8052,9 +8133,23 @@ function App() {
         <h2>{t('Terminal -')} {terminalViewer.domain}</h2>
         <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/> {t('Close')}</button>
       </div>
-      <div style={{ height: '500px', marginTop: '8px' }}>
-        <Terminal websiteId={terminalViewer.id} apiBase={API} />
-      </div>
+      <Terminal websiteId={terminalViewer.id} apiBase={API} />
+    </section>;
+  }
+
+  // The account's own terminal, in its home. From a website's row it starts in
+  // the website's folder with the website's PHP instead.
+  function renderTerminalPage() {
+    if (!canOpenTerminal) {
+      return <section className="section"><h2>{t('Terminal')}</h2>
+        <p className="hint">{isAdmin || isReseller
+          ? t("Administrators and resellers open a customer's terminal by logging in as the customer.")
+          : t("The terminal is not part of this account's package.")}</p></section>;
+    }
+    return <section className="section">
+      <div className="section-title"><div><h2>{t('Terminal')}</h2>
+        <p className="hint">{t("A shell in your home folder. To start in a website's folder with its PHP version, open the terminal from the website's row.")}</p></div></div>
+      <Terminal apiBase={API} />
     </section>;
   }
 
@@ -8111,48 +8206,70 @@ function App() {
       : site.ssl_mode === 'cloudflare' ? t('Wildcard')
         : site.ssl_mode === 'shared' ? t('Shared cert') : t('SSL OK');
     const wpPanel = wordpressInstaller;
+    const closeCreate = () => setCreateFormOpen(false);
+    const siteMenuItems = (site) => [
+      { label: t('Files'), icon: FolderOpen, onClick: () => openWebsiteFileManager(site) },
+      { label: t('Logs'), icon: FileText, onClick: () => navigateToPage('website', { path: websiteRoute(site.domain, 'logs') }) },
+      canOpenTerminal ? { label: t('Terminal'), icon: TerminalIcon, onClick: () => { setSiteTermOpen(true); navigateToPage('website', { path: websiteRoute(site.domain, 'advanced') }); } } : null,
+      site.wordpress_installed
+        ? { label: t('Update WordPress'), icon: RefreshCw, disabled: !!loading, onClick: () => openWordPressUpdate(site) }
+        : { label: t('Install WordPress'), icon: Download, disabled: !!loading, onClick: () => openWordPressInstaller(site) },
+      'separator',
+      { label: t('Delete website'), icon: Trash2, danger: true, disabled: !!loading, onClick: () => deleteWebsite(site.id) },
+    ];
     return <>
-      {createOpen && <section className="section create-panel">
-        <div className="section-title">
-          <h2>{t('Create website')}</h2>
-          {websites.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setCreateFormOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
-        </div>
-        <div className="form-row create-site-row">
-          <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
-          {isReseller && users.length > 0 && <select value={siteOwnerId} onChange={e => setSiteOwnerId(e.target.value)} aria-label={t('Owner')} title={t('Owner')}>
-            <option value="">{t('For yourself')}</option>
-            {users.filter(u => u.id !== currentUser?.id).map(u => <option key={u.id} value={u.id}>{t('For {name}', { name: u.username })}</option>)}
-          </select>}
-          <select value={siteType} onChange={e => setSiteType(e.target.value)}>
-            {WEBSITE_MODES.map(([value, label]) => <option
-              key={value}
-              value={value}
-              disabled={value === 'application' && !appsFeatureEnabled}
-            >{t(label)}</option>)}
-          </select>
-          {siteType === 'application'
-            ? <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
-              <option value="">{t('Select an application')}</option>
-              {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+      <Drawer open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}
+        title={websites.length ? t('Create website') : t('Attach first domain')}
+        footer={<button type="submit" form="website-create-form" disabled={!!loading || !domain}><Plus size={15} aria-hidden="true"/> {t('Create')}</button>}>
+        <form id="website-create-form" onSubmit={(e) => { e.preventDefault(); createWordPress(); }}>
+        <div className="sn-drawer-grid create-site-fields">
+          <Field className="is-wide" label={t('Domain')}>
+            <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" autoCapitalize="none" spellCheck={false} />
+          </Field>
+          {isReseller && users.length > 0 && <Field className="is-wide" label={t('Owner')}>
+            <select value={siteOwnerId} onChange={e => setSiteOwnerId(e.target.value)}>
+              <option value="">{t('For yourself')}</option>
+              {users.filter(u => u.id !== currentUser?.id).map(u => <option key={u.id} value={u.id}>{t('For {name}', { name: u.username })}</option>)}
             </select>
-            : <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
-              {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
-            </select>}
-          {wpFieldsEnabled && <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" />}
-          {wpFieldsEnabled && <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder={t('WP admin user')} />}
-          {wpFieldsEnabled && <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder={t('WP admin password')} type="password" />}
-          <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/> {t('Create')}</button>
+          </Field>}
+          <Field label={t('Website type')}>
+            <select value={siteType} onChange={e => setSiteType(e.target.value)}>
+              {WEBSITE_MODES.map(([value, label]) => <option
+                key={value}
+                value={value}
+                disabled={value === 'application' && !appsFeatureEnabled}
+              >{t(label)}</option>)}
+            </select>
+          </Field>
+          {siteType === 'application'
+            ? <Field label={t('Application')}>
+              <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
+                <option value="">{t('Select an application')}</option>
+                {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+              </select>
+            </Field>
+            : <Field label={t('PHP version')}>
+              <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
+                {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+              </select>
+            </Field>}
         </div>
         {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">{t('No applications installed yet. Install one on the')}<button type="button" className="link-button" onClick={() => navigateToPage('applications')}>{t('Applications')}</button> page first.
         </p>}
-        {siteType === 'wordpress' && <label className="check-line">
-          <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />
-          {t('Install WordPress (creates database, downloads WP, configures vhost)')}
-        </label>}
-        <label className="check-line">
-          <input type="checkbox" checked={sslAfterCreate} onChange={e => setCreateSslMode(e.target.checked ? 'letsencrypt' : 'none')} />
-          {t('Set up SSL after creating')}
-        </label>
+        {siteType === 'wordpress' && <Checkbox checked={installWordPress} onChange={setInstallWordPress}
+          label={t('Install WordPress (creates database, downloads WP, configures vhost)')}/>}
+        {wpFieldsEnabled && <div className="sn-drawer-section">
+          <h3>{t('WordPress administrator')}</h3>
+          <div className="sn-drawer-grid">
+            <Field label={t('Admin user')}><input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder={t('WP admin user')} autoComplete="off"/></Field>
+            <Field label={t('Admin email')} optional><input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com"/></Field>
+            <Field className="is-wide" label={t('Admin password')} optional hint={t('Leave blank for a random one')}>
+              <PasswordField value={wpAdminPassword} onChange={setWpAdminPassword} generate copy/>
+            </Field>
+          </div>
+        </div>}
+        <Checkbox checked={sslAfterCreate} onChange={(v) => setCreateSslMode(v ? 'letsencrypt' : 'none')}
+          label={t('Set up SSL after creating')}/>
         {sslAfterCreate && <div className="create-ssl-box">
           <div className="segmented ssl-mode-tabs">
             <button className={createSslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setCreateSslMode('letsencrypt')}><Lock size={13}/> Let's Encrypt</button>
@@ -8178,15 +8295,13 @@ function App() {
           : siteType === 'application'
             ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
             : 'A virtual host will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
-      </section>}
+        </form>
+      </Drawer>
       <section className="section">
-        <div className="section-title">
-          <h2>{t('Website list')}</h2>
-          <div className="actions">
-            <button className="secondary" disabled={!!loading} onClick={() => loadWebsiteList('', true)}><RefreshCw size={15}/> {t('Refresh')}</button>
-            {!createOpen && <button type="button" onClick={openCreate}><Plus size={15}/> {t('New website')}</button>}
-          </div>
-        </div>
+        <PageHeader subtitle={wsQuery ? t('{shown} of {total}', { shown: filteredWebsites.length, total: websites.length })
+          : (websites.length === 1 ? t('{n} website', { n: websites.length }) : t('{n} websites', { n: websites.length }))}
+          onRefresh={() => loadWebsiteList('', true)} refreshDisabled={!!loading}
+          actions={!createOpen && <button type="button" onClick={openCreate}><Plus size={15} aria-hidden="true"/> {t('New website')}</button>}/>
         {websites.length > 0 && <div className="website-search">
           <Search size={15}/>
           <NoAutofillInput name="website-search" value={websiteSearch} onChange={e => setWebsiteSearch(e.target.value)} placeholder={t('Filter domains…')} />
@@ -8195,7 +8310,7 @@ function App() {
             ? t('{shown} of {total}', { shown: filteredWebsites.length, total: websites.length })
             : (websites.length === 1 ? t('{n} website', { n: websites.length }) : t('{n} websites', { n: websites.length }))}</span>
         </div>}
-        {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." action={{ label: t('New website'), icon: Plus, onClick: openCreate }} />}
+        {websites.length === 0 && <EmptyState icon={Globe} message={t('No websites yet.')} action={{ label: t('New website'), icon: Plus, onClick: openCreate }} />}
         {websites.length > 0 && filteredWebsites.length === 0 && <EmptyState icon={Globe} message={t('No domain matches “{query}”.', { query: websiteSearch })} />}
         <div className="site-grid">
           {filteredWebsites.map(site => <div className="site-stack" key={site.id}>
@@ -8218,49 +8333,328 @@ function App() {
             </div>
             <div className="site-actions" aria-label={t('Website actions for {domain}', { domain: site.domain })}>
               <div className="site-feature-actions">
-                <button className="site-icon-button secondary-light" data-tooltip="Files" title={t('Files')} aria-label={t('Open file manager for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Logs" title={t('Logs')} aria-label={t('View logs for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Terminal" title={t('Terminal')} aria-label={t('Open terminal for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Settings" title={t('Settings')} aria-label={t('Edit settings for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
-                {!site.wordpress_installed && <button className="site-icon-button secondary-light" data-tooltip={t('Install WP')} title={t('Install WordPress')} aria-label={t('Install WordPress on {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><Download size={15}/></button>}
-                {site.wordpress_installed && <button className="site-icon-button secondary-light" data-tooltip={t('Update WP')} title={t('Update WordPress')} aria-label={t('Update WordPress on {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWordPressUpdate(site)}><RefreshCw size={15}/></button>}
-                <button className="site-icon-button danger" data-tooltip="Delete" title={t('Delete')} aria-label={t('Delete {name}', { name: site.domain })} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
+                <button className="secondary-light" onClick={() => navigateToPage('website', { path: websiteRoute(site.domain) })}>
+                  <SettingsIcon size={14} aria-hidden="true"/> {t('Manage')}</button>
+                <ActionMenu label={t('More actions for {domain}', { domain: site.domain })} items={siteMenuItems(site)}/>
               </div>
             </div>
           </article>
-          {nginxCustomEditing?.id === site.id && renderNginxEditor()}
-          {logViewer?.id === site.id && renderWebsiteLogViewer()}
-          {terminalViewer?.id === site.id && renderWebsiteTerminal()}
-          {wpPanel && String(wpPanel.website_id) === String(site.id) && <div className="wp-manager-panel">
-            <div className="user-edit-heading">
-              <strong>{wpPanel.mode === 'update' ? t('Update WordPress on {domain}', { domain: site.domain }) : t('Install WordPress on {domain}', { domain: site.domain })}</strong>
-              <button className="user-edit-close secondary-light" aria-label={t('Close')} onClick={() => setWordpressInstaller(null)}><X size={16}/></button>
-            </div>
-            {wpPanel.mode !== 'update' ? <div className="user-edit-grid">
-              <p className="hint">{t('Creates a database, downloads WordPress, configures vhost.')}</p>
-              <label><span>{t('Site title')}</span><input value={wpPanel.title} onChange={e => setWordpressInstaller(prev => ({ ...prev, title: e.target.value }))} /></label>
-              <label><span>{t('Admin username')}</span><input value={wpPanel.admin_user} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_user: e.target.value }))} /></label>
-              <label><span>{t('Admin email')}</span><input type="email" value={wpPanel.admin_email} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_email: e.target.value }))} /></label>
-              <label><span>{t('Admin password')}</span><input type="password" autoComplete="new-password" value={wpPanel.admin_password} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_password: e.target.value }))} placeholder={t('Min 10 characters')} /></label>
-              <div className="user-edit-actions">
-                <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
-                <button disabled={!!loading || !wpPanel.admin_user || !wpPanel.admin_email || String(wpPanel.admin_password || '').length < 10} onClick={installWordPressOnSite}><Download size={14}/> {t('Install WordPress')}</button>
-              </div>
-            </div> : <div>
-              <p className="hint">{t('Updates WordPress core, all plugins, and all themes to the latest version.')}</p>
-              <div className="user-edit-actions">
-                <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
-                <button disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={14}/> {t('Update All')}</button>
-              </div>
-            </div>}
-          </div>}
+          {renderWordPressPanel(site)}
           </div>)}
         </div>
       </section>
     </>;
   }
 
-  function renderSsl() {
+  // WordPress installed on, or updated for, one website: under its card in
+  // the list, or on its Overview.
+  function renderWordPressPanel(site) {
+    const wpPanel = wordpressInstaller;
+    if (!wpPanel || String(wpPanel.website_id) !== String(site.id)) return null;
+    return <div className="wp-manager-panel">
+      <div className="user-edit-heading">
+        <strong>{wpPanel.mode === 'update' ? t('Update WordPress on {domain}', { domain: site.domain }) : t('Install WordPress on {domain}', { domain: site.domain })}</strong>
+        <button className="user-edit-close secondary-light" aria-label={t('Close')} onClick={() => setWordpressInstaller(null)}><X size={16}/></button>
+      </div>
+      {wpPanel.mode !== 'update' ? <div className="user-edit-grid">
+        <p className="hint">{t('Creates a database, downloads WordPress, configures vhost.')}</p>
+        <label><span>{t('Site title')}</span><input value={wpPanel.title} onChange={e => setWordpressInstaller(prev => ({ ...prev, title: e.target.value }))} /></label>
+        <label><span>{t('Admin username')}</span><input value={wpPanel.admin_user} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_user: e.target.value }))} /></label>
+        <label><span>{t('Admin email')}</span><input type="email" value={wpPanel.admin_email} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_email: e.target.value }))} /></label>
+        <label><span>{t('Admin password')}</span><input type="password" autoComplete="new-password" value={wpPanel.admin_password} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_password: e.target.value }))} placeholder={t('Min 10 characters')} /></label>
+        <div className="user-edit-actions">
+          <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
+          <button disabled={!!loading || !wpPanel.admin_user || !wpPanel.admin_email || String(wpPanel.admin_password || '').length < 10} onClick={installWordPressOnSite}><Download size={14}/> {t('Install WordPress')}</button>
+        </div>
+      </div> : <div>
+        <p className="hint">{t('Updates WordPress core, all plugins, and all themes to the latest version.')}</p>
+        <div className="user-edit-actions">
+          <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
+          <button disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={14}/> {t('Update All')}</button>
+        </div>
+      </div>}
+    </div>;
+  }
+
+  // One website's page, as SNPanel's (pages/WebsiteDetail.jsx there): its
+  // tabs - Overview, Domains, SSL, PHP, Security, Logs, Advanced - each with
+  // its own one action, instead of the settings, logs and terminal that
+  // opened under its card in the list. Each tab has an address of its own:
+  // /website/<domain>/<tab>.
+  function renderWebsiteDetail() {
+    const site = websites.find(item => String(item.domain || '').toLowerCase() === siteWhere.domain);
+    const backToList = { label: t('Websites'), onClick: () => navigateToPage('websites') };
+    if (!site) {
+      return <>
+        <PageHeader breadcrumbs={[backToList, { label: siteWhere.domain }]}/>
+        <section className="section">
+          {websites.length === 0 && loading
+            ? <p className="hint">{t('Loading…')}</p>
+            : <EmptyState icon={Globe} title={t('No website {domain} here.', { domain: siteWhere.domain })}
+              message={t('It may have been deleted, or it belongs to an account you cannot see.')}
+              action={{ label: t('All websites'), icon: Globe, onClick: () => navigateToPage('websites') }}/>}
+        </section>
+      </>;
+    }
+    const goTab = next => navigateToPage('website', { path: websiteRoute(site.domain, next) });
+    const tabs = [
+      { id: 'overview', label: t('Overview'), icon: LayoutDashboard },
+      { id: 'domains', label: t('Domains'), icon: Globe, badge: (site.aliases || []).length || undefined },
+      { id: 'ssl', label: 'SSL', icon: Lock },
+      { id: 'php', label: 'PHP', icon: Code2 },
+      { id: 'security', label: t('Security'), icon: ShieldCheck },
+      { id: 'logs', label: t('Logs'), icon: FileText },
+      { id: 'advanced', label: t('Advanced'), icon: SlidersHorizontal },
+    ].map(item => ({ ...item, href: websiteRoute(site.domain, item.id) }));
+    const tab = tabs.some(item => item.id === siteWhere.tab) ? siteWhere.tab : 'overview';
+    const owner = users.find(user => String(user.id) === String(site.owner_id));
+    const typeLabel = t(APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type);
+    const facts = [typeLabel];
+    if (site.app_type !== 'static' && !isProxiedAppType(site.app_type)) facts.push(`PHP ${site.php_version}`);
+    if (canManageUsers && owner) facts.push(t('Owner: {name}', { name: owner.username }));
+    const menuItems = [
+      { label: t('File manager'), icon: FolderOpen, onClick: () => openWebsiteFileManager(site) },
+      site.wordpress_installed
+        ? { label: t('Update WordPress'), icon: RefreshCw, disabled: !!loading, onClick: () => updateWordPressAll(site) }
+        : { label: t('Install WordPress'), icon: Download, disabled: !!loading, onClick: () => { goTab('overview'); openWordPressInstaller(site); } },
+      'separator',
+      { label: t('Delete website'), icon: Trash2, danger: true, disabled: !!loading, onClick: async () => { if (await deleteWebsite(site.id)) navigateToPage('websites'); } },
+    ];
+    return <>
+      <PageHeader breadcrumbs={[backToList, { label: site.domain }]} title={site.domain} subtitle={facts.join(' · ')}
+        onRefresh={() => loadWebsiteList('', true)} refreshDisabled={!!loading}
+        actions={<>
+          <a className="button-link secondary-light" href={websiteUrl(site)} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} aria-hidden="true"/> {t('Open website')}</a>
+          <ActionMenu label={t('More actions for {domain}', { domain: site.domain })} items={menuItems}/>
+        </>}/>
+      <Tabs className="wsd-tabs" label={t('Website sections')} value={tab} onChange={goTab} tabs={tabs}/>
+      {tab === 'overview' && renderSiteOverview(site, owner, typeLabel, goTab)}
+      {tab === 'domains' && renderSiteDomains(site, goTab)}
+      {tab === 'ssl' && renderSsl(true)}
+      {tab === 'php' && renderSitePhp(site)}
+      {tab === 'security' && (String(selectedWafWebsiteId) === String(site.id) && wafSiteConfig
+        ? renderWafSite(true)
+        : <section className="section"><p className="hint">{t('Loading…')}</p></section>)}
+      {tab === 'logs' && renderSiteLogs(site)}
+      {tab === 'advanced' && renderSiteAdvanced(site)}
+    </>;
+  }
+
+  function renderSiteOverview(site, owner, typeLabel, goTab) {
+    const rewrite = NGINX_REWRITE_MODES.find(mode => mode.value === site.nginx_rewrite_mode);
+    const sslModes = { manual: t('Manual SSL'), cloudflare: t('Wildcard SSL'), shared: t('Existing certificate') };
+    const php = site.app_type === 'static' || isProxiedAppType(site.app_type) ? '' : site.php_version;
+    const servingApp = isProxiedAppType(site.app_type) ? siteApps.items.find(app => String(app.id) === String(site.app_id)) : null;
+    const locale = language === 'vi' ? 'vi-VN' : 'en-GB';
+    return <div className="wsd-overview">
+      <section className="section wsd-card">
+        <h2 className="wsd-card-title">{t('About this website')}</h2>
+        <dl className="wsd-facts">
+          <div><dt>{t('Address')}</dt><dd><a href={websiteUrl(site)} target="_blank" rel="noopener noreferrer">{websiteUrl(site)} <ExternalLink size={12} aria-hidden="true"/></a></dd></div>
+          <div><dt>{t('Type')}</dt><dd>{typeLabel}</dd></div>
+          {php && <div><dt>{t('PHP version')}</dt><dd>{php}</dd></div>}
+          {site.app_type === 'php' && rewrite && rewrite.value !== 'none' && <div><dt>{t('Nginx rewrite')}</dt><dd>{t(rewrite.label)}</dd></div>}
+          {servingApp && <div><dt>{t('Application')}</dt><dd>{servingApp.name} · :{servingApp.port}</dd></div>}
+          {canManageUsers && owner && <div><dt>{t('Owner')}</dt><dd>{owner.username}</dd></div>}
+          {site.linux_user && <div><dt>{t('Linux user')}</dt><dd><code>{site.linux_user}</code></dd></div>}
+          <div><dt>{t('Folder')}</dt><dd><code>{site.root_path}</code></dd></div>
+          <div><dt>SSL</dt><dd>
+            <span className={`badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? (sslModes[site.ssl_mode] || t('SSL Enabled')) : t('SSL Disabled')}</span>
+            {site.ssl_updated_at && <small>{t('Updated')} {new Date(site.ssl_updated_at).toLocaleDateString(locale)}</small>}
+            <button type="button" className="link-button" onClick={() => goTab('ssl')}>{t('Manage SSL')}</button>
+          </dd></div>
+          <div><dt>WAF</dt><dd>
+            <span className={`badge ${site.waf_enabled ? 'ok' : ''}`}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
+            {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
+            <button type="button" className="link-button" onClick={() => goTab('security')}>{t('Security settings')}</button>
+          </dd></div>
+          <div><dt>{t('Domains')}</dt><dd>
+            {t('{count} extra domain(s)', { count: (site.aliases || []).length })}
+            <button type="button" className="link-button" onClick={() => goTab('domains')}>{t('Manage domains')}</button>
+          </dd></div>
+        </dl>
+      </section>
+
+      <section className="section wsd-card">
+        <h2 className="wsd-card-title">WordPress</h2>
+        {site.wordpress_installed
+          ? <>
+            <p className="hint">{t('WordPress is installed here.')}</p>
+            <div className="wsd-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={14} aria-hidden="true"/> {t('Update WordPress (core + plugins + themes)')}</button>
+            </div>
+          </>
+          : isProxiedAppType(site.app_type) || site.app_type === 'static'
+            ? <p className="hint">{t('This website does not run PHP, so WordPress cannot be installed on it.')}</p>
+            : <>
+              <p className="hint">{t('Creates a database, downloads WordPress, configures vhost.')}</p>
+              <div className="wsd-actions">
+                <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openWordPressInstaller(site)}><Download size={14} aria-hidden="true"/> {t('Install WordPress')}</button>
+              </div>
+            </>}
+        {renderWordPressPanel(site)}
+      </section>
+
+      <section className="section wsd-card wsd-shortcuts">
+        <h2 className="wsd-card-title">{t('Shortcuts')}</h2>
+        <div className="wsd-actions">
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14} aria-hidden="true"/> {t('File manager')}</button>
+          <button type="button" className="secondary-light" onClick={() => goTab('logs')}><FileText size={14} aria-hidden="true"/> {t('Logs')}</button>
+          {canOpenTerminal && <button type="button" className="secondary-light" onClick={() => { setSiteTermOpen(true); goTab('advanced'); }}><TerminalIcon size={14} aria-hidden="true"/> {t('Terminal')}</button>}
+          <button type="button" className="secondary-light" onClick={() => navigateToPage('backups')}><Archive size={14} aria-hidden="true"/> {t('Backups')}</button>
+        </div>
+      </section>
+    </div>;
+  }
+
+  function renderSiteDomains(site, goTab) {
+    const draft = aliasDrafts[site.id] || '';
+    const mode = aliasModes[site.id] || 'alias';
+    const aliases = site.aliases || [];
+    return <section className="section">
+      <PageHeader title={t('Domains')} subtitle={t('Alias serves the same app. Redirect sends visitors to {domain}.', { domain: site.domain })}/>
+      <ul className="wsd-domain-list">
+        <li><Globe size={14} aria-hidden="true"/><strong>{site.domain}</strong><span className="badge ok">{t('Main')}</span></li>
+        {aliases.map(alias => <li key={alias.id}>
+          <Globe size={14} aria-hidden="true"/><strong>{alias.domain}</strong>
+          <span className="badge">{alias.mode === 'redirect' ? t('Redirect') : t('Alias')}</span>
+          <button type="button" className="mini secondary-light" disabled={!!loading} onClick={() => deleteWebsiteAlias(site, alias)}
+            aria-label={t('Remove {domain}', { domain: alias.domain })}><X size={13} aria-hidden="true"/> {t('Remove')}</button>
+        </li>)}
+      </ul>
+      {aliases.length === 0 && <p className="hint">{t('No extra domains')}</p>}
+      <form className="wsd-domain-form" onSubmit={e => { e.preventDefault(); if (draft.trim()) addWebsiteAlias(site); }}>
+        <Field label={t('New domain')}>
+          <input value={draft} onChange={e => setAliasDrafts(prev => ({ ...prev, [site.id]: e.target.value }))}
+            placeholder={t('e.g. {example}', { example: 'www.example.com' })} disabled={!!loading} autoCapitalize="none" spellCheck={false}/>
+        </Field>
+        <Field label={t('Kind')}>
+          <select value={mode} onChange={e => setAliasModes(prev => ({ ...prev, [site.id]: e.target.value }))} disabled={!!loading}>
+            <option value="alias">{t('Alias')}</option>
+            <option value="redirect">{t('Redirect')}</option>
+          </select>
+        </Field>
+        <button type="submit" disabled={!!loading || !draft.trim()}><Plus size={14} aria-hidden="true"/> {t('Add domain')}</button>
+      </form>
+      <p className="hint">{t('A new domain gets its certificate on the {tab} tab: install or renew SSL there.', { tab: <button type="button" className="link-button" onClick={() => goTab('ssl')}>SSL</button> })}</p>
+    </section>;
+  }
+
+  function renderSitePhp(site) {
+    const ready = nginxCustomEditing?.id === site.id;
+    const base = websiteConfigForm(ready ? nginxCustomEditing.site || site : site);
+    const form = ready ? websiteSettingsForm : base;
+    const appType = form.app_type || 'wordpress';
+    const proxied = isProxiedAppType(appType);
+    const rewriteFixed = appType !== 'php';
+    const dirty = ready && ['app_type', 'php_version', 'app_id', 'nginx_rewrite_mode'].some(key => String(form[key] ?? '') !== String(base[key] ?? ''));
+    const set = patch => setWebsiteSettingsForm(prev => ({ ...prev, ...patch }));
+    return <section className="section">
+      <PageHeader title={t('How the website runs')} subtitle={t('Managed settings rewrite the main vhost safely. Custom Nginx is still stored as a separate include.')}/>
+      <div className="wsd-form-grid">
+        <Field label={t('Website mode')}>
+          <select value={appType} disabled={!ready || !!loading} onChange={e => set({
+            app_type: e.target.value,
+            nginx_rewrite_mode: e.target.value === 'php' ? form.nginx_rewrite_mode || 'none' : e.target.value === 'wordpress' ? 'front_controller' : 'none',
+          })}>
+            {WEBSITE_MODES.map(([value, label]) => <option key={value} value={value} disabled={value === 'application' && !appsFeatureEnabled}>{t(label)}</option>)}
+          </select>
+        </Field>
+        {proxied && <Field label={t('Application')}>
+          <select value={form.app_id || ''} disabled={!ready || !!loading} onChange={e => set({ app_id: e.target.value })}>
+            <option value="">{t('Select an application')}</option>
+            {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+          </select>
+        </Field>}
+        {appType !== 'static' && !proxied && <Field label={t('PHP version')}>
+          <select value={form.php_version} disabled={!ready || !!loading} onChange={e => set({ php_version: e.target.value })}>
+            {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+          </select>
+        </Field>}
+        <Field label={t('Nginx rewrite')} hint={rewriteFixed ? t('Set by the website mode.') : ''}>
+          <select value={rewriteFixed ? (appType === 'wordpress' ? 'front_controller' : 'none') : form.nginx_rewrite_mode}
+            disabled={!ready || !!loading || rewriteFixed} onChange={e => set({ nginx_rewrite_mode: e.target.value })}>
+            {NGINX_REWRITE_MODES.map(mode => <option key={mode.value} value={mode.value}>{t(mode.label)}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div className={`wsd-savebar${dirty ? ' is-dirty' : ''}`}>
+        <span role="status">{dirty ? t('Unsaved changes') : ''}</span>
+        {dirty && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => setWebsiteSettingsForm(base)}><RotateCcw size={14} aria-hidden="true"/> {t('Undo changes')}</button>}
+        <button type="button" disabled={!ready || !dirty || !!loading} onClick={saveWebsiteSettings}><Save size={14} aria-hidden="true"/> {t('Save changes')}</button>
+      </div>
+    </section>;
+  }
+
+  function renderSiteLogs(site) {
+    const log = logViewer?.id === site.id ? logViewer : null;
+    const kind = log?.kind || 'access';
+    const lines = log?.lines || 200;
+    return <section className="section wsd-logs">
+      <PageHeader title={t('Nginx logs')} subtitle={log?.path || `/var/log/nginx/${site.domain}.${kind}.log`}
+        onRefresh={() => loadWebsiteLog(site.id, kind, lines, site.domain)} refreshDisabled={!!loading}/>
+      <div className="log-toolbar">
+        <div className="segmented-control" role="group" aria-label={t('Log')}>
+          {[['access', t('Access')], ['error', t('Errors (PHP + server)')]].map(([id, label]) => <button key={id} type="button" aria-pressed={kind === id}
+            className={kind === id ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(site.id, id, lines, site.domain)}>{label}</button>)}
+        </div>
+        <select value={lines} onChange={e => loadWebsiteLog(site.id, kind, Number(e.target.value), site.domain)} disabled={!!loading} aria-label={t('Lines')}>
+          {[100, 200, 500, 1000, 2000].map(n => <option key={n} value={n}>{t('{n} lines', { n })}</option>)}
+        </select>
+      </div>
+      <pre className="log-output">{!log ? t('Loading…') : log.exists
+        ? (log.content || t('Log is empty.'))
+        : (kind === 'error' ? t('No errors logged yet.') : t('Log file has not been created yet.'))}</pre>
+    </section>;
+  }
+
+  function renderSiteAdvanced(site) {
+    const editor = nginxCustomEditing?.id === site.id ? nginxCustomEditing : null;
+    const full = editor?.mode === 'full';
+    return <div className="wsd-advanced">
+      <section className="section">
+        <PageHeader title={full ? t('Full Nginx config') : t('Custom Nginx')}
+          subtitle={full ? t('This is read-only. BPanel manages the main vhost template.') : t('Optional extra directives only. Use Nginx rewrite on the PHP tab for location / routing.')}/>
+        {!editor ? <p className="hint">{t('Loading…')}</p> : <>
+          <textarea className="code-editor" value={editor.content || ''} readOnly={full} spellCheck={false} rows={full ? 18 : 10}
+            onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value, customContent: e.target.value }))}
+            aria-label={full ? t('Full Nginx config') : t('Custom Nginx')}/>
+          <div className="wsd-savebar">
+            <span role="status"></span>
+            {full
+              ? <button type="button" className="secondary-light" onClick={() => setNginxCustomEditing(prev => ({ ...prev, mode: 'custom', content: prev?.customContent ?? '' }))}><X size={14} aria-hidden="true"/> {t('Close the full config')}</button>
+              : <>
+                <button type="button" className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14} aria-hidden="true"/> {t('Reset custom')}</button>
+                <button type="button" disabled={!!loading} onClick={saveNginxCustom}><Save size={14} aria-hidden="true"/> {t('Save and reload Nginx')}</button>
+              </>}
+          </div>
+        </>}
+      </section>
+      {isAdmin && !full && <p className="hint wsd-fullvhost">
+        <button type="button" className="link-button" disabled={!editor || !!loading} onClick={viewFullNginxConfig}><FileText size={13} aria-hidden="true"/> {t('View the full Nginx config')}</button>
+      </p>}
+
+      <section className="section" id="wsd-terminal">
+        <PageHeader title={t('Terminal')} subtitle={canOpenTerminal
+          ? t("A real bash shell as this website's owner, starting in the website's folder.")
+          : isAdmin || isReseller
+            ? t("Administrators and resellers open a customer's terminal by logging in as the customer.")
+            : t("The terminal is not part of this account's package.")}
+          actions={canOpenTerminal && (siteTermOpen
+            ? <button type="button" className="secondary-light" onClick={() => setSiteTermOpen(false)}><X size={14} aria-hidden="true"/> {t('Close terminal')}</button>
+            : <button type="button" className="secondary-light" onClick={() => setSiteTermOpen(true)}><TerminalIcon size={14} aria-hidden="true"/> {t('Open terminal')}</button>)}/>
+        {canOpenTerminal && siteTermOpen && <div className="wsd-terminal"><Terminal websiteId={site.id} apiBase={API} /></div>}
+      </section>
+
+      <section className="section wsd-danger">
+        <PageHeader title={t('Delete this website')} subtitle={t('Removes its web server configuration and certificate; you choose whether its files and databases go too.')}
+          actions={<button type="button" className="danger" disabled={!!loading} onClick={async () => { if (await deleteWebsite(site.id)) navigateToPage('websites'); }}>
+            <Trash2 size={14} aria-hidden="true"/> {t('Delete website')}</button>}/>
+      </section>
+    </div>;
+  }
+
+  function renderSsl(embedded = false) {
     // Named as OPanel names them. BPanel's modes: a Cloudflare wildcard, a
     // certificate borrowed from another site ("shared"), one uploaded by hand,
     // or Let's Encrypt.
@@ -8283,9 +8677,10 @@ function App() {
         : site.ssl_mode === 'shared' ? t('Shared cert')
           : site.ssl_mode === 'cloudflare' ? t('Wildcard') : t('SSL OK');
     return <>
+    {!embedded && <PageHeader subtitle={t('{secured} of {total} secured', { secured: securedCount, total: websites.length })}/>}
     <section className="section" id="ssl-manage">
       <h2>{t('SSL Certificate')}</h2>
-      <WebsiteSelect />
+      {!embedded && <Field label={t('Website')}><WebsiteSelect /></Field>}
       {currentSite && <div className="info-box" style={{marginTop:8}}>
         <strong>{currentSite.domain}</strong>
         <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{sslLabel}</span>
@@ -8344,7 +8739,7 @@ function App() {
         <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/> {t('Install Manual SSL')}</button>
       </div>}
     </section>
-    {websites.length > 0 && <section className="section">
+    {!embedded && websites.length > 0 && <section className="section">
       <div className="section-title">
         <div><h2>{t('All websites')}</h2><p className="hint">{t('{secured} of {total} secured', { secured: securedCount, total: websites.length })}</p></div>
       </div>
@@ -8359,10 +8754,15 @@ function App() {
     </>;
   }
 
+  // The databases, as SNPanel's (pages/Databases.jsx there): one table row
+  // each - its name, user, website and owner - with phpMyAdmin as the one
+  // button and the rest (SQL download, password, owner, delete) in a
+  // labelled "…" menu. A new database and a change of owner are side sheets.
   function renderDatabases() {
-    // Filtered here, as OPanel's list is: the page already holds them all.
+    // Filtered here: the page already holds them all.
     const dbQuery = dbSearch.trim().toLowerCase();
     const siteById = new Map(websites.map(site => [String(site.id), site.domain]));
+    const ownerName = (id) => users.find(user => user.id === id)?.username || (id === currentUser?.id ? currentUser?.username : `#${id}`);
     const filteredDatabases = dbQuery
       ? databases.filter(db => (db.db_name || '').toLowerCase().includes(dbQuery)
           || (db.db_user || '').toLowerCase().includes(dbQuery)
@@ -8374,90 +8774,125 @@ function App() {
       });
       doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError(t('Copy failed.')));
     }
-    const createOpen = dbCreateOpen || databases.length === 0;
-    const openCreate = () => {
-      setDbCreateOpen(true);
-      setTimeout(() => { const el = document.getElementById('create-database-name'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); }, 0);
+    const copyButton = (text, field) => <button type="button" className="mini secondary-light" title={copiedField === field ? t('Copied') : t('Copy')} aria-label={t('Copy')}
+      onClick={() => copyToClipboard(text, field)}>{copiedField === field ? <Check size={12} style={{ color: 'var(--success)' }}/> : <Copy size={12}/>}</button>;
+    const openCreate = () => { setDbCreateTried(false); setDbCreateOpen(true); };
+    const closeCreate = () => { setDbCreateOpen(false); setDbCreateTried(false); };
+    // The create form's problems, said under each field once Create was
+    // pressed - the same rules createDatabase() holds it to.
+    const validName = /^[a-zA-Z0-9_]+$/;
+    const createProblems = {
+      name: !newDatabase.db_name.trim() ? t('Type a name for the database.')
+        : !validName.test(newDatabase.db_name.trim()) ? t('A database name is letters, digits and underscores only.') : '',
+      user: newDatabase.db_user.trim() && !validName.test(newDatabase.db_user.trim()) ? t('A database user is letters, digits and underscores only.') : '',
+      password: newDatabase.db_password && newDatabase.db_password.trim().length < 12 ? t('The password must be at least 12 characters.')
+        : /[^\x20-\x7E]/.test(newDatabase.db_password || '') ? t('The password can only use plain ASCII characters.') : '',
     };
-    return <section className="section">
-      <div className="section-title">
-        <h2>{t('Databases')}</h2>
-        <div className="actions">
-          <button className="secondary" disabled={!!loading} onClick={() => loadDatabases(true)}><RefreshCw size={15}/> {t('Refresh')}</button>
-          {!createOpen && <button type="button" onClick={openCreate}><Plus size={15}/> {t('New database')}</button>}
-        </div>
-      </div>
-      {createOpen && <div className="create-inline">
-        <div className="create-inline-head">
-          <strong>{t('Create database')}</strong>
-          {databases.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setDbCreateOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
-        </div>
-      <div className="form-row">
-        <input id="create-database-name" name="new-db-name" autoComplete="off" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
-        <input name="new-db-user" autoComplete="off" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
-        {/* new-password, or the browser offers the panel's own password here. */}
-        <input name="new-db-password" autoComplete="new-password" value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
-        <button type="button" className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
-        <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/> {t('Create database')}</button>
-      </div>
-      </div>}
-      {createdDbInfo && <div className="info-box db-created-box">
-        <div className="db-created-head"><strong>{t('Database created successfully')}</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
-        <div className="db-created-grid">
-          <label>{t('Database')}</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" title={copiedField === 'db_name' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_name, 'db_name')}>{copiedField === 'db_name' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
-          <label>{t('User')}</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" title={copiedField === 'db_user' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_user, 'db_user')}>{copiedField === 'db_user' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
-          <label>{t('Password')}</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
-        </div>
-      </div>}
-      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message="No databases found." action={{ label: t('New database'), icon: Plus, onClick: openCreate }} />}
-      {databases.length > 0 && <div className="list-search">
-        <Search size={15}/>
-        <NoAutofillInput name="database-search" value={dbSearch} onChange={e => setDbSearch(e.target.value)} placeholder={t('Filter databases…')} />
-        {dbSearch && <button className="mini secondary-light" aria-label={t('Clear search')} onClick={() => setDbSearch('')}><X size={13}/></button>}
-        <span className="hint">{dbQuery
-          ? t('{shown} of {total}', { shown: filteredDatabases.length, total: databases.length })
-          : (databases.length === 1 ? t('{n} database', { n: databases.length }) : t('{n} databases', { n: databases.length }))}</span>
-      </div>}
-      {databases.length > 0 && filteredDatabases.length === 0 && <EmptyState icon={Database} message={t('No database matches “{query}”.', { query: dbSearch })} />}
-      <div className="table">
-        {filteredDatabases.map(db => {
-          // The site a database belongs to, where it belongs to one.
-          const dbSite = siteById.get(String(db.website_id));
-          const dbOwner = isAdmin ? (users.find(user => user.id === db.owner_id)?.username || `#${db.owner_id}`) : '';
-          return <div className="row db-row" key={db.id}>
-          <span><strong>{db.db_name}</strong>{dbSite && <small className="db-owner">{dbSite}</small>}{dbOwner && <small className="db-owner">{t('Owner:')} {dbOwner}</small>}</span>
-          <span className="db-user"><small>{t('User')}</small> {db.db_user}</span>
-          <span className="db-actions">
-            <button className="mini secondary" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
-            <button className="mini secondary-light" disabled={!!loading} title={t('Download SQL dump')}
-                    aria-label={t('Download SQL dump of {name}', { name: db.db_name })}
-                    onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/></button>
-            <button className="mini secondary-light" disabled={!!loading} title={t('Change database password')}
-                    aria-label={t('Change the password for {name}', { name: db.db_name })}
-                    onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/></button>
-            <button className="mini danger" disabled={!!loading} title={t('Delete database')}
-                    aria-label={t('Delete {name}', { name: db.db_name })}
-                    onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/></button>
-          </span>
-        </div>})}
-      </div>
-      <p className="hint">{t('Click phpMyAdmin to sign in directly. Token expires after 60s.')}</p>
-      {isAdmin && databases.length > 0 && <div className="section" style={{marginTop:16}}>
-        <h2>{t('Assign database to user')}</h2>
-        <div className="assign-row">
-          <select value={assignDbId} onChange={e => setAssignDbId(e.target.value)}>
-            <option value="">{t('Select database')}</option>
-            {databases.map(db => <option key={db.id} value={db.id}>{db.db_name}</option>)}
-          </select>
-          <select value={assignDbUserId} onChange={e => setAssignDbUserId(e.target.value)}>
-            <option value="">{t('Select user')}</option>
-            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
-          </select>
-          <button disabled={!assignDbId || !assignDbUserId || !!loading} onClick={assignDatabaseToUser}>{t('Assign')}</button>
-        </div>
-        <p className="hint">{t('The database, its MariaDB user and its password stay as they are; only who manages it in the panel changes. A database linked to a website moves with that website.')}</p>
-      </div>}
-    </section>;
+    const createBad = Object.values(createProblems).some(Boolean);
+    async function submitCreate(event) {
+      event.preventDefault();
+      if (createBad) {
+        setDbCreateTried(true);
+        setTimeout(() => document.querySelector('#db-create-form [aria-invalid="true"]')?.focus(), 0);
+        return;
+      }
+      if (await createDatabase()) closeCreate();
+    }
+    const moving = assignDbId ? databases.find(db => String(db.id) === String(assignDbId)) : null;
+    const rowMenu = (db) => [
+      { label: t('Download as SQL'), icon: Download, disabled: !!loading, onClick: () => downloadDatabase(db.id, db.db_name) },
+      { label: t('Change password'), icon: KeyRound, disabled: !!loading, onClick: () => changeDbPassword(db.id) },
+      { label: t('Change owner'), icon: UserCog, hidden: !isAdmin, disabled: !!loading,
+        onClick: () => { setAssignDbId(String(db.id)); setAssignDbUserId(String(db.owner_id)); } },
+      'separator',
+      { label: t('Delete database'), icon: Trash2, danger: true, disabled: !!loading, onClick: () => deleteDatabase(db.id, db.db_name) },
+    ];
+    return <>
+      <PageHeader
+        subtitle={dbQuery ? t('{shown} of {total}', { shown: filteredDatabases.length, total: databases.length })
+          : (databases.length === 1 ? t('{n} database', { n: databases.length }) : t('{n} databases', { n: databases.length }))}
+        onRefresh={() => loadDatabases(true)} refreshDisabled={!!loading}
+        actions={<button type="button" onClick={openCreate}><Plus size={15} aria-hidden="true"/> {t('New database')}</button>}/>
+      <section className="section dbt-section">
+        {createdDbInfo && <div className="info-box db-created-box">
+          <div className="db-created-head"><strong>{t('Database created successfully')}</strong>
+            <button type="button" className="mini secondary-light" onClick={() => setCreatedDbInfo(null)} aria-label={t('Close')}><X size={13}/></button></div>
+          <div className="db-created-grid">
+            <label>{t('Database')}</label><span>{createdDbInfo.db_name} {copyButton(createdDbInfo.db_name, 'db_name')}</span>
+            <label>{t('User')}</label><span>{createdDbInfo.db_user} {copyButton(createdDbInfo.db_user, 'db_user')}</span>
+            <label>{t('Password')}</label><span><code>{createdDbInfo.db_password}</code> {copyButton(createdDbInfo.db_password, 'db_password')}</span>
+          </div>
+        </div>}
+        {databases.length > 0 && <div className="list-search">
+          <Search size={16} aria-hidden="true"/>
+          <NoAutofillInput name="database-search" value={dbSearch} onChange={e => setDbSearch(e.target.value)}
+            placeholder={t('Search by database or user name')} aria-label={t('Search databases')} />
+          {dbSearch && <button type="button" className="secondary-light icon-button" onClick={() => setDbSearch('')}
+            aria-label={t('Clear the search')} title={t('Clear the search')}><X size={15}/></button>}
+        </div>}
+        {databases.length === 0 && <EmptyState icon={Database} title={t('No databases yet.')} message={t('A database for a website or an application: MariaDB, with phpMyAdmin.')}
+          action={{ label: t('New database'), icon: Plus, onClick: openCreate }} />}
+        {databases.length > 0 && filteredDatabases.length === 0 && <EmptyState icon={Search} message={t('No databases match this search.')}
+          action={{ label: t('Clear the search'), icon: X, secondary: true, onClick: () => setDbSearch('') }} />}
+        {filteredDatabases.length > 0 && <div className={`dbt${isAdmin ? ' with-owner' : ''}`} role="table" aria-label={t('Databases')}>
+          <div className="dbt-row dbt-head" role="row">
+            <span role="columnheader">{t('Database')}</span>
+            <span role="columnheader">{t('User')}</span>
+            <span role="columnheader">{t('Website')}</span>
+            {isAdmin && <span role="columnheader">{t('Owner')}</span>}
+            <span role="columnheader"><span className="sr-only">{t('Actions')}</span></span>
+          </div>
+          {filteredDatabases.map(db => <div className="dbt-row" role="row" key={db.id}>
+            <span role="cell" className="dbt-name"><Database size={15} aria-hidden="true"/><strong>{db.db_name}</strong></span>
+            <span role="cell" data-label={t('User')}><code>{db.db_user}</code></span>
+            <span role="cell" data-label={t('Website')}>{siteById.get(String(db.website_id)) || <span className="dbt-muted">{t('No website')}</span>}</span>
+            {isAdmin && <span role="cell" data-label={t('Owner')}>{ownerName(db.owner_id)}</span>}
+            <span role="cell" className="dbt-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}
+                title={t('Open {name} in phpMyAdmin', { name: db.db_name })}><ExternalLink size={14} aria-hidden="true"/> phpMyAdmin</button>
+              <ActionMenu label={t('More actions for {name}', { name: db.db_name })} items={rowMenu(db)}/>
+            </span>
+          </div>)}
+        </div>}
+        {databases.length > 0 && <p className="hint">{t('phpMyAdmin signs you in directly; the link works for 60 seconds.')}</p>}
+      </section>
+      <Drawer open={dbCreateOpen} onClose={closeCreate} title={t('New database')} subtitle={t('A MariaDB database, with a user of its own.')}
+        footer={<>
+          {dbCreateTried && createBad && <span className="sn-drawer-foot-note" role="alert">{t('Some fields need attention.')}</span>}
+          <button type="button" className="secondary-light" onClick={closeCreate}>{t('Cancel')}</button>
+          <button type="submit" form="db-create-form" disabled={!!loading}><Plus size={15} aria-hidden="true"/> {t('Create database')}</button>
+        </>}>
+        <form id="db-create-form" noValidate onSubmit={submitCreate}>
+          <Field label={t('Database name')} required error={dbCreateTried ? createProblems.name : ''} hint={t('Letters, digits and underscores.')}>
+            <input name="new-db-name" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))}
+              placeholder={t('e.g. {example}', { example: 'shop' })} autoComplete="off" spellCheck={false} />
+          </Field>
+          <Field label={t('Database user')} optional error={dbCreateTried ? createProblems.user : ''} hint={t('The database name, if left empty.')}>
+            <input name="new-db-user" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))}
+              autoComplete="off" spellCheck={false} />
+          </Field>
+          <Field label={t('Password')} optional error={dbCreateTried ? createProblems.password : ''} hint={t('At least 12 characters. Left empty, one is made for you.')}>
+            <PasswordField value={newDatabase.db_password} onChange={v => setNewDatabase(prev => ({ ...prev, db_password: v }))}
+              generate copy onGenerate={() => generateRandomPassword()} />
+          </Field>
+        </form>
+      </Drawer>
+      <Drawer open={!!moving} onClose={() => { setAssignDbId(''); setAssignDbUserId(''); }}
+        title={moving ? t('Change the owner of {name}', { name: moving.db_name }) : ''}
+        subtitle={t('The database, its MariaDB user and its password stay as they are; only who manages it in the panel changes. A database linked to a website moves with that website.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => { setAssignDbId(''); setAssignDbUserId(''); }}>{t('Cancel')}</button>
+          <button type="submit" form="db-move-form" disabled={!!loading || !assignDbUserId}>{t('Save')}</button>
+        </>}>
+        {moving && <form id="db-move-form" onSubmit={(e) => { e.preventDefault(); assignDatabaseToUser(); }}>
+          <Field label={t('Owner')}>
+            <select value={assignDbUserId} onChange={e => setAssignDbUserId(e.target.value)}>
+              {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
+            </select>
+          </Field>
+        </form>}
+      </Drawer>
+    </>;
   }
 
   // --- Git repositories (operator, 2026-10-09) ------------------------------------------
@@ -8521,6 +8956,9 @@ function App() {
     </div>;
   }
 
+  // Git repositories, laid out as SNPanel lays out its lists: the page's
+  // header with Refresh and "New repository", one table row a repository
+  // (opening it), and the new one made in a side sheet.
   function renderGit() {
     if (gitRepo) return renderGitRepo();
     const info = gitInfo || {};
@@ -8529,71 +8967,75 @@ function App() {
     const set = patch => setGitForm(prev => ({ ...prev, ...patch }));
     const owner = isAdmin && form.owner_id ? users.find(user => user.id === Number(form.owner_id)) : currentUser;
     const home = owner ? `/home/${owner.username.toLowerCase()}/` : '/home/…/';
-    const createOpen = showCreateGit || (!!gitInfo && repos.length === 0);
     const canCreate = !!form.name.trim() && !!form.path.trim() && !!form.branch.trim()
       && (form.mode === 'init' || !!form.remote_url.trim()) && (form.auth_type !== 'https' || !!form.https_token.trim());
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('Git repositories')}</h2>
-          <p className="hint">{t("Clone a repository from GitHub, GitLab or Bitbucket anywhere in the account's home, or start one in a folder that already has files. Deploy pulls the latest code and runs the commands you pick; Commit & push sends what changed on the server.")}</p></div>
-        <div className="actions">
-          <button className="secondary" disabled={!!loading} onClick={loadGit}><RefreshCw size={14}/> {t('Refresh')}</button>
-          {!createOpen && <button type="button" onClick={() => setShowCreateGit(true)}><Plus size={15}/> {t('New repository')}</button>}
-        </div>
-      </div>
-
-      {createOpen && <div className="create-inline">
-        <div className="create-inline-head">
-          <strong>{t('New repository')}</strong>
-          {repos.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setShowCreateGit(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
-        </div>
-        <div className="segmented-control" role="tablist" aria-label={t('New repository')}>
-          <button type="button" role="tab" aria-selected={form.mode === 'clone'} className={form.mode === 'clone' ? 'active' : ''} onClick={() => set({ mode: 'clone' })}>{t('Clone from a URL')}</button>
-          <button type="button" role="tab" aria-selected={form.mode === 'init'} className={form.mode === 'init' ? 'active' : ''} onClick={() => set({ mode: 'init' })}>{t('New repository in a folder')}</button>
-        </div>
-        <p className="hint">{form.mode === 'clone'
+    const closeCreate = () => setShowCreateGit(false);
+    return <>
+      <PageHeader subtitle={t("Clone a repository from GitHub, GitLab or Bitbucket anywhere in the account's home, or start one in a folder that already has files. Deploy pulls the latest code and runs the commands you pick; Commit & push sends what changed on the server.")}
+        onRefresh={loadGit} refreshDisabled={!!loading}
+        actions={<button type="button" onClick={() => setShowCreateGit(true)}><Plus size={15} aria-hidden="true"/> {t('New repository')}</button>}/>
+      <section className="section dbt-section">
+        {gitInfo && repos.length === 0 && <EmptyState icon={GitBranch} title={t('No repositories yet.')}
+          message={t('Clone one from a URL, or start one in a folder that already has files.')}
+          action={{ label: t('New repository'), icon: Plus, onClick: () => setShowCreateGit(true) }} />}
+        {repos.length > 0 && <div className="dbt git-table" role="table" aria-label={t('Git repositories')}>
+          <div className="dbt-row dbt-head" role="row">
+            <span role="columnheader">{t('Repository')}</span>
+            <span role="columnheader">{t('Remote')}</span>
+            <span role="columnheader">{t('Branch')}</span>
+            <span role="columnheader">{t('State')}</span>
+          </div>
+          {repos.map(repo => <div className="dbt-row is-link" role="row" key={repo.id} tabIndex={0}
+            onClick={() => openGitRepo(repo.id)} onKeyDown={e => { if (e.key === 'Enter') openGitRepo(repo.id); }}
+            aria-label={t('Open {name}', { name: repo.name })}>
+            <span role="cell" className="dbt-name"><GitBranch size={15} aria-hidden="true"/><strong>{repo.name}</strong>
+              <small className="git-row-path">{isAdmin ? `${repo.owner} · ` : ''}~/{repo.relative_path}</small></span>
+            <span role="cell" data-label={t('Remote')}><code>{repo.remote_url || t('No remote')}</code></span>
+            <span role="cell" data-label={t('Branch')}><span className="badge"><GitBranch size={11} aria-hidden="true"/> {repo.branch}</span></span>
+            <span role="cell" data-label={t('State')} className="git-row-state">{gitRepoState(repo)}</span>
+          </div>)}
+        </div>}
+      </section>
+      <Drawer open={showCreateGit} onClose={closeCreate} wide title={t('New repository')}
+        subtitle={form.mode === 'clone'
           ? t('The folder must be empty or new; the panel creates it.')
-          : t('The folder may already have files: commit them and push them to an empty remote repository.')}</p>
-        <div className="git-create-grid">
-          {isAdmin && <div className="field"><span className="field-label">{t('Account')}</span>
-            <select value={form.owner_id} onChange={e => set({ owner_id: e.target.value })}>
-              <option value="">{currentUser?.username}</option>
-              {users.filter(user => user.id !== currentUser?.id).map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
-            </select>
-          </div>}
-          <div className="field"><span className="field-label">{t('Name')}</span>
-            <input value={form.name} maxLength={64} placeholder="shop" onChange={e => set({ name: e.target.value })} /></div>
-          <div className="field git-path-field"><span className="field-label">{t('Folder')}</span>
-            <div className="prefixed-input"><span>{home}</span>
-              <input value={form.path} maxLength={400} placeholder="example.com/public_html" onChange={e => set({ path: e.target.value.replace(/^\/+/, '') })} /></div></div>
-          <div className="field"><span className="field-label">{form.mode === 'clone' ? t('Repository URL') : t('Remote URL (optional)')}</span>
-            <input value={form.remote_url} maxLength={500} placeholder="https://github.com/owner/repo.git" onChange={e => set({ remote_url: e.target.value })} /></div>
-          <div className="field"><span className="field-label">{t('Branch')}</span>
-            <input value={form.branch} maxLength={100} placeholder="main" onChange={e => set({ branch: e.target.value })} /></div>
-          {renderGitAuthFields(form, set)}
-          {renderGitPhpField(form, set)}
-        </div>
-        {form.auth_type === 'ssh' && <p className="hint">{t('Use the SSH URL (git@github.com:owner/repo.git). The panel makes a key for this repository; add it as a deploy key on the remote, then press Clone.')}</p>}
-        <div className="field"><span className="field-label">{t('Run after each deploy')}</span>
-          {renderGitPresetChoice(form.deploy_commands, commands => set({ deploy_commands: commands }))}</div>
-        <div className="actions">
-          <button type="button" disabled={!canCreate || !!loading} onClick={createGitRepo}>
-            {form.mode === 'clone' ? <><CloudDownload size={14}/> {form.auth_type === 'ssh' ? t('Continue') : t('Clone')}</> : <><Plus size={14}/> {t('Create repository')}</>}
+          : t('The folder may already have files: commit them and push them to an empty remote repository.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={closeCreate}>{t('Cancel')}</button>
+          <button type="submit" form="git-create-form" disabled={!canCreate || !!loading}>
+            {form.mode === 'clone' ? <><CloudDownload size={14} aria-hidden="true"/> {form.auth_type === 'ssh' ? t('Continue') : t('Clone')}</> : <><Plus size={14} aria-hidden="true"/> {t('Create repository')}</>}
           </button>
-        </div>
-      </div>}
-
-      {gitInfo && repos.length === 0 && !createOpen && <EmptyState icon={GitBranch} message="No repositories yet." />}
-      {repos.length > 0 && <div className="table">
-        {repos.map(repo => <div className="row git-row" key={repo.id} role="button" tabIndex={0}
-          onClick={() => openGitRepo(repo.id)} onKeyDown={e => { if (e.key === 'Enter') openGitRepo(repo.id); }}>
-          <span className="git-row-name"><strong>{repo.name}</strong><small>{isAdmin ? `${repo.owner} · ` : ''}~/{repo.relative_path}</small></span>
-          <span className="git-row-remote"><code>{repo.remote_url || t('No remote')}</code></span>
-          <span><span className="badge"><GitBranch size={11}/> {repo.branch}</span></span>
-          <span className="git-row-state">{gitRepoState(repo)}</span>
-        </div>)}
-      </div>}
-    </section>;
+        </>}>
+        <form id="git-create-form" className="git-drawer-form" onSubmit={(e) => { e.preventDefault(); if (canCreate) createGitRepo(); }}>
+          <div className="segmented-control" role="tablist" aria-label={t('New repository')}>
+            <button type="button" role="tab" aria-selected={form.mode === 'clone'} className={form.mode === 'clone' ? 'active' : ''} onClick={() => set({ mode: 'clone' })}>{t('Clone from a URL')}</button>
+            <button type="button" role="tab" aria-selected={form.mode === 'init'} className={form.mode === 'init' ? 'active' : ''} onClick={() => set({ mode: 'init' })}>{t('New repository in a folder')}</button>
+          </div>
+          <div className="git-create-grid">
+            {isAdmin && <div className="field"><span className="field-label">{t('Account')}</span>
+              <select value={form.owner_id} onChange={e => set({ owner_id: e.target.value })}>
+                <option value="">{currentUser?.username}</option>
+                {users.filter(user => user.id !== currentUser?.id).map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+              </select>
+            </div>}
+            <div className="field"><span className="field-label">{t('Name')}</span>
+              <input value={form.name} maxLength={64} placeholder="shop" onChange={e => set({ name: e.target.value })} /></div>
+            <div className="field git-path-field"><span className="field-label">{t('Folder')}</span>
+              <div className="prefixed-input"><span>{home}</span>
+                <input value={form.path} maxLength={400} placeholder="example.com/public_html" onChange={e => set({ path: e.target.value.replace(/^\/+/, '') })} /></div></div>
+            <div className="field"><span className="field-label">{form.mode === 'clone' ? t('Repository URL') : t('Remote URL (optional)')}</span>
+              <input value={form.remote_url} maxLength={500} placeholder="https://github.com/owner/repo.git" onChange={e => set({ remote_url: e.target.value })} /></div>
+            <div className="field"><span className="field-label">{t('Branch')}</span>
+              <input value={form.branch} maxLength={100} placeholder="main" onChange={e => set({ branch: e.target.value })} /></div>
+            {renderGitAuthFields(form, set)}
+            {renderGitPhpField(form, set)}
+          </div>
+          {form.auth_type === 'ssh' && <p className="hint">{t('Use the SSH URL (git@github.com:owner/repo.git). The panel makes a key for this repository; add it as a deploy key on the remote, then press Clone.')}</p>}
+          <div className="field"><span className="field-label">{t('Run after each deploy')}</span>
+            {renderGitPresetChoice(form.deploy_commands, commands => set({ deploy_commands: commands }))}</div>
+        </form>
+      </Drawer>
+    </>;
   }
 
   function renderGitRepo() {
@@ -8747,130 +9189,119 @@ function App() {
     </section>;
   }
 
+  // SFTP, as SNPanel's (pages/Sftp.jsx there): every login of the account in
+  // one list - its main login first, then the extra ones, each shut into one
+  // website - with the password change folding open under its row. A new
+  // login is made in a side sheet; its password is shown once, above the list.
   function renderSftp() {
     const host = sftpAccounts.find(account => account.host)?.host || window.location.hostname;
     const port = 22;
     const mainUsername = currentUser?.sftp_username || currentUser?.username || '';
-    // Extra SFTP accounts are not limited, as in OPanel.
-    const createOpen = showCreateSftp;
     const canCreate = !!selectedWebsiteId && newSftpAccount.label.trim().length >= 2;
     const editing = sftpPasswordFor;
     const editingOwn = !!editing && !editing.account;
     const canSavePassword = !!editing && editing.password.length >= 12
       && (!editingOwn || (!!editing.current_password && (!currentUser?.totp_enabled || editing.code.trim().length >= 6)));
+    const startEditing = (account) => setSftpPasswordFor(editing && (editing.account?.id ?? null) === (account?.id ?? null)
+      ? null : { account, password: generateRandomPassword(), current_password: '', code: '' });
+    const passwordForm = () => <form className="sftp-inline" aria-label={t('Change password')}
+      onSubmit={(e) => { e.preventDefault(); if (canSavePassword) saveSftpPassword(); }}>
+      <div className="sftp-field">
+        <label htmlFor="sftp-new-password">{t('New password')}</label>
+        <PasswordField id="sftp-new-password" value={editing.password} revealed copy generate
+          onChange={(value) => setSftpPasswordFor(prev => ({ ...prev, password: value }))} />
+      </div>
+      {editingOwn && <div className="sftp-field">
+        <label htmlFor="sftp-proof-password">{t('Current panel password')}</label>
+        <input id="sftp-proof-password" type="password" autoComplete="current-password" value={editing.current_password}
+          onChange={e => setSftpPasswordFor(prev => ({ ...prev, current_password: e.target.value }))} />
+      </div>}
+      {editingOwn && currentUser?.totp_enabled && <div className="sftp-field">
+        <label htmlFor="sftp-proof-code">{t('Authenticator code')}</label>
+        <input id="sftp-proof-code" inputMode="numeric" autoComplete="one-time-code" maxLength={12} value={editing.code}
+          onChange={e => setSftpPasswordFor(prev => ({ ...prev, code: e.target.value }))} />
+      </div>}
+      <p className="hint sftp-inline-note">{t('Copy it before saving — it is not shown again. Open sessions of this login keep running until they disconnect.')}</p>
+      <div className="sftp-inline-actions">
+        <button type="submit" disabled={!!loading || !canSavePassword}><Save size={14} aria-hidden="true"/> {t('Save')}</button>
+        <button type="button" className="secondary" onClick={() => setSftpPasswordFor(null)}>{t('Cancel')}</button>
+      </div>
+    </form>;
+    const closeCreate = () => setShowCreateSftp(false);
     return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('SFTP connection')}</h2>
-            <p className="hint">{t('Use FileZilla, WinSCP, Cyberduck or any SFTP client. SSH shells are not available; each login only sees its own folder.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="sftp-connect-grid">
-          {renderCopyBlock(t('Host'), host)}
-          {renderCopyBlock(t('Port'), String(port))}
-          {mainUsername && renderCopyBlock(t('Username'), mainUsername)}
-        </div>
-        {mainUsername && <div className="info-box sftp-primary">
-          <strong>{t('Your main login')}</strong>
-          {currentUser?.sftp_password_set_at
-            ? <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')} {t('It reaches every website on this account.')}</p>
-            : <p className="hint alarm">{t('This login still uses your panel password. Anyone who guesses it over SFTP is also in the panel. Set a separate password — your panel password will stop working for SFTP the moment you do.')}</p>}
-          <div className="actions"><button className="mini secondary" onClick={() => setSftpPasswordFor({ account: null, password: generateRandomPassword(), current_password: '', code: '' })}><KeyRound size={13}/> {t('Change password')}</button></div>
+      <PageHeader subtitle={t('Connect with FileZilla, WinSCP or any SFTP app - host {host}, port {port}. Each account sees only its own folder.', { host, port })}
+        onRefresh={loadSftpAccounts} refreshDisabled={!!loading}
+        actions={<button type="button" onClick={() => setShowCreateSftp(true)}><Plus size={15} aria-hidden="true"/> {t('Add an SFTP account')}</button>}/>
+      <section className="section sftp-page" aria-label={t('SFTP accounts')}>
+        {createdSftpInfo && <div className="sftp-shown" role="status">
+          <span>{t('Password of {name}:', { name: createdSftpInfo.username })}</span>
+          {createdSftpInfo.password ? <code>{createdSftpInfo.password}</code> : <span>{t('as you typed it')}</span>}
+          {createdSftpInfo.password && <button type="button" className="mini secondary-light"
+            onClick={() => copyText(createdSftpInfo.password, t('Copied to clipboard.'))}><Copy size={13} aria-hidden="true"/> {t('Copy')}</button>}
+          <button type="button" className="mini secondary-light" onClick={() => setCreatedSftpInfo(null)} aria-label={t('Close')}><X size={13} aria-hidden="true"/></button>
+          <small>{t('Folder: {folder}', { folder: createdSftpInfo.path })}{createdSftpInfo.password ? ` · ${t('Shown this once. Copy it now.')}` : ''}</small>
         </div>}
+        <ul className="sftp-list">
+          {mainUsername && <li>
+            <FolderKey size={16} aria-hidden="true"/>
+            <div className="sftp-row-text">
+              <strong><code>{mainUsername}</code> <span className="badge">{t('Main')}</span></strong>
+              <small>{currentUser?.sftp_password_set_at
+                ? t('Every website on this account · a password of its own')
+                : t('Every website on this account · the panel password')}</small>
+              {!currentUser?.sftp_password_set_at && <small className="sftp-warn">{t('Anyone who guesses the panel password over SFTP is also in the panel. Set a separate password: the panel password stops working for SFTP the moment you do.')}</small>}
+            </div>
+            <div className="sftp-row-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} aria-expanded={editingOwn}
+                onClick={() => startEditing(null)}><KeyRound size={14} aria-hidden="true"/> {t('Change password')}</button>
+            </div>
+            {editingOwn && passwordForm()}
+          </li>}
+          {sftpAccounts.map(account => <li key={account.id} className={account.is_active ? '' : 'off'}>
+            <FolderKey size={16} aria-hidden="true"/>
+            <div className="sftp-row-text">
+              <strong><code>{account.username}</code>{account.label && <span className="sftp-label">{account.label}</span>}
+                {!account.is_active && <span className="badge">{t('Suspended')}</span>}</strong>
+              <small>{account.domain ? `${account.domain} · ` : ''}{t('Folder: {folder}', { folder: account.path })}</small>
+            </div>
+            <div className="sftp-row-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} aria-expanded={editing?.account?.id === account.id}
+                onClick={() => startEditing(account)}><KeyRound size={14} aria-hidden="true"/> {t('Change password')}</button>
+              <button type="button" className="danger icon-button" disabled={!!loading} onClick={() => deleteSftpAccount(account)}
+                aria-label={t('Delete {name}', { name: account.username })} title={t('Delete {name}', { name: account.username })}><Trash2 size={14} aria-hidden="true"/></button>
+            </div>
+            {editing?.account?.id === account.id && passwordForm()}
+          </li>)}
+        </ul>
+        {sftpAccounts.length === 0 && <p className="hint">{t('A separate login and password for one website — for a developer or designer who should see that website and nothing else.')}</p>}
         {mainUsername && renderCopyBlock(t('Command line'), `sftp -P ${port} ${mainUsername}@${host}`)}
       </section>
-
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Extra SFTP accounts')}</h2>
-            <p className="hint">{t('A separate login and password for one website — for a developer or designer who should see that website and nothing else.')}</p></div>
-          <div className="actions">
-            {!createOpen && <button type="button" onClick={() => setShowCreateSftp(true)}><Plus size={15}/> {t('New SFTP account')}</button>}
+      <Drawer open={showCreateSftp} onClose={closeCreate} title={t('New SFTP account')}
+        subtitle={t('A login of its own, shut into one website.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={closeCreate}>{t('Cancel')}</button>
+          <button type="submit" form="sftp-add-form" disabled={!!loading || !canCreate}><Plus size={14} aria-hidden="true"/> {t('Create account')}</button>
+        </>}>
+        <form id="sftp-add-form" className="sftp-add-form sftp-drawer-form" aria-label={t('New SFTP account')}
+          onSubmit={(e) => { e.preventDefault(); if (canCreate) createSftpAccount(); }}>
+          <div className="sftp-field">
+            <label>{t('Website')}</label>
+            <WebsiteSelect />
           </div>
-        </div>
-
-        {createOpen && <div className="create-inline">
-          <div className="create-inline-head">
-            <strong>{t('New SFTP account')}</strong>
-            <button type="button" className="secondary icon-only mini" onClick={() => setShowCreateSftp(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+          <div className="sftp-field">
+            <label htmlFor="sftp-add-name">{t('Name')}</label>
+            <input id="sftp-add-name" value={newSftpAccount.label} maxLength={32} autoComplete="off" spellCheck={false} placeholder={t('e.g. {example}', { example: 'designer' })}
+              onChange={e => setNewSftpAccount(prev => ({ ...prev, label: e.target.value }))} />
+            <small className="hint">{t('At least 2 characters. It names the login; the website decides what it can reach.')}</small>
           </div>
-          <div className="sftp-create-grid">
-            <div className="field"><span className="field-label">{t('Website')}</span><WebsiteSelect /></div>
-            <div className="field"><span className="field-label">{t('Name')}</span>
-              <input value={newSftpAccount.label} maxLength={32} placeholder={t('Name, e.g. designer')} aria-label={t('SFTP account name')}
-                onChange={e => setNewSftpAccount(prev => ({ ...prev, label: e.target.value }))} />
-            </div>
-            <div className="field"><span className="field-label">{t('Password')}</span>
-              <div className="password-with-generate">
-                <input value={newSftpAccount.password} placeholder={t('password (empty = generate)')} aria-label={t('SFTP password')}
-                  onChange={e => setNewSftpAccount(prev => ({ ...prev, password: e.target.value }))} />
-                <button type="button" className="secondary icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setNewSftpAccount(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={15}/></button>
-              </div>
-            </div>
-            <button className="sftp-create-submit" disabled={!canCreate || !!loading} onClick={createSftpAccount}><Plus size={14}/> {t('Create')}</button>
+          <div className="sftp-field">
+            <label htmlFor="sftp-add-password">{t('Password')}</label>
+            <PasswordField id="sftp-add-password" value={newSftpAccount.password} generate copy placeholder={t('Empty: one is generated')}
+              onChange={(value) => setNewSftpAccount(prev => ({ ...prev, password: value }))} />
           </div>
           <p className="hint">{t('Each account reaches one website and nothing else — not your other sites, and not the server. It signs in over SFTP on port 22 with its own password, which is separate from your panel password.')}</p>
-        </div>}
-
-        {createdSftpInfo && <div className="info-box">
-          <div className="create-inline-head">
-            <strong>{t('SFTP account ready')}</strong>
-            <button type="button" className="secondary icon-only mini" onClick={() => setCreatedSftpInfo(null)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
-          </div>
-          <div className="sftp-connect-grid">
-            {renderCopyBlock(t('Host'), createdSftpInfo.host)}
-            {renderCopyBlock(t('Port'), String(createdSftpInfo.port))}
-            {renderCopyBlock(t('Username'), createdSftpInfo.username)}
-            {createdSftpInfo.password && renderCopyBlock(t('Password'), createdSftpInfo.password)}
-          </div>
-          <p className="hint">{t('Folder')}: <code>{createdSftpInfo.path}</code></p>
-          {createdSftpInfo.password && <p className="hint">{t('This password is shown once. It is not stored anywhere the panel can read it back.')}</p>}
-        </div>}
-
-        {sftpAccounts.length === 0 && !createOpen && !createdSftpInfo && <EmptyState icon={KeyRound} message={t('No extra SFTP accounts yet.')} />}
-        {sftpAccounts.length > 0 && <div className="table">
-          {sftpAccounts.map(account => <div className="row sftp-row" key={account.id}>
-            <span className="sftp-row-name"><strong>{account.username}</strong><small>{account.label}{account.is_active ? '' : ` · ${t('Suspended')}`}</small></span>
-            <span className="sftp-row-folder"><code>{account.path}</code>{account.domain && <small>{account.domain}</small>}</span>
-            <span className="row-actions">
-              <button className="mini secondary" disabled={!!loading} onClick={() => setSftpPasswordFor({ account, password: generateRandomPassword(), current_password: '', code: '' })}><KeyRound size={13}/> {t('Change password')}</button>
-              <button className="mini danger" disabled={!!loading} onClick={() => deleteSftpAccount(account)} aria-label={t('Delete {name}', { name: account.username })} title={t('Delete')}><Trash2 size={13}/></button>
-            </span>
-          </div>)}
-        </div>}
-      </section>
-
-      {editing && <div className="modal-overlay" onClick={() => setSftpPasswordFor(null)}>
-        <div className="modal-card" onClick={e => e.stopPropagation()}>
-          <div className="modal-header">
-            <h3>{t('New password')} — {editing.account ? editing.account.username : mainUsername}</h3>
-            <button className="secondary-light" onClick={() => setSftpPasswordFor(null)} aria-label={t('Close')}><X size={16}/></button>
-          </div>
-          <div className="modal-body">
-            <div className="password-with-generate">
-              <input value={editing.password} onChange={e => setSftpPasswordFor(prev => ({ ...prev, password: e.target.value }))} aria-label={t('New password')} />
-              <button type="button" className="secondary icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setSftpPasswordFor(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={15}/></button>
-              <button type="button" className="secondary icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(editing.password, t('Copied to clipboard.'))}><Copy size={15}/></button>
-            </div>
-            {editingOwn && <>
-              <label className="field"><span className="field-label">{t('Current password')}</span>
-                <input type="password" value={editing.current_password} autoComplete="current-password" placeholder={t('Required to confirm')}
-                  onChange={e => setSftpPasswordFor(prev => ({ ...prev, current_password: e.target.value }))} />
-              </label>
-              {currentUser?.totp_enabled && <label className="field"><span className="field-label">{t('2FA code')}</span>
-                <input value={editing.code} maxLength={12} inputMode="numeric" placeholder={t('6-digit code')}
-                  onChange={e => setSftpPasswordFor(prev => ({ ...prev, code: e.target.value }))} />
-              </label>}
-            </>}
-            <p className="hint">{t('Copy it before saving — it is not shown again. Open sessions of this login keep running until they disconnect.')}</p>
-            {editingOwn && <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')}</p>}
-          </div>
-          <div className="modal-actions">
-            <button className="secondary-light" onClick={() => setSftpPasswordFor(null)}>{t('Cancel')}</button>
-            <button disabled={!!loading || !canSavePassword} onClick={saveSftpPassword}><Save size={14}/> {t('Save')}</button>
-          </div>
-        </div>
-      </div>}
+        </form>
+      </Drawer>
     </>;
   }
 
@@ -8884,7 +9315,7 @@ function App() {
   function renderSchedulePicker(key, value, onChange, inputId) {
     const preset = CRON_PRESETS.find(([expr]) => expr === normalizeCron(value));
     const custom = customSchedules[key] || !preset;
-    return <div className="schedule-picker">
+    return <div className="schedule-picker cron-schedule">
       <select value={custom ? 'custom' : preset[0]} onChange={e => {
         const next = e.target.value;
         if (next === 'custom') {
@@ -8898,7 +9329,7 @@ function App() {
         {CRON_PRESETS.map(([expr, label]) => <option key={expr} value={expr}>{t(label)}</option>)}
         <option value="custom">{t('Custom…')}</option>
       </select>
-      <input id={inputId} value={value} spellCheck={false} placeholder="*/15 * * * *" aria-label={t('Cron expression')}
+      <input id={inputId} className="cron-schedule-input" value={value} spellCheck={false} placeholder="*/15 * * * *" aria-label={t('Cron expression')}
         onChange={e => { setCustomSchedules(prev => ({ ...prev, [key]: true })); onChange(e.target.value); }} />
     </div>;
   }
@@ -8919,40 +9350,49 @@ function App() {
     ];
   }
 
+  // Cron, as SNPanel's (pages/Cron.jsx there): the website, a schedule picked
+  // by name beside its expression, the command, and the jobs below - each
+  // expression in a box with its preset's name.
   function renderCron() {
     const sitePhpVersion = cronPhpInfo.php_version || currentSite?.php_version || '';
     const sitePhpBinary = cronPhpInfo.php_binary || (sitePhpVersion ? `/usr/bin/php${sitePhpVersion}` : 'php');
     const templates = cronCommandTemplates(currentSite);
     const template = templates.find(([, , command]) => command === cronCommand.trim());
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('Cron manager')}</h2></div>
-        <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/> {t('Refresh')}</button>
-      </div>
-      <div className="cron-builder">
-        <div className="field"><span className="field-label">{t('Website')}</span><WebsiteSelect /></div>
-        <div className="field"><span className="field-label">{t('Schedule')}</span>{renderSchedulePicker('cron', cronSchedule, setCronSchedule, 'cron-schedule-input')}</div>
-        <div className="field"><span className="field-label">{t('Command template')}</span>
-          <select value={template ? template[0] : 'custom'} onChange={e => { const picked = templates.find(([key]) => key === e.target.value); if (picked) setCronCommand(picked[2]); }}>
-            {templates.map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}
-            <option value="custom">{t('Custom command')}</option>
-          </select>
+    const presetName = (expr) => CRON_PRESETS.find(([value]) => value === normalizeCron(expr))?.[1];
+    return <>
+      <PageHeader subtitle={selectedWebsiteId
+        ? t('Cron runs as {user} for the selected website.', { user: cronUser || currentSite?.linux_user || 'www-data' })
+        : t('Pick a website to see and add its cron jobs.')}
+        onRefresh={listCron} refreshDisabled={!selectedWebsiteId || !!loading}/>
+      <section className="section">
+        <div className="cron-builder">
+          <div className="field"><span className="field-label">{t('Website')}</span><WebsiteSelect /></div>
+          <div className="field"><span className="field-label">{t('Schedule')}</span>{renderSchedulePicker('cron', cronSchedule, setCronSchedule, 'cron-schedule-input')}</div>
+          <div className="field"><span className="field-label">{t('Command template')}</span>
+            <select value={template ? template[0] : 'custom'} onChange={e => { const picked = templates.find(([key]) => key === e.target.value); if (picked) setCronCommand(picked[2]); }}>
+              {templates.map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}
+              <option value="custom">{t('Custom command')}</option>
+            </select>
+          </div>
+          <div className="field"><span className="field-label">{t('Command')}</span>
+            <input value={cronCommand} spellCheck={false} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
+          </div>
+          <button type="button" className="cron-add" disabled={!selectedWebsiteId || !cronCommand.trim() || !!loading} onClick={addCron}><Plus size={14} aria-hidden="true"/> {t('Add cron')}</button>
         </div>
-        <div className="field"><span className="field-label">{t('Command')}</span>
-          <input value={cronCommand} spellCheck={false} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
+        {selectedWebsiteId && <div className="cron-help">
+          <p>{t('Write {php} and BPanel rewrites it to {binary} - the PHP CLI this website is set to, so the job never runs on the server default version.', { php: <code>php</code>, binary: <code>{sitePhpBinary}</code> })}</p>
+          <p className="cron-help-note">{t('Only WP-CLI maintenance commands, or a {ext} file inside {folder}, are accepted.', { ext: <code>.php</code>, folder: <code>public_html</code> })}</p>
+        </div>}
+        <div className="cron-list">
+          {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message={t('No cron jobs found for this website.')} />}
+          {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
+            <span className="badge">#{item.index}</span>
+            <span><strong><code className="cron-item-expr">{item.schedule}</code>{presetName(item.schedule) && <em className="cron-item-when">{t(presetName(item.schedule))}</em>}</strong><small>{item.command || item.line}</small></span>
+            <button type="button" className="mini danger" disabled={!!loading} onClick={() => deleteCron(item.index)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
+          </div>)}
         </div>
-        <button className="cron-add" disabled={!selectedWebsiteId || !cronCommand.trim() || !!loading} onClick={addCron}><Plus size={14}/> {t('Add cron')}</button>
-      </div>
-      {selectedWebsiteId && <p className="hint">{t('Cron runs as')} <strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> {t('for the selected website. Accepted commands:')} {t('WP-CLI maintenance commands, or a')} <code>.php</code> {t('file inside public_html.')} {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>.</p>}
-      <div className="cron-list">
-        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message="No cron jobs found for this website." />}
-        {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
-          <span className="badge">#{item.index}</span>
-          <span><strong>{cronScheduleLabel(item.schedule)} <code className="cron-expr">{item.schedule}</code></strong><small>{item.command || item.line}</small></span>
-          <button className="mini danger" disabled={!!loading} onClick={() => deleteCron(item.index)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
-        </div>)}
-      </div>
-    </section>;
+      </section>
+    </>;
   }
 
   function renderChmodDialog() {
@@ -9017,102 +9457,154 @@ function App() {
     </div>;
   }
 
+  // The file manager, as SNPanel's (pages/Files.jsx there): what can be done
+  // in the folder is the toolbar; what can be done with a selection is a bar
+  // under it, there only while something is ticked; each row's own actions
+  // are one "…" menu. The columns sort, folders first.
   function renderFiles() {
-    const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
     const activeFileApp = currentFileApp();
     // The websites whose files these are: their own folders are not served.
     const servedDomains = activeFileApp
       ? websites.filter(site => String(site.app_id || '') === String(activeFileApp.id)).map(site => site.domain)
       : [];
     const targetKey = fileTargetKey();
+    const hasTarget = hasFileTarget();
     // A finished extraction leaves the list on its own; a failed one stays
     // until it is dismissed.
     const visibleFileJobs = fileJobs
       .filter(job => (job.target_key || `site:${job.website_id}`) === targetKey && job.status !== 'done')
       .slice(0, 4);
-    const selectedArchive = selectedFilePaths.length === 1
-      ? files.find(item => item.path === selectedFilePaths[0] && isArchiveFile(item))
-      : null;
-    const selectedChmodItems = files.filter(item => selectedFilePaths.includes(item.path));
-    return <section className="section">
+    const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
+    const selectedItems = files.filter(item => selectedFilePaths.includes(item.path));
+    const selectedArchive = selectedItems.length === 1 && isArchiveFile(selectedItems[0]) ? selectedItems[0] : null;
+    const firstDir = { name: 'asc', modified: 'desc', size: 'desc' };
+    const compare = (a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      const x = String(a.name).toLowerCase();
+      const y = String(b.name).toLowerCase();
+      const byName = x < y ? -1 : x > y ? 1 : 0;
+      const factor = fileSort.dir === 'desc' ? -1 : 1;
+      if (fileSort.key === 'modified') return ((Number(a.modified) || 0) - (Number(b.modified) || 0)) * factor || byName;
+      if (fileSort.key === 'size') return (a.is_dir ? 0 : ((Number(a.size) || 0) - (Number(b.size) || 0)) * factor) || byName;
+      return byName * factor;
+    };
+    const shownFiles = [...files].sort(compare);
+    const sortHeading = (column, label, className = '') => {
+      const active = fileSort.key === column;
+      const Arrow = fileSort.dir === 'asc' ? ArrowUp : ArrowDown;
+      return <button type="button" className={`file-sort ${className} ${active ? 'active' : ''}`}
+        onClick={() => setFileSort(prev => (prev.key === column ? { key: column, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key: column, dir: firstDir[column] }))}
+        aria-label={active
+          ? t('{column}: sorted {order}. Sort the other way', { column: label, order: fileSort.dir === 'asc' ? t('ascending') : t('descending') })
+          : t('Sort by {column}', { column: label })}>
+        {label}{active && <Arrow size={12} aria-hidden="true"/>}
+      </button>;
+    };
+    return <>
       {renderChmodDialog()}
-      <div className="section-title">
-        <div><h2>{t('File manager')}</h2></div>
-        <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> {t('Refresh')}</button>
-      </div>
-      <div className="file-manager">
-        <div className="file-panel">
-          <div className="file-controls">
-            <FileTargetSelect />
-            {activeFileApp
-              ? <div className="file-meta">
-                <span>{t('Application:')} <strong>{activeFileApp.name}</strong></span>
-                {servedDomains.length > 0 && <span>{t('Serves:')} <strong>{servedDomains.join(', ')}</strong></span>}
-                <span>{t('Root:')} <strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
+      <PageHeader onRefresh={() => listFiles(fileListPath)} refreshDisabled={!hasTarget || !!loading}/>
+      <section className="section">
+        <div className="file-manager">
+          <div className="file-panel">
+            <div className="file-controls">
+              <FileTargetSelect />
+              {activeFileApp
+                ? <div className="file-meta">
+                  <span>{t('Application:')} <strong>{activeFileApp.name}</strong></span>
+                  {servedDomains.length > 0 && <span>{t('Serves:')} <strong>{servedDomains.join(', ')}</strong></span>}
+                  <span>{t('Root:')} <strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                  {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
+                </div>
+                : currentSite && <div className="file-meta">
+                  <span>{t('Website:')} <strong>{currentSite.domain}</strong></span>
+                  <span>{t('Root:')} <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                  {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
+                </div>}
+              <div className="path-pill breadcrumb-line">
+                <button className="crumb" disabled={!hasTarget || fileListPath === ''} onClick={() => listFiles('')}>{t('root')}</button>
+                {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
               </div>
-              : currentSite && <div className="file-meta">
-                <span>{t('Website:')} <strong>{currentSite.domain}</strong></span>
-                <span>{t('Root:')} <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
+              <div className="file-toolbar fm-toolbar">
+                <button className="secondary-light" disabled={!hasTarget || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}><CornerLeftUp size={14} aria-hidden="true"/> {t('Up')}</button>
+                <button className="secondary-light" disabled={!hasTarget || !!loading} onClick={makeFileDirectory}><FolderPlus size={14} aria-hidden="true"/> {t('New folder')}</button>
+                <button className="secondary-light" disabled={!hasTarget || !!loading} onClick={makeFile}><FilePlus size={14} aria-hidden="true"/> {t('New file')}</button>
+                <label className={`upload-button ${(!hasTarget || !!loading) ? 'disabled' : ''}`}>
+                  <Upload size={14} aria-hidden="true"/> {t('Upload')}
+                  <input type="file" disabled={!hasTarget || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
+                </label>
+              </div>
+              {selectedFilePaths.length > 0 && <div className="fm-selection" role="region" aria-label={t('Selected items')}>
+                <strong>{t('{count} selected', { count: selectedFilePaths.length })}</strong>
+                <div className="fm-selection-actions">
+                  <button className="secondary-light" disabled={!!loading} onClick={() => copySelectedFiles()}><Copy size={14} aria-hidden="true"/> {t('Copy')}</button>
+                  <button className="secondary-light" disabled={!!loading} onClick={() => moveSelectedFiles()}><MoveRight size={14} aria-hidden="true"/> {t('Move')}</button>
+                  <ActionMenu text={t('Archive')} icon={Archive} label={t('Compress the selection')} disabled={!!loading} items={[
+                    { label: t('Compress as {format}', { format: '.zip' }), icon: Archive, onClick: () => archiveSelectedFiles('zip') },
+                    { label: t('Compress as {format}', { format: '.tar.gz' }), icon: Archive, onClick: () => archiveSelectedFiles('tar.gz') },
+                  ]}/>
+                  {selectedArchive && <button className="secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(selectedArchive.path)}><ArchiveRestore size={14} aria-hidden="true"/> {t('Extract')}</button>}
+                  <button className="secondary-light" disabled={!!loading} onClick={() => openChmodDialog(selectedItems)}><Lock size={14} aria-hidden="true"/> {t('Permissions')}</button>
+                  <button className="danger" disabled={!!loading} onClick={() => deleteSelectedFiles()}><Trash2 size={14} aria-hidden="true"/> {t('Delete')}</button>
+                </div>
+                <button type="button" className="secondary-light fm-selection-clear" onClick={() => setSelectedFilePaths([])}><X size={14} aria-hidden="true"/> {t('Clear selection')}</button>
               </div>}
-            <div className="path-pill breadcrumb-line">
-              <button className="crumb" disabled={!hasFileTarget() || fileListPath === ''} onClick={() => listFiles('')}>{t('root')}</button>
-              {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
+              {visibleFileJobs.length > 0 && <div className="file-job-list">
+                {visibleFileJobs.map(job => <div className={`file-job ${job.status}`} key={job.job_id}>
+                  <Clock size={14} aria-hidden="true"/>
+                  <span><strong>{job.archive_path?.split('/').pop() || t('Archive')}</strong> {job.status === 'error' ? t('failed') : job.status}</span>
+                  {job.error && <small>{job.error}</small>}
+                  <button type="button" className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label={t('Dismiss')} title={t('Dismiss')}><X size={13} aria-hidden="true"/></button>
+                </div>)}
+              </div>}
             </div>
-            <div className="file-toolbar">
-              <button className="secondary" disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>{t('Up')}</button>
-              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/> {t('Folder')}</button>
-              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/> {t('File')}</button>
-              <label className={`upload-button ${(!hasFileTarget() || !!loading) ? 'disabled' : ''}`}>
-                <Upload size={14}/> {t('Upload')}
-                <input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
-              </label>
-              <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)} disabled={!hasFileTarget() || !!loading}>
-                <option value="zip">zip</option>
-                <option value="tar.gz">tar.gz</option>
-              </select>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/> {t('Copy')}</button>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/> {t('Move')}</button>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> {t('Archive')}</button>
-              <button className="secondary" disabled={!selectedArchive || !!loading} onClick={() => extractArchiveFile(selectedArchive.path)}><PackageOpen size={14}/> {t('Extract')}</button>
-              <button className="secondary" disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/> {t('Permissions')}</button>
-              <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> {t('Delete')}</button>
-            </div>
-            {visibleFileJobs.length > 0 && <div className="file-job-list">
-              {visibleFileJobs.map(job => <div className={`file-job ${job.status}`} key={job.job_id}>
-                <Clock size={14}/>
-                <span><strong>{job.archive_path?.split('/').pop() || t('Archive')}</strong> {job.status === 'done' ? t('completed') : job.status === 'error' ? t('failed') : job.status}</span>
-                {job.error && <small>{job.error}</small>}
-                <button className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label={t('Dismiss')} title={t('Dismiss')}><X size={13}/></button>
-              </div>)}
-            </div>}
-          </div>
-          <div className="file-list-header">
-            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /> {t('Select')}</label>
-            <span>{t('{n} item(s)', { n: files.length })}</span>
-          </div>
-          <div className="file-list">
-            {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
-            {files.map(item => <div className={`file-item ${selectedFilePaths.includes(item.path) ? 'selected' : ''}`} key={item.path}>
-              <input type="checkbox" checked={selectedFilePaths.includes(item.path)} onChange={() => toggleFileSelection(item.path)} />
-              <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
-                {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
-              </button>
-              <button type="button" className="file-mode" disabled={!!loading} title={t('Change permissions')} aria-label={t('Change permissions of {name}', { name: item.name })}
-                onClick={() => openChmodDialog(item)}>{item.mode || '---'}</button>
-              <span className="file-size">{item.is_dir ? t('Folder') : formatBytes(item.size)}{item.modified ? <span className="file-date-inline"> · {formatFileTime(item.modified)}</span> : null}</span>
-              <span className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>
-              <div className="file-row-actions">
-                {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)} aria-label={t('Download')} title={t('Download')}><Download size={13}/></button>}
-                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><PackageOpen size={13}/> {t('Extract')}</button>}
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>{t('Rename')}</button>
+            <div className="file-list">
+              <div className="file-list-header">
+                <input type="checkbox" checked={allSelected} ref={el => { if (el) el.indeterminate = selectedFilePaths.length > 0 && !allSelected; }}
+                  onChange={toggleAllFiles} disabled={files.length === 0} aria-label={t('Select all')}/>
+                <div className="file-col-name">
+                  {sortHeading('name', t('Name'))}
+                  <span className="file-count">{t('{n} item(s)', { n: files.length })}</span>
+                </div>
+                <span className="file-col-mode">{t('Permissions')}</span>
+                {sortHeading('size', t('Size'), 'file-col-size')}
+                {sortHeading('modified', t('Modified'), 'file-col-date')}
+                <span className="file-col-actions" aria-hidden="true"></span>
               </div>
-            </div>)}
+              {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
+              {shownFiles.map(item => <div className={`file-item ${selectedFilePaths.includes(item.path) ? 'selected' : ''}`} key={item.path}>
+                <input type="checkbox" checked={selectedFilePaths.includes(item.path)} onChange={() => toggleFileSelection(item.path)} aria-label={t('Select {name}', { name: item.name })}/>
+                <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
+                  {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
+                </button>
+                <button type="button" className="file-mode" disabled={!!loading}
+                  title={t('Permissions {value} - click to change', { value: item.mode || '---' })}
+                  aria-label={t('Change permissions of {name}', { name: item.name })}
+                  onClick={() => openChmodDialog(item)}>{item.mode || '---'}</button>
+                <span className="file-facts">
+                  <span className="file-size">{item.is_dir ? t('Folder') : formatBytes(item.size)}</span>
+                  <time className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</time>
+                </span>
+                <div className="file-row-actions">
+                  <ActionMenu label={t('More actions for {name}', { name: item.name })} items={[
+                    { label: t('Open'), icon: FolderOpen, hidden: !item.is_dir, onClick: () => listFiles(item.path) },
+                    { label: t('Edit in a new tab'), icon: FilePen, hidden: item.is_dir || !isTextEditable(item), onClick: () => openFileEditorTab(item.path) },
+                    { label: t('Download'), icon: Download, hidden: item.is_dir, disabled: !!loading, onClick: () => downloadFile(item.path) },
+                    { label: t('Extract'), icon: ArchiveRestore, hidden: !isArchiveFile(item), disabled: !!loading, onClick: () => extractArchiveFile(item.path) },
+                    'separator',
+                    { label: t('Rename'), icon: PencilLine, disabled: !!loading, onClick: () => renameFileItem(item) },
+                    { label: t('Copy'), icon: Copy, disabled: !!loading, onClick: () => copySelectedFiles([item.path]) },
+                    { label: t('Move'), icon: MoveRight, disabled: !!loading, onClick: () => moveSelectedFiles([item.path]) },
+                    { label: t('Permissions'), icon: Lock, disabled: !!loading, onClick: () => openChmodDialog(item) },
+                    'separator',
+                    { label: t('Delete'), icon: Trash2, danger: true, disabled: !!loading, onClick: () => deleteSelectedFiles([item.path]) },
+                  ]}/>
+                </div>
+              </div>)}
+            </div>
           </div>
         </div>
-      </div>
-    </section>;
+      </section>
+    </>;
   }
 
   // ISO time from the server as the file manager shows times.
@@ -9338,8 +9830,14 @@ function App() {
     </div>;
   }
 
+  // Backups, as SNPanel's (pages/Backups.jsx there): one Refresh in the
+  // page's head for the tab shown; Backup (a website, or for an administrator
+  // a whole account), Restore, Schedules, Destinations and Logs as tabs;
+  // what is still running listed above them; each file's Download and Restore
+  // as buttons and the rest in a "…" menu; a new schedule or destination in a
+  // side sheet; a backup asks first, saying what goes in and where it goes.
   function renderBackups() {
-    const selectedBackupUser = users.find(user => String(user.id) === String(selectedBackupUserId));
+    const busy = !!loading;
     const jobTitle = job => ({ site_backup: t('Website backup'), user_backup: t('Full user backup'), sftp_backup: t('SFTP backup'), user_restore: t('Restore') }[job.kind] || t('Backup task'));
     const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
     const jobTimestamp = job => {
@@ -9347,346 +9845,413 @@ function App() {
       if (!stamp) return t('No timestamp');
       const date = new Date(stamp);
       return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Asia/Ho_Chi_Minh',
-        hour12: false,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
+        timeZone: 'Asia/Ho_Chi_Minh', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric',
       }).format(date).replace(',', '');
     };
+    const jobBadge = job => <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>;
     const nameSuffixLabels = { none: 'Append: nothing', day_of_week: 'Append: day of week', week_of_month: 'Append: week of month', full_date: 'Append: full date' };
-    const backupTabs = isAdmin
-      ? [
-        ['website', 'Backup website', Globe],
-        ['user', 'Backup user', Users],
-        ['restore', 'Restore', RotateCcw],
-        ['schedule', 'Scheduled backups', Clock],
-        ['destination', 'Backup Destination', Network],
-        ['logs', 'Backup logs', FileText],
-      ]
-      : [
-        ['website', 'Backup website', Globe],
-        ['logs', 'Backup logs', FileText],
-      ];
-    const activeBackupTab = backupTabs.some(([id]) => id === backupTab) ? backupTab : 'website';
+    const tabs = [
+      { id: 'website', label: t('Backup'), icon: Archive },
+      { id: 'restore', label: t('Restore'), icon: RotateCcw, hidden: !isAdmin },
+      { id: 'schedule', label: t('Schedules'), icon: Clock, hidden: !isAdmin },
+      { id: 'destination', label: t('Destinations'), icon: Network, hidden: !isAdmin },
+      { id: 'logs', label: t('Logs'), icon: FileText },
+    ];
+    const wanted = backupTab === 'user' ? 'website' : backupTab;
+    const active = tabs.some(tab => tab.id === wanted && !tab.hidden) ? wanted : 'website';
+    const scope = isAdmin && backupTab === 'user' ? 'user' : 'website';
+    const runningJobs = backupJobs.filter(job => job.status === 'running' || job.status === 'queued');
+    const targetName = id => sftpTargets.find(target => target.id === id)?.name;
 
-    return <section className="section backups-page">
-      <h2>{t('Backups')}</h2>
-      <div className="segmented-control backup-tabs" role="tablist" aria-label={t('Backup sections')}>
-        {backupTabs.map(([id, label, Icon]) => <button
-          key={id}
-          type="button"
-          role="tab"
-          aria-selected={activeBackupTab === id}
-          className={activeBackupTab === id ? 'active' : ''}
-          onClick={() => setBackupTab(id)}
-        ><Icon size={14}/>{t(label)}</button>)}
+    async function confirmSiteBackup() {
+      const site = websites.find(item => String(item.id) === String(selectedWebsiteId));
+      if (!site) return;
+      const dbs = databases.filter(db => String(db.website_id) === String(site.id));
+      const ok = await confirmDialog({
+        title: t('Back up {domain}?', { domain: site.domain }),
+        body: <><dl className="bk-summary">
+          <div><dt>{t('What goes in')}</dt><dd>
+            {t('The files in {path}', { path: <code>{site.root_path}</code> })}
+            <br/>{dbs.length ? t('An SQL export of {count} database(s): {names}', { count: dbs.length, names: dbs.map(db => db.db_name).join(', ') }) : t('No database is attached to this website.')}
+          </dd></div>
+          <div><dt>{t('Where it goes')}</dt><dd>{t("This server, in the website's backup list: download or restore it from there.")}</dd></div>
+        </dl><p className="hint">{t('It runs on the server: you can leave this page.')}</p></>,
+        confirmLabel: t('Create backup'), wide: true,
+      });
+      if (ok) createBackup();
+    }
+    async function confirmUserBackup() {
+      const user = users.find(item => String(item.id) === String(selectedBackupUserId));
+      if (!user) return;
+      const sites = websites.filter(site => String(site.owner_id) === String(user.id));
+      const dbs = databases.filter(db => String(db.owner_id) === String(user.id));
+      const target = targetName(Number(selectedSftpTargetId));
+      const ok = await confirmDialog({
+        title: t('Back up the account {name}?', { name: user.username }),
+        body: <><dl className="bk-summary">
+          <div><dt>{t('What goes in')}</dt><dd>{t('The panel account, {sites} website(s) and {dbs} database(s): their files, database dumps and what a restore needs.', { sites: sites.length, dbs: dbs.length })}</dd></div>
+          <div><dt>{t('Where it goes')}</dt><dd>{target ? t('This server, and a copy to {name}.', { name: target }) : t('This server only.')}</dd></div>
+        </dl><p className="hint">{t('It runs on the server: you can leave this page.')}</p></>,
+        confirmLabel: t('Create backup'), wide: true,
+      });
+      if (ok) createUserBackup();
+    }
+
+    const refreshers = {
+      website: scope === 'user' ? refreshUserBackupArea : refreshBackupArea,
+      restore: () => { loadRestoreBackups(); },
+      schedule: refreshScheduledBackupArea,
+      destination: loadSftpTargets,
+      logs: () => loadBackupJobs(true),
+    };
+    const subtitles = {
+      website: scope === 'user'
+        ? t('Includes the panel user, all owned websites, source files, database dumps, and restore metadata.')
+        : t('Backups include website source files and a database SQL export.'),
+      restore: t('Put accounts back from their backups: pick where the backups are, tick the accounts, press Restore.'),
+      schedule: t('Runs a full user backup on a schedule, with an optional off-server destination.'),
+      destination: t('Where off-server backup copies are sent. SFTP, or any S3-compatible object storage.'),
+      logs: t('Recent queued, running, completed, and failed backup tasks.'),
+    };
+    const scheduleReady = newBackupSchedule.all_users || (newBackupSchedule.user_ids || []).length > 0;
+    const destinationReady = !!newSftpTarget.name && (newSftpTarget.kind === 's3'
+      ? (!!newSftpTarget.endpoint && !!newSftpTarget.bucket && !!newSftpTarget.access_key && !!newSftpTarget.secret_key)
+      : (!!newSftpTarget.host && !!newSftpTarget.username && (!!newSftpTarget.password || !!newSftpTarget.private_key)));
+    const setTarget = key => e => setNewSftpTarget(prev => ({ ...prev, [key]: e.target.value }));
+    const backupRow = (file, { onDownload, onRestore, restoreLabel, onDelete, sub, restoreDisabled = false }) => <div className="backup-item" key={file}>
+      <span>{file.split('/').pop()}{sub && <small>{sub}</small>}</span>
+      <div className="actions bk-row-actions">
+        <button className="secondary-light" disabled={busy} onClick={() => onDownload(file)}><Download size={14} aria-hidden="true"/> {t('Download')}</button>
+        <button className="secondary-light" disabled={busy || restoreDisabled} onClick={() => onRestore(file)}><RotateCcw size={14} aria-hidden="true"/> {restoreLabel}</button>
+        <ActionMenu label={t('More actions for {name}', { name: file.split('/').pop() })} items={[
+          { label: t('Delete'), icon: Trash2, danger: true, disabled: busy, onClick: () => onDelete(file) },
+        ]}/>
       </div>
+    </div>;
 
-      {activeBackupTab === 'logs' && <div className="backup-tab-panel backup-logs-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Backup logs')}</h3><p className="hint">{t('Recent queued, running, completed, and failed backup tasks.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={() => loadBackupJobs(true)}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        {backupJobs.length === 0 && <EmptyState icon={FileText} message={t('No backup logs found.')} />}
-        {backupJobs.length > 0 && <div className="backup-job-list">
-          {backupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
-            <Clock size={14}/>
-            <span>
-              <strong>{jobTitle(job)}</strong>
-              <small>{jobDetail(job)}</small>
-              {/* No percentage: the server reports a task as queued, running
-                  or finished, nothing in between. */}
-              {(job.status === 'running' || job.status === 'queued') && <span className="job-progress">
-                <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
-              </span>}
-              <small className="backup-job-time">{jobTimestamp(job)}</small>
-            </span>
-            <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>
+    return <>
+      <PageHeader subtitle={subtitles[active]} onRefresh={refreshers[active]} refreshDisabled={busy}/>
+      <section className="section backups-page">
+        <Tabs label={t('Backup sections')} value={active} onChange={setBackupTab} tabs={tabs.filter(tab => !tab.hidden)}/>
+        {active !== 'logs' && runningJobs.length > 0 && <div className="backup-job-list">
+          {runningJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
+            <Clock size={14} aria-hidden="true"/>
+            <span><strong>{jobTitle(job)}</strong><small>{jobDetail(job)}</small></span>
+            {jobBadge(job)}
           </div>)}
         </div>}
-      </div>}
 
-      {activeBackupTab === 'website' && <div className="backup-tab-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Backup website')}</h3><p className="hint">{t('Backups include website source files and a database SQL export.')}</p></div>
-        </div>
-        <WebsiteSelect />
-        <div className="actions backup-toolbar">
-          <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> {t('Create backup')}</button>
-          <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/> {t('Refresh')}</button>
-          <label className="upload-button secondary">
-            <Upload size={14}/> {t('Upload backup')}
-            <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
-          </label>
-        </div>
-        {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message={t('No backups found for this website.')} action={{ label: t('Create backup'), icon: Plus, onClick: () => { if (!loading) createBackup(); } }} />}
-        <div className="backup-list">
-          {backups.map(file => <div className="backup-item" key={file}>
-            <span>{file.split('/').pop()}</span>
-            <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/> {t('Download')}</button>
-              <button className="secondary" disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/> {t('Restore')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
+        {active === 'website' && <div className="backup-tab-panel">
+          {isAdmin && <div className="segmented-control bk-scope" role="group" aria-label={t('What to back up')}>
+            {[['website', t('A website'), Globe], ['user', t('A whole account'), Users]].map(([id, label, Icon]) => <button key={id} type="button"
+              aria-pressed={scope === id} className={scope === id ? 'active' : ''} onClick={() => setBackupTab(id)}>
+              <Icon size={14} aria-hidden="true"/> {label}</button>)}
+          </div>}
+          {scope === 'website' && <>
+            <div className="bk-form bk-site-form">
+              <Field label={t('Website')}><WebsiteSelect /></Field>
+              <div className="bk-actions">
+                <button disabled={!selectedWebsiteId || busy} onClick={confirmSiteBackup}><Plus size={14} aria-hidden="true"/> {t('Create backup')}</button>
+                <label className="upload-button secondary-light">
+                  <Upload size={14} aria-hidden="true"/> {t('Upload backup')}
+                  <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
+                </label>
+              </div>
             </div>
-          </div>)}
-        </div>
-      </div>}
-
-      {isAdmin && activeBackupTab === 'user' && <div className="backup-tab-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Backup user')}</h3><p className="hint">{t('Includes the panel user, all owned websites, source files, database dumps, and restore metadata.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/> {t('Reload')}</button>
-        </div>
-        <div className="sftp-run-row user-backup-row backup-run-row">
-          <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
-            <option value="">{t('Select user')}</option>
-            {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
-          </select>
-          <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
-            <option value="">{t('Local only')}</option>
-            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
-          </select>
-          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/> {t('Create backup')}</button>
-        </div>
-        {selectedBackupUser && <p className="hint">{t('Current user:')} <strong>{selectedBackupUser.username}</strong></p>}
-        <div className="actions backup-subactions">
-          <button className="secondary" disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> {t('Refresh list')}</button>
-        </div>
-        {selectedBackupUserId && userBackups.length === 0 && <EmptyState icon={Archive} message={t('No user backups found.')} />}
-        <div className="backup-list">
-          {userBackups.map(file => <div className="backup-item" key={file}>
-            <span>{file.split('/').pop()}</span>
-            <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/> {t('Download')}</button>
-              <button className="secondary" disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/> {t('Restore user')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteUserBackup(file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
+            {backups.length === 0 && selectedWebsiteId && <EmptyState compact icon={Archive} message={t('No backups found for this website.')} />}
+            <div className="backup-list">
+              {backups.map(file => backupRow(file, { onDownload: downloadBackup, onRestore: restoreBackup, restoreLabel: t('Restore'), onDelete: deleteBackup }))}
             </div>
-          </div>)}
-        </div>
+          </>}
+          {isAdmin && scope === 'user' && <>
+            <div className="bk-form bk-user-form">
+              <Field label={t('User')}>
+                <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
+                  <option value="">{t('Select user')}</option>
+                  {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+                </select>
+              </Field>
+              <Field label={t('Destination')}>
+                <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
+                  <option value="">{t('Local only')}</option>
+                  {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
+                </select>
+              </Field>
+              <div className="bk-actions">
+                <button disabled={!selectedBackupUserId || busy} onClick={confirmUserBackup}><Archive size={14} aria-hidden="true"/> {t('Create backup')}</button>
+              </div>
+            </div>
+            {selectedBackupUserId && userBackups.length === 0 && <EmptyState compact icon={Archive} message={t('No user backups found.')} />}
+            <div className="backup-list">
+              {userBackups.map(file => backupRow(file, { onDownload: downloadUserBackup, onRestore: restoreUserBackup, restoreLabel: t('Restore user'), onDelete: deleteUserBackup }))}
+            </div>
+            <div className="bk-sched-section">
+              <PageHeader title={t('Restore folder')} subtitle={restoreBackupDir || '/var/backups/bpanel/users/restore'}
+                actions={<label className="upload-button secondary-light">
+                  <Upload size={14} aria-hidden="true"/> {t('Upload backups')}
+                  <input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
+                </label>}/>
+              {restoreBackups.length === 0 && <EmptyState compact icon={ArchiveRestore} message={t('No backups found here.')} />}
+              <div className="backup-list">
+                {restoreBackups.map(item => backupRow(item.backup_file, {
+                  onDownload: downloadUserBackup, onRestore: restoreUserBackup, restoreLabel: t('Restore user'), onDelete: deleteRestoreBackup,
+                  restoreDisabled: !item.valid,
+                  sub: item.valid ? `${item.source === 'opanel' ? 'OPanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || t('Invalid backup')),
+                }))}
+              </div>
+            </div>
+          </>}
+        </div>}
 
-        <div className="backup-panel-title backup-subtitle">
-          <div><h3>{t('Restore folder')}</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
-          <div className="actions">
-            <button className="secondary" disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/> {t('Refresh')}</button>
-            <label className="upload-button secondary">
-              <Upload size={14}/> {t('Upload backups')}
-              <input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
-            </label>
+        {isAdmin && active === 'restore' && renderRestoreWizard()}
+
+        {isAdmin && active === 'schedule' && <div className="backup-tab-panel bk-schedules">
+          <div className="bk-sched-section">
+            <PageHeader title={<>{t('Full backups')} <span className="badge bk-engine">{t('Whole accounts')}</span></>}
+              subtitle={t('With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.')}
+              actions={<button type="button" onClick={() => setScheduleSheet(true)}><Plus size={15} aria-hidden="true"/> {t('Add schedule')}</button>}/>
+            {backupSchedules.length === 0 && <EmptyState compact icon={Clock} message={t('No backup schedules yet.')} />}
+            {backupSchedules.length > 0 && <div className="backup-list">
+              {backupSchedules.map(item => {
+                const suffix = item.name_suffix && item.name_suffix !== 'full_date' && nameSuffixLabels[item.name_suffix];
+                return <div className="backup-item bk-schedule-row" key={item.id}>
+                  <span>
+                    {scheduleUserLabel(item)} · <code>{item.schedule}</code> · {cronScheduleLabel(item.schedule)} · {targetName(item.target_id) || t('Local only')}{suffix ? ` · ${t(suffix)}` : ''}
+                    {item.last_status === 'running'
+                      ? <><small>{item.last_message || t('Running')}</small>
+                        <span className="job-progress"><span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span></span></>
+                      : <small>
+                        {item.last_status === 'ok' && <span className="badge ok">{t('OK')}</span>}
+                        {item.last_status === 'error' && <span className="badge bad">{t('Failed')}</span>}
+                        {' '}{item.last_message || t('Not run yet')}
+                      </small>}
+                  </span>
+                  <div className="actions bk-row-actions">
+                    <button className="secondary-light" disabled={busy || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14} aria-hidden="true"/> {t('Run now')}</button>
+                    <ActionMenu label={t('More actions for {name}', { name: scheduleUserLabel(item) })} items={[
+                      { label: t('Delete schedule'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteBackupSchedule(item.id) },
+                    ]}/>
+                  </div>
+                </div>;
+              })}
+            </div>}
           </div>
-        </div>
-        {restoreBackups.length === 0 && <EmptyState icon={ArchiveRestore} message={t('No backups found here.')} />}
-        <div className="backup-list">
-          {restoreBackups.map(item => <div className="backup-item" key={item.backup_file}>
-            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'OPanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || t('Invalid backup'))}</small></span>
-            <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/> {t('Download')}</button>
-              <button className="secondary" disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/> {t('Restore user')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteRestoreBackup(item.backup_file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
+        </div>}
+
+        {isAdmin && active === 'destination' && <div className="backup-tab-panel bk-destinations">
+          <div className="bk-sched-section">
+            <PageHeader title={t('Destinations')} subtitle={t('Every place backups go.')}
+              actions={<button type="button" onClick={() => setDestinationSheet(true)}><Plus size={15} aria-hidden="true"/> {t('Add destination')}</button>}/>
+            {sftpTargets.length === 0 && <EmptyState compact icon={Network} message={t('No backup destinations found.')} />}
+            <div className="backup-list">
+              {sftpTargets.map(target => {
+                const uses = backupSchedules.filter(item => item.target_id === target.id).length;
+                return <div className="backup-item" key={target.id}>
+                  <span>
+                    <span className="badge">{target.kind === 's3' ? 'S3' : 'SFTP'}</span>{' '}{target.name}
+                    <small>{target.kind === 's3'
+                      ? `${target.endpoint}/${target.bucket}${target.prefix ? '/' + target.prefix : ''}`
+                      : `${target.username}@${target.host}:${target.remote_path}`}{uses ? ` · ${t('Full backups: {count} schedule(s)', { count: uses })}` : ''}</small>
+                  </span>
+                  <div className="actions bk-row-actions">
+                    <ActionMenu label={t('More actions for {name}', { name: target.name })} items={[
+                      { label: t('Delete'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteSftpTarget(target.id) },
+                    ]}/>
+                  </div>
+                </div>;
+              })}
             </div>
-          </div>)}
-        </div>
-      </div>}
-
-      {isAdmin && activeBackupTab === 'restore' && renderRestoreWizard()}
-
-      {isAdmin && activeBackupTab === 'schedule' && <div className="backup-tab-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Runs a full user backup on a schedule, with an optional off-server destination.')} {t('With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="backup-schedule-builder with-name">
-          <div className="field"><span className="field-label">{t('Accounts')}</span>
-            <label className="check-line">
-              <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
-              {t('All users')}
-            </label>
-            {!newBackupSchedule.all_users && <select multiple value={newBackupSchedule.user_ids || []} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
-              {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
-            </select>}
           </div>
-          <div className="field"><span className="field-label">{t('Schedule')}</span>{renderSchedulePicker('backup', newBackupSchedule.schedule, value => setNewBackupSchedule(prev => ({ ...prev, schedule: value })), 'backup-schedule-input')}</div>
-          <div className="field"><span className="field-label">{t('Destination')}</span>
+        </div>}
+
+        {active === 'logs' && <div className="backup-tab-panel backup-logs-panel">
+          {backupJobs.length === 0 && <EmptyState icon={FileText} message={t('No backup logs found.')} />}
+          {backupJobs.length > 0 && <div className="backup-job-list">
+            {backupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
+              <Clock size={14} aria-hidden="true"/>
+              <span>
+                <strong>{jobTitle(job)}</strong>
+                <small>{jobDetail(job)}</small>
+                {(job.status === 'running' || job.status === 'queued') && <span className="job-progress">
+                  <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
+                </span>}
+                <small className="backup-job-time">{jobTimestamp(job)}</small>
+              </span>
+              {jobBadge(job)}
+            </div>)}
+          </div>}
+        </div>}
+      </section>
+
+      <Drawer open={scheduleSheet} onClose={() => setScheduleSheet(false)} title={t('Add schedule')} subtitle={t('Full backups')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setScheduleSheet(false)}>{t('Cancel')}</button>
+          <button type="submit" form="bk-schedule-form" disabled={!scheduleReady || busy}><Clock size={14} aria-hidden="true"/> {t('Add schedule')}</button>
+        </>}>
+        <form id="bk-schedule-form" className="bk-sheet-form" onSubmit={async (e) => { e.preventDefault(); if (await createBackupSchedule()) setScheduleSheet(false); }}>
+          <Field label={t('Users')}>
+            <div className="bk-users">
+              <Checkbox checked={!!newBackupSchedule.all_users} label={t('All users')}
+                onChange={on => setNewBackupSchedule(prev => ({ ...prev, all_users: on }))}/>
+              {!newBackupSchedule.all_users && <select multiple value={newBackupSchedule.user_ids || []} aria-label={t('Users')}
+                onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
+                {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
+              </select>}
+            </div>
+          </Field>
+          <Field label={t('Schedule')}>{renderSchedulePicker('backup', newBackupSchedule.schedule, value => setNewBackupSchedule(prev => ({ ...prev, schedule: value })), 'backup-schedule-input')}</Field>
+          <Field label={t('Destination')}>
             <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
               <option value="">{t('Local only')}</option>
               {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
             </select>
-          </div>
-          <div className="field"><span className="field-label">{t('Stored file name')}</span>
-            <select value={newBackupSchedule.name_suffix} aria-label={t('Stored file name')}
-              onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
+          </Field>
+          <Field label={t('Stored file name')} hint={t('The name suffix decides how many copies are kept: nothing keeps one per account, day of week keeps seven, week of month five, and full date one a day until retention removes it.')}>
+            <select value={newBackupSchedule.name_suffix} onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
+              {/* Spelled out: the four the API accepts (a test compares them). */}
               <option value="none">{t('Append: nothing')}</option>
               <option value="day_of_week">{t('Append: day of week')}</option>
               <option value="week_of_month">{t('Append: week of month')}</option>
               <option value="full_date">{t('Append: full date')}</option>
             </select>
+          </Field>
+        </form>
+      </Drawer>
+
+      <Drawer open={destinationSheet} onClose={() => setDestinationSheet(false)} title={t('Add destination')}
+        subtitle={newSftpTarget.kind === 's3'
+          ? t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')
+          : t('An SFTP server the backups are copied to.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setDestinationSheet(false)}>{t('Cancel')}</button>
+          <button type="submit" form="bk-destination-form" disabled={!destinationReady || busy}><Plus size={14} aria-hidden="true"/> {t('Save destination')}</button>
+        </>}>
+        <form id="bk-destination-form" className="bk-sheet-form" onSubmit={async (e) => { e.preventDefault(); if (await createSftpTarget()) setDestinationSheet(false); }}>
+          <div className="sn-drawer-grid">
+            <Field label={t('Destination name')} required><input value={newSftpTarget.name} onChange={setTarget('name')} autoComplete="off" /></Field>
+            <Field label={t('Destination type')}>
+              <select value={newSftpTarget.kind} onChange={setTarget('kind')}>
+                <option value="sftp">SFTP</option>
+                <option value="s3">{t('S3 compatible')}</option>
+              </select>
+            </Field>
           </div>
-          <button className="backup-schedule-add" disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/> {t('Schedule')}</button>
-        </div>
-        <p className="hint">{t('The name suffix decides how many copies are kept: nothing keeps one per account, day of week keeps seven, week of month five, and full date one a day until retention removes it.')}</p>
-        <div className="backup-list">
-          {backupSchedules.map(item => {
-            const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
-            const suffix = item.name_suffix && item.name_suffix !== 'full_date' && nameSuffixLabels[item.name_suffix];
-            return <div className="backup-item" key={item.id}>
-              <span>{scheduleUserLabel(item)} - {cronScheduleLabel(item.schedule)}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}{suffix ? ` - ${t(suffix)}` : ''}
-                {item.last_status === 'running'
-                  ? <>
-                    <small>{item.last_message || t('Running')}</small>
-                    <span className="job-progress">
-                      <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
-                    </span>
-                  </>
-                  : <small>{item.last_status}: {item.last_message || t('not run yet')}</small>}
-              </span>
-              <div className="actions">
-                <button className="secondary" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/> {t('Run now')}</button>
-                <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
+          {newSftpTarget.kind === 'sftp' ? <div className="sn-drawer-grid">
+            <Field label={t('Host')} required><input value={newSftpTarget.host} onChange={setTarget('host')} autoComplete="off" spellCheck={false} /></Field>
+            <Field label={t('Port')}><input value={newSftpTarget.port} onChange={setTarget('port')} placeholder="22" inputMode="numeric" /></Field>
+            <Field label={t('Username')} required><input value={newSftpTarget.username} onChange={setTarget('username')} autoComplete="off" spellCheck={false} /></Field>
+            <Field label={t('Password')}><PasswordField value={newSftpTarget.password} autoComplete="off" onChange={value => setNewSftpTarget(prev => ({ ...prev, password: value }))} /></Field>
+            <Field className="is-wide" label={t('Remote folder')}><input value={newSftpTarget.remote_path} onChange={setTarget('remote_path')} placeholder="/backups/bpanel" spellCheck={false} /></Field>
+            <Field className="is-wide" label={t('Private key (optional)')} optional hint={t('A password or a private key: one is enough.')}>
+              <textarea value={newSftpTarget.private_key} onChange={setTarget('private_key')} rows={4} spellCheck={false} />
+            </Field>
+          </div> : <div className="sn-drawer-grid">
+            <Field label={t('Bucket')} required><input id="s3-bucket" value={newSftpTarget.bucket} onChange={setTarget('bucket')} spellCheck={false} /></Field>
+            <Field label={t('Endpoint')} required><input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={setTarget('endpoint')} placeholder="s3.wasabisys.com" spellCheck={false} /></Field>
+            <Field label={t('Region (optional)')} optional><input id="s3-region" value={newSftpTarget.region} onChange={setTarget('region')} spellCheck={false} /></Field>
+            <Field label={t('Access key')} required><input id="s3-access" value={newSftpTarget.access_key} onChange={setTarget('access_key')} autoComplete="off" spellCheck={false} /></Field>
+            <Field label={t('Secret key')} required><PasswordField id="s3-secret" value={newSftpTarget.secret_key} autoComplete="off" onChange={value => setNewSftpTarget(prev => ({ ...prev, secret_key: value }))} /></Field>
+            <Field label={t('Prefix, e.g. bpanel/nightly (optional)')} optional><input id="s3-prefix" value={newSftpTarget.prefix} onChange={setTarget('prefix')} spellCheck={false} /></Field>
+            <Checkbox className="is-wide" checked={!!newSftpTarget.secure} label={t('Use HTTPS')} onChange={on => setNewSftpTarget(prev => ({ ...prev, secure: on }))}/>
+          </div>}
+        </form>
+      </Drawer>
+    </>;
+  }
+
+  // Services, as SNPanel's: the page's Refresh in its head, and each
+  // service only the buttons that apply - a running one restarts or stops,
+  // a stopped one starts; while its state is unknown, all of them.
+  function renderServices() {
+    return <>
+      <PageHeader subtitle={t('Auto-refreshes every 10s')} onRefresh={checkAllServices} refreshDisabled={!!loading}/>
+      <section className="section">
+        <div className="service-grid">
+          {serviceNames.map(name => {
+            const state = serviceStates[name];
+            const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
+            const active = text.includes('active (running)');
+            const inactive = text.includes('inactive') || text.includes('failed');
+            const canStop = !['bpanel-api', 'redis-server'].includes(name);
+            return <div className="service-card" key={name}>
+              <div>
+                <div className="service-name"><strong>{name}</strong></div>
+                <span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? t('Running') : inactive ? t('Stopped') : '...'}</span>
               </div>
+              {isAdmin && <div className="service-actions">
+                {!active && <button type="button" className="mini" onClick={() => runServiceAction(name, 'start')}><Play size={13}/> {t('Start')}</button>}
+                {!inactive && <button type="button" className="mini secondary-light" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> {t('Restart')}</button>}
+                {active && canStop && <button type="button" className="mini secondary-light" onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> {t('Stop')}</button>}
+              </div>}
             </div>;
           })}
         </div>
-      </div>}
-
-      {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Backup Destination')}</h3><p className="hint">{t('Where off-server backup copies are sent. SFTP, or any S3-compatible object storage.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="sftp-form sftp-target-form">
-          <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Destination name')} />
-          <select value={newSftpTarget.kind} onChange={e => setNewSftpTarget(prev => ({ ...prev, kind: e.target.value }))} aria-label={t('Destination type')}>
-            <option value="sftp">SFTP</option>
-            <option value="s3">{t('S3 compatible')}</option>
-          </select>
-
-          {newSftpTarget.kind === 'sftp' ? <>
-            <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder={t('Host')} />
-            <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
-            <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder={t('Username')} />
-            <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder={t('Password')} type="password" />
-            <input value={newSftpTarget.remote_path} onChange={e => setNewSftpTarget(prev => ({ ...prev, remote_path: e.target.value }))} placeholder="/backups/bpanel" />
-            <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder={t('Private key (optional)')} rows={4} />
-          </> : <>
-            <input id="s3-bucket" value={newSftpTarget.bucket} onChange={e => setNewSftpTarget(prev => ({ ...prev, bucket: e.target.value }))} placeholder={t('Bucket')} />
-            <input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={e => setNewSftpTarget(prev => ({ ...prev, endpoint: e.target.value }))} placeholder="s3.wasabisys.com" />
-            <input id="s3-region" value={newSftpTarget.region} onChange={e => setNewSftpTarget(prev => ({ ...prev, region: e.target.value }))} placeholder={t('Region (optional)')} />
-            <input id="s3-access" value={newSftpTarget.access_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, access_key: e.target.value }))} placeholder={t('Access key')} />
-            <input id="s3-secret" value={newSftpTarget.secret_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, secret_key: e.target.value }))} placeholder={t('Secret key')} type="password" />
-            <input id="s3-prefix" value={newSftpTarget.prefix} onChange={e => setNewSftpTarget(prev => ({ ...prev, prefix: e.target.value }))} placeholder={t('Prefix, e.g. bpanel/nightly (optional)')} />
-            <label className="check-line">
-              <input id="s3-secure" type="checkbox" checked={!!newSftpTarget.secure} onChange={e => setNewSftpTarget(prev => ({ ...prev, secure: e.target.checked }))} />
-              {t('Use HTTPS')}
-            </label>
-          </>}
-
-          <button disabled={!!loading || !newSftpTarget.name || (newSftpTarget.kind === 's3'
-            ? (!newSftpTarget.endpoint || !newSftpTarget.bucket || !newSftpTarget.access_key || !newSftpTarget.secret_key)
-            : (!newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)))}
-            onClick={createSftpTarget}><Plus size={14}/> {t('Save destination')}</button>
-        </div>
-        {newSftpTarget.kind === 's3' && <p className="hint">{t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')}</p>}
-        {sftpTargets.length === 0 && <EmptyState icon={Network} message={t('No backup destinations found.')} />}
-        <div className="backup-list">
-          {sftpTargets.map(target => <div className="backup-item" key={target.id}>
-            <span>
-              <span className="badge">{target.kind === 's3' ? 'S3' : 'SFTP'}</span>{' '}
-              {target.name} &mdash; {target.kind === 's3'
-                ? `${target.endpoint}/${target.bucket}${target.prefix ? '/' + target.prefix : ''}`
-                : `${target.username}@${target.host}:${target.remote_path}`}
-            </span>
-            <span className="backup-item-actions">
-              <button className="danger" disabled={!!loading} onClick={() => deleteSftpTarget(target.id)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
-            </span>
-          </div>)}
-        </div>
-      </div>}
-    </section>;
+      </section>
+    </>;
   }
 
-  function renderServices() {
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('Services')}</h2><p className="hint">{t('Auto-refreshes every 10s')}</p></div>
-        <button className="secondary" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/> {t('Refresh')}</button>
-      </div>
-      {/* A running service's Start and a stopped one's Stop are disabled, so
-          the enabled button is the obvious next step. */}
-      <div className="service-grid">
-        {serviceNames.map(name => {
-          const state = serviceStates[name];
-          const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
-          const active = text.includes('active (running)');
-          const inactive = text.includes('inactive') || text.includes('failed');
-          const canStop = !['bpanel-api', 'redis-server'].includes(name);
-          return <div className="service-card" key={name}>
-            <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? t('Running') : inactive ? t('Stopped') : '...'}</span></div>
-            {isAdmin && <div className="service-actions">
-              <button className="secondary" disabled={active} onClick={() => runServiceAction(name, 'start')}><Play size={13}/> {t('Start')}</button>
-              {canStop && <button className="danger-light" disabled={inactive} onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> {t('Stop')}</button>}
-              <button className="secondary" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> {t('Restart')}</button>
-            </div>}
-          </div>;
-        })}
-      </div>
-    </section>;
-  }
-
+  // PHP extensions, server-wide, as SNPanel heads its own: a title with a
+  // find box, then BPanel's table of every version (BPanel installs an
+  // extension per version, so the versions are its columns).
   function renderPhpExtensions() {
     const versions = phpExtensions.versions || [];
     // Nothing to draw until the table has loaded: an empty list here is the
     // request still on its way, not a server without PHP.
     if (versions.length === 0) return null;
-    return <div className="user-create-card php-ext-card" style={{ marginTop: 16 }}>
+    const needle = phpExtFind.trim().toLowerCase();
+    const list = (phpExtensions.extensions || []).filter(ext => !needle || ext.name.toLowerCase().includes(needle));
+    return <div className="php-ext-card" aria-labelledby="php-ext-title">
       <div className="php-ext-head">
-        <h3>{t('PHP extensions')}</h3>
-        <p className="hint">{t('Server-wide: every website on a PHP version gets its extensions. Installing one reloads PHP-FPM; removing is not offered here, since a website may depend on it.')}</p>
+        <h2 id="php-ext-title">{t('PHP extensions')}</h2>
+        <input type="search" className="php-ext-find" value={phpExtFind} onChange={e => setPhpExtFind(e.target.value)} placeholder={t('Find an extension')} aria-label={t('Find an extension')} />
       </div>
-      <div className="php-ext-table-wrap">
-        <table className="php-ext-table">
+      <p className="hint">{t('Server-wide: every website on a PHP version gets its extensions. Installing one reloads PHP-FPM; removing is not offered here, since a website may depend on it.')}</p>
+      <div className="data-table-wrap">
+        <table className="data-table php-ext-table">
           <thead><tr>
-            <th>{t('Extension')}</th>
-            {versions.map(v => <th key={v}>PHP {v}</th>)}
-            <th aria-label={t('Install all')}></th>
+            <th scope="col">{t('Extension')}</th>
+            {versions.map(v => <th scope="col" key={v}>PHP {v}</th>)}
+            <th scope="col"><span className="sr-only">{t('Install all')}</span></th>
           </tr></thead>
           <tbody>
-            {phpExtensions.extensions.map(ext => {
+            {list.map(ext => {
               const missingOn = versions.filter(v => ext.versions[v] === 'available');
               return <tr key={ext.name}>
                 <td><code>{ext.name}</code></td>
                 {versions.map(v => {
                   const state = ext.versions[v];
                   if (state === 'installed' || state === 'builtin') {
-                    return <td key={v}><span className="php-ext-installed" title={state === 'builtin' ? t('Built into PHP') : ''}>{t('Installed')}</span></td>;
+                    return <td key={v}><span className="badge ok" title={state === 'builtin' ? t('Built into PHP') : ''}>{t('Installed')}</span></td>;
                   }
                   if (state === 'available') {
-                    return <td key={v}><button className="mini secondary-light php-ext-install" disabled={!!loading}
-                      title={t('Install on PHP {version}', { version: v })} aria-label={t('Install {extension} on PHP {version}', { extension: ext.name, version: v })}
-                      onClick={() => installPhpExtension(ext.name, [v])}><Download size={14}/></button></td>;
+                    return <td key={v}><button type="button" className="mini secondary-light" disabled={!!loading}
+                      aria-label={t('Install {extension} on PHP {version}', { extension: ext.name, version: v })}
+                      onClick={() => installPhpExtension(ext.name, [v])}><Plus size={13}/> {t('Install')}</button></td>;
                   }
-                  return <td key={v}><span className="php-ext-na" title={t('Not in repository')}>—</span></td>;
+                  return <td key={v}><span className="data-table-muted" title={t('Not in repository')}>—</span></td>;
                 })}
-                <td className="php-ext-all">{missingOn.length > 0 && <button className="mini secondary" disabled={!!loading}
+                <td className="php-ext-all">{missingOn.length > 1 && <button type="button" className="mini" disabled={!!loading}
                   onClick={() => installPhpExtension(ext.name, missingOn)}>{t('Install all')}</button>}</td>
               </tr>;
             })}
           </tbody>
         </table>
       </div>
+      {list.length === 0 && <p className="hint">{t('No extension matches {text}.', { text: phpExtFind.trim() })}</p>}
     </div>;
   }
 
+  // PHP, as SNPanel's (pages/PhpConfig.jsx there): the version every card
+  // below is about and the ones to install; its php.ini limits with OPcache
+  // under them; what auto tune would change, as a table; the extensions.
   function renderPhpConfig() {
-    if (!isAdmin) return <section className="section"><h2>{t('PHP config')}</h2><p className="hint">{t('You do not have permission to edit PHP config.')}</p></section>;
+    if (!isAdmin) return <section className="section"><p className="hint">{t('You do not have permission to edit PHP config.')}</p></section>;
     const notInstalled = sortPhpVersions(phpVersions.supported.filter(v => !phpVersions.installed.includes(v)));
-    const opcacheOn = !!phpTune?.opcache_enabled;
     // The settings Auto-tune would actually change. A row that already
     // matches, or one pinned by the form above (it always wins - PHP reads it
     // last), is not a decision to make.
     const tuneChanges = (phpTune?.settings || []).filter(row => row.changes && !row.overridden_value);
+    const pinned = (phpTune?.settings || []).filter(row => row.changes && row.overridden_value).length;
     // Every pool on a server is sized from the same CPU/RAM/pool-count budget,
     // so they normally all carry identical numbers. Collapse to "N/N pools
     // run X" and list only the ones that do not match.
@@ -9695,79 +10260,111 @@ function App() {
     (phpTune?.pools || []).forEach(p => { (poolGroups[poolKey(p)] ||= []).push(p); });
     const [commonPools, ...restPoolGroups] = Object.values(poolGroups).sort((a, b) => b.length - a.length);
     const poolOutliers = restPoolGroups.flat();
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('PHP Configuration')}</h2></div>
+    const chooseVersion = v => { setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); loadPhpTune(v); };
+    const limitField = (key, props = {}) => <label key={key} className="php-limit"><span>{key}</span>
+      <input value={phpConfig[key] ?? ''} onChange={e => setPhpConfig(prev => ({ ...prev, [key]: e.target.value }))} spellCheck={false} autoComplete="off" {...props} /></label>;
+    return <>
+      <PageHeader subtitle={t('The settings, auto tune and extensions below are for the version chosen here.')}/>
+      <div className="php-page">
+        <section className="section php-versions">
+          <h3 className="php-versions-title">{t('PHP versions')}</h3>
+          <div className="php-versions-row">
+            <label className="php-version-pick"><span>{t('PHP version')}</span>
+              <select value={phpConfig.php_version} onChange={e => chooseVersion(e.target.value)}>
+                {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+              </select>
+            </label>
+            {notInstalled.length > 0 && <div className="php-install">
+              <span>{t('Install another')}</span>
+              <div className="php-install-grid">
+                {notInstalled.map(v => <button type="button" key={v} className="secondary-light" disabled={!!loading} onClick={() => installPhpVersion(v)}><Plus size={14} aria-hidden="true"/> PHP {v}</button>)}
+              </div>
+            </div>}
+          </div>
+        </section>
+
+        <section className="section">
+          <PageHeader title={t('php.ini limits of PHP {version}', { version: phpConfig.php_version })} subtitle={t('Written last, so they win over auto tune for the same setting.')}/>
+          <div className="user-create-card php-config-card">
+            <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
+              <option value="Off">{t('Off (production)')}</option><option value="On">{t('On (debug)')}</option>
+            </select></label>
+            {limitField('max_execution_time', { type: 'number', inputMode: 'numeric' })}
+            {limitField('max_input_time', { type: 'number', inputMode: 'numeric' })}
+            {limitField('max_input_vars', { type: 'number', inputMode: 'numeric' })}
+            {limitField('memory_limit', { placeholder: '1024M' })}
+            {limitField('post_max_size', { placeholder: '1024M' })}
+            {limitField('upload_max_filesize', { placeholder: '1024M' })}
+            {/* OPcache: on or off for this version (switched at once through
+                its own endpoint, so Auto-tune never turns it back on behind
+                the admin's back), and its sizes. */}
+            <div className="php-config-sub">
+              <div className="php-opcache-head">
+                <h3><Zap size={16} aria-hidden="true"/> OPcache</h3>
+                {phpTune && <span className={phpTune.opcache_enabled ? 'badge ok' : 'badge'}>{phpTune.opcache_enabled ? t('OPcache on') : t('OPcache off')}</span>}
+                <Switch checked={!!phpTune?.opcache_enabled} disabled={!!loading || !phpTune} onChange={toggleOpcache}
+                  label={t('OPcache for PHP {version}', { version: phpTune?.php_version || phpConfig.php_version })}/>
+              </div>
+            </div>
+            {OPCACHE_SIZE_FIELDS.map(([key, directive, min, max, example]) => <label key={key} className="php-limit"><span>{directive}</span>
+              <input type="number" min={min} max={max} value={phpConfig[key] ?? ''} placeholder={String(phpConfig.opcache_effective?.[key] || example)}
+                onChange={e => setPhpConfig(prev => ({ ...prev, [key]: e.target.value }))} />
+              <small className="php-limit-note">{t('Empty keeps the Auto-tune value.')}</small></label>)}
+            <div className="php-config-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> {t('Restore defaults')}</button>
+              <button type="button" disabled={!!loading} onClick={updatePhpConfig}><Save size={14}/> {t('Save')}</button>
+            </div>
+          </div>
+        </section>
+
+        <section className="section php-tune-section">
+          <PageHeader title={t('PHP auto tune')}
+            subtitle={phpTune ? t('Recommended for this server: {cpus} CPU, {memory} MB RAM.', { cpus: phpTune.facts?.cpu_count ?? '—', memory: phpTune.facts?.total_memory_mb ?? '—' }) : null}
+            actions={!phpTuneOpen && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => { setPhpTuneOpen(true); loadPhpTune(phpConfig.php_version); }}><Zap size={14}/> {t('Auto-tune')}</button>}/>
+          {phpTuneOpen && phpTune && <>
+            {tuneChanges.length > 0
+              ? <>
+                <p className="php-tune-lead"><AlertCircle size={15} aria-hidden="true"/> {t('Auto tune will change {n} setting(s) for PHP {version}', { n: tuneChanges.length, version: phpTune.php_version })}</p>
+                <div className="data-table-wrap">
+                  <table className="data-table php-tune-table">
+                    <thead><tr><th scope="col">{t('Setting')}</th><th scope="col">{t('Now')}</th><th scope="col">{t('Recommended')}</th></tr></thead>
+                    <tbody>
+                      {tuneChanges.map(row => <tr key={row.key}>
+                        <td><code>{row.key}</code></td>
+                        <td className="php-tune-now">{row.current || <span className="data-table-muted">{t('unset')}</span>}</td>
+                        <td className="php-tune-new"><strong>{row.value}</strong></td>
+                      </tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+              : <div className="notice php-tune-diff"><Check size={14}/> {t('PHP {version} already matches what auto tune recommends for this machine.', { version: phpTune.php_version })}</div>}
+            {pinned > 0 && <p className="hint">{t('{count} other recommended setting(s) are kept as the php.ini limits above set them.', { count: pinned })}</p>}
+            {commonPools && <p className="hint">{t('PHP-FPM pools: {n}/{total} run pm.max_children={children}, idle {idle}, up to {requests} requests per process.', {
+              n: commonPools.length, total: phpTune.pools.length, children: commonPools[0].max_children || '—',
+              idle: commonPools[0].idle_timeout || '—', requests: commonPools[0].max_requests || '—',
+            })}{poolOutliers.length > 0 ? ' ' + t('{n} other pool(s) run different settings:', { n: poolOutliers.length }) : ''}</p>}
+            {poolOutliers.length > 0 && <ul className="php-tune-pool-outliers">
+              {poolOutliers.map(p => <li key={p.pool}>
+                <code>{p.pool}</code>
+                <span>pm.max_children={p.max_children || '—'}, {t('idle {idle}, up to {requests} requests', { idle: p.idle_timeout || '—', requests: p.max_requests || '—' })}</span>
+              </li>)}
+            </ul>}
+            {phpTuneApplied && <div className="notice php-tune-result"><strong><Check size={14}/> {t('PHP {version} tuned.', { version: phpTune.php_version })}</strong></div>}
+            <div className="php-tune-actions">
+              <button type="button" disabled={!!loading} className={tuneChanges.length ? undefined : 'secondary-light'} onClick={applyPhpTune}><Cpu size={14}/> {t('Apply Auto-tune to PHP')} {phpTune.php_version}</button>
+              <button type="button" className="secondary-light" onClick={() => setPhpTuneOpen(false)}>{t('Dismiss')}</button>
+            </div>
+          </>}
+          {!phpTuneOpen && <p className="hint">{t('What auto tune would change for this server, before anything changes.')}</p>}
+        </section>
+
+        <section className="section">{renderPhpExtensions()}</section>
       </div>
-      <div className="user-create-card">
-        <label><span>{t('PHP version')}</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); loadPhpTune(v); }}>
-          {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
-        </select></label>
-        <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
-          <option value="Off">{t('Off (production)')}</option><option value="On">{t('On (debug)')}</option>
-        </select></label>
-        {/* Switched straight away through its own endpoint, not saved with the
-            form: Auto-tune must not turn it back on behind the admin's back. */}
-        <label className="php-opcache-toggle"><span>{t('OPcache')}</span>
-          <button
-            type="button"
-            className={opcacheOn ? 'toggle-on' : 'secondary'}
-            aria-pressed={opcacheOn}
-            disabled={!!loading || !phpTune}
-            onClick={toggleOpcache}
-            title={t('OPcache is {state} for PHP {version}. Press to switch it.', { state: opcacheOn ? t('on') : t('off'), version: phpTune?.php_version || phpConfig.php_version })}
-          >
-            <Zap size={14}/> {opcacheOn ? t('Enabled') : t('Disabled')}
-          </button>
-        </label>
-        <label><span>max_execution_time</span><input type="number" value={phpConfig.max_execution_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_execution_time: e.target.value }))} /></label>
-        <label><span>max_input_time</span><input type="number" value={phpConfig.max_input_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_time: e.target.value }))} /></label>
-        <label><span>max_input_vars</span><input type="number" value={phpConfig.max_input_vars} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_vars: e.target.value }))} /></label>
-        <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="1024M" /></label>
-        <label><span>post_max_size</span><input value={phpConfig.post_max_size} onChange={e => setPhpConfig(prev => ({ ...prev, post_max_size: e.target.value }))} placeholder="1024M" /></label>
-        <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
-        {OPCACHE_SIZE_FIELDS.map(([key, directive, min, max, example]) => <label key={key}><span>{directive}</span>
-          <input type="number" min={min} max={max} value={phpConfig[key] ?? ''} placeholder={String(phpConfig.opcache_effective?.[key] || example)}
-            title={t('Empty keeps the Auto-tune value.')} onChange={e => setPhpConfig(prev => ({ ...prev, [key]: e.target.value }))} /></label>)}
-        <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> {t('Restore defaults')}</button>
-        <button className="secondary-light" disabled={!!loading} onClick={() => { setPhpTuneOpen(true); loadPhpTune(phpConfig.php_version); }}><Zap size={14}/> {t('Auto-tune')}</button>
-        <button disabled={!!loading} onClick={updatePhpConfig}>{t('Save')}</button>
-      </div>
-      {phpTuneOpen && phpTune && <div className="user-create-card php-tune-card" style={{ marginTop: 16, borderColor: 'var(--accent)' }}>
-        <h3>{t('⚡ Auto-tune Recommendation')}</h3>
-        <p className="hint">{t('Based on {ram} MB RAM, {cores} CPU cores and {pools} PHP pool(s).', { ram: phpTune.facts?.total_memory_mb, cores: phpTune.facts?.cpu_count, pools: phpTune.facts?.pool_count ?? 0 })}</p>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', margin: '12px 0', fontSize: '0.9em' }}>
-          {(phpTune.settings || []).map(row => <div key={row.key}>
-            <strong>{row.key}:</strong> {row.value}
-            {row.changes && !row.overridden_value ? <small> ({t('now {value}', { value: row.current || t('unset') })})</small> : null}
-          </div>)}
-        </div>
-        <p className="hint">{tuneChanges.length > 0
-          ? t('Auto tune will change {n} setting(s) for PHP {version}', { n: tuneChanges.length, version: phpTune.php_version })
-          : t('PHP {version} already matches what auto tune recommends for this machine.', { version: phpTune.php_version })}</p>
-        {commonPools && <p className="hint">{t('PHP-FPM pools: {n}/{total} run pm.max_children={children}, idle {idle}, up to {requests} requests per process.', {
-          n: commonPools.length, total: phpTune.pools.length, children: commonPools[0].max_children || '—',
-          idle: commonPools[0].idle_timeout || '—', requests: commonPools[0].max_requests || '—',
-        })}{poolOutliers.length > 0 ? ' ' + t('{n} other pool(s) run different settings:', { n: poolOutliers.length }) : ''}</p>}
-        {poolOutliers.length > 0 && <ul className="php-tune-pool-outliers">
-          {poolOutliers.map(p => <li key={p.pool}>
-            <code>{p.pool}</code>
-            <span>pm.max_children={p.max_children || '—'}, {t('idle {idle}, up to {requests} requests', { idle: p.idle_timeout || '—', requests: p.max_requests || '—' })}</span>
-          </li>)}
-        </ul>}
-        {phpTuneApplied && <p className="hint"><Check size={14}/> {t('PHP {version} tuned.', { version: phpTune.php_version })}</p>}
-        <button disabled={!!loading} onClick={applyPhpTune}><Zap size={14}/> {t('Apply Auto-tune to PHP')} {phpTune.php_version}</button>
-        <button className="secondary-light" style={{ marginLeft: 8 }} onClick={() => setPhpTuneOpen(false)}>{t('Dismiss')}</button>
-      </div>}
-      {renderPhpExtensions()}
-      {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
-        <h3>{t('Install PHP')}</h3>
-        <div className="php-install-grid">
-          {notInstalled.map(v => <button key={v} className="secondary" disabled={!!loading} onClick={() => installPhpVersion(v)}>+ PHP {v}</button>)}
-        </div>
-      </div>}
-    </section>;
+    </>;
   }
+
+
 
   // Fail2ban is managed where the rest of the firewall is: its bans are
   // firewall rules. Turning it on and off is the Addons page's job.
@@ -9850,13 +10447,10 @@ function App() {
     const pages = Math.max(1, Math.ceil(matching.length / size));
     const page = Math.min(firewallIpPage, pages);
     const items = matching.slice((page - 1) * size, page * size);
-    return <section className="section firewall-ip-page">
-      <div className="section-title">
-        <div className="waf-detail-title">
-          <button className="secondary" onClick={() => setShowFirewallIpList(false)}><ArrowLeft size={14}/> {t('Firewall')}</button>
-          <div><h2>{t('Blocked and allowed addresses')}</h2><p className="hint">{t('{blocked} blocked · {allowed} allowed', counts)}</p></div>
-        </div>
-      </div>
+    return <>
+      <PageHeader breadcrumbs={[{ label: t('Firewall'), onClick: () => setShowFirewallIpList(false) }, { label: t('Blocked and allowed addresses') }]}
+        title={t('Blocked and allowed addresses')} subtitle={t('{blocked} blocked · {allowed} allowed', counts)}/>
+      <section className="section firewall-ip-page">
       <div className="firewall-ip-toolbar">
         <input value={firewallIpQuery} autoFocus aria-label={t('Search addresses')} placeholder={t('Search an IP or network')}
                onChange={e => { setFirewallIpQuery(e.target.value); setFirewallIpPage(1); }} />
@@ -9880,19 +10474,27 @@ function App() {
         <span className="hint">{t('Page {page} of {pages} · {total} addresses', { page, pages, total: matching.length })}</span>
         <button className="mini secondary" disabled={page >= pages} onClick={() => setFirewallIpPage(page + 1)}>{t('Next')}</button>
       </div>}
-    </section>;
+      </section>
+    </>;
   }
 
+  // The firewall, as SNPanel's (pages/Firewall.jsx there): its state on a
+  // card of its own with one switch; the open ports, a form and a row each;
+  // the addresses allowed or blocked, from one form; Fail2ban; the IP
+  // blocklists; what the helper printed under Technical details.
   function renderFirewall() {
-    if (!isAdmin) return <section className="section"><h2>{t('Firewall')}</h2><p className="hint">{t('No permission.')}</p></section>;
+    if (!isAdmin) return <section className="section"><p className="hint">{t('No permission.')}</p></section>;
     if (showFirewallIpList) return renderFirewallAddresses();
-    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || t('Click Refresh to load status.');
-    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || t('No blocklist status loaded.');
+    const busy = !!loading;
+    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || '';
+    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || '';
     const blocklistUrls = parseFirewallBlocklistUrls(blocklistText);
     const allRules = firewallStatus?.rules || [];
     // A port rule has no address: the ports the panel always keeps open, then
-    // the ones opened here, which can be closed again from their chip.
+    // the ones opened here, which can be closed again.
     const openPorts = allRules.filter(rule => rule.action === 'ALLOW' && !rule.ip && rule.port);
+    const ownPorts = openPorts.filter(rule => !rule.protected);
+    const lockedPorts = openPorts.filter(rule => rule.protected);
     const ipRules = allRules.filter(rule => !rule.protected && rule.ip);
     const ipCounts = {
       blocked: ipRules.filter(rule => rule.action === 'DENY').length,
@@ -9900,118 +10502,177 @@ function App() {
     };
     // The helper prints `Status: enabled|disabled` as its first line. Read that
     // rather than pattern-matching the whole dump, which carries the word
-    // "disabled" in other contexts too.
+    // "disabled" in other contexts too. "Chain active: no" is a firewall
+    // turned on whose rules are not in force.
     const statusLine = (firewallText.split('\n').find(line => line.startsWith('Status:')) || '').toLowerCase();
-    const enabled = statusLine.includes('enabled');
-    const stateKnown = statusLine !== '';
-    // "Chain active: no" is a firewall turned on whose rules are not in force
-    // (UFW still in charge, or ipset missing): the dashboard and the alert
-    // call that off, so the page must not call it on.
     const chainLine = (firewallText.split('\n').find(line => line.startsWith('Chain active:')) || '').toLowerCase();
-    const notApplied = enabled && chainLine.includes('no');
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('Firewall (iptables)')}{' '}
-              {stateKnown && <span className={notApplied ? 'badge bad' : enabled ? 'badge ok' : 'badge warn'}>{notApplied ? t('On, not applied') : enabled ? t('On') : t('Off')}</span>}
-            </h2>
-            <p className="hint">{t('SSH, the panel port and 80/443/465/587 are always kept open.')}</p>
+    const state = !firewallStatus ? 'loading'
+      : statusLine.includes('enabled') ? (chainLine.includes('no') ? 'idle' : 'on')
+        : statusLine.includes('disabled') ? 'off' : 'unknown';
+    const StateIcon = { loading: ShieldQuestion, on: ShieldCheck, idle: ShieldAlert, off: ShieldOff, unknown: ShieldQuestion }[state];
+    const title = {
+      loading: t('Loading firewall status…'),
+      on: t('The firewall is on'),
+      idle: t('The firewall is on, but not enforcing'),
+      off: t('The firewall is off'),
+      unknown: t('The firewall did not report its state'),
+    }[state];
+    const hint = {
+      loading: '',
+      on: t('Connections are refused unless a rule below or an always-open port lets them in.'),
+      idle: t('The firewall is turned on, but its rules are not in force: this server still filters with UFW, or iptables and ipset are missing. An update from an older release can leave it so.'),
+      off: t('Every port on this server can be reached.'),
+      unknown: t('What the helper said is under Technical details.'),
+    }[state];
+    const blocking = firewallRuleAction === 'block';
+    const ruleIp = blocking ? firewallBlockIp : firewallAllowIp;
+    const rulePort = blocking ? firewallBlockPort : firewallAllowPort;
+    const ruleProtocol = blocking ? firewallBlockProtocol : firewallAllowProtocol;
+    const setRuleIp = blocking ? setFirewallBlockIp : setFirewallAllowIp;
+    const setRulePort = blocking ? setFirewallBlockPort : setFirewallAllowPort;
+    const setRuleProtocol = blocking ? setFirewallBlockProtocol : setFirewallAllowProtocol;
+    const portText = rule => `${rule.port}/${String(rule.protocol || 'tcp').toUpperCase()}`;
+    return <div className="fw-page">
+      <section className="section fw-status" data-state={state}>
+        <div className="fw-status-head">
+          <span className="fw-status-icon"><StateIcon size={22} aria-hidden="true"/></span>
+          <div className="fw-status-text">
+            <h2>{title}</h2>
+            {hint && <p className="hint">{hint}</p>}
           </div>
-          <div className="actions">
-            <button className="secondary" disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> {t('Refresh')}</button>
-            <button className="secondary" disabled={!!loading || (stateKnown && !enabled)} onClick={reloadFirewall}>{t('Reload')}</button>
-            <button className="danger-light" disabled={!!loading || (stateKnown && !enabled)} onClick={disableFirewall}>{t('Disable')}</button>
-            <button disabled={!!loading || (stateKnown && enabled)} onClick={enableFirewall}><Shield size={14}/> {t('Enable')}</button>
+          <div className="fw-status-actions">
+            <button type="button" className="secondary icon-button" disabled={busy} onClick={() => { loadFirewall(); loadFirewallBlocklists(); }}
+              aria-label={t('Refresh')} title={t('Refresh')}><RefreshCw size={16} aria-hidden="true"/></button>
+            <button type="button" className="secondary" disabled={busy || state === 'off'} onClick={reloadFirewall}><RotateCw size={15} aria-hidden="true"/> {t('Reload rules')}</button>
+            {/* On or off is the firewall's state: a switch, asked before
+                it changes anything. */}
+            <Switch checked={state === 'on' || state === 'idle'} disabled={busy || state === 'loading'}
+              onChange={on => (on ? enableFirewall() : disableFirewall())}>{t('Firewall')}</Switch>
           </div>
         </div>
-        {notApplied && <div className="firewall-not-applied">
-          <p>{t('The firewall is turned on, but its rules are not in force: this server still filters with UFW, or iptables and ipset are missing. An update from an older release can leave it so.')}</p>
-          <button disabled={!!loading} onClick={repairFirewall}><Shield size={14}/> {t('Repair the firewall')}</button>
+        {state === 'idle' && <div className="fw-banners">
+          <div className="fw-banner" data-tone="warn" role="status">
+            <TriangleAlert size={18} aria-hidden="true"/>
+            <span>{t('Its rules are saved but not loaded, so nothing is being filtered.')}</span>
+            <button type="button" disabled={busy} onClick={repairFirewall}><Shield size={14} aria-hidden="true"/> {t('Repair the firewall')}</button>
+          </div>
         </div>}
-        <div className="info-box firewall-open-ports">
-          <strong>{t('Open ports')}</strong>
-          {openPorts.length > 0 ? <div className="firewall-port-list">
-            {openPorts.map(item => <span className="firewall-port-chip" key={`${item.protocol}-${item.port}-${item.zone}-${item.id}`}>
-              <code>{item.port}/{String(item.protocol || 'tcp').toUpperCase()}</code>
-              <small>{item.zone || 'UserZone'}</small>
-              {!item.protected && <button type="button" className="firewall-port-remove" disabled={!!loading}
-                title={t('Close port {port}', { port: `${item.port}/${String(item.protocol || 'tcp').toUpperCase()}` })}
-                aria-label={t('Close port {port}', { port: `${item.port}/${String(item.protocol || 'tcp').toUpperCase()}` })}
-                onClick={() => deleteFirewallRule(item.id)}><X size={12}/></button>}
-            </span>)}
-          </div> : <p className="hint">{firewallStatus ? t('No open port rules found.') : t('Loading…')}</p>}
+      </section>
+
+      <section className="section fw-open-ports">
+        <div className="fw-section-head">
+          <h2>{t('Open ports')}</h2>
+          <p className="hint">{t('Let anyone reach a port on this server - for a service of your own, such as an application on 8080.')}</p>
         </div>
-        <div className="firewall-ip-summary">
-          <span><strong>{t('Addresses')}</strong> {t('{blocked} blocked · {allowed} allowed', ipCounts)}</span>
-          <button className="secondary" disabled={!firewallStatus} onClick={() => { setFirewallIpQuery(''); setFirewallIpAction(''); setFirewallIpPage(1); setShowFirewallIpList(true); }}><Ban size={14}/> {t('View list')}</button>
+        <form className="fw-port-form" onSubmit={e => { e.preventDefault(); if (firewallPort.trim()) openFirewallPort(); }}>
+          <label><span>{t('Port')}</span>
+            <input value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder={t('e.g. {example}', { example: '8080' })} inputMode="numeric" autoComplete="off" />
+          </label>
+          <label><span>{t('Protocol')}</span>
+            <select value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+          </label>
+          <button type="submit" disabled={busy || !firewallPort.trim()}><Plus size={15} aria-hidden="true"/> {t('Open port')}</button>
+        </form>
+        <ul className="fw-port-rows" aria-label={t('Open ports')}>
+          {ownPorts.map(item => <li key={item.id} className="fw-port-row">
+            <code className="fw-port-name">{portText(item)}</code>
+            <span className="fw-port-note">{item.zone || <span className="data-table-muted">{t('No note')}</span>}</span>
+            <button type="button" className="secondary-light danger-hover fw-port-close-btn" disabled={busy} onClick={() => deleteFirewallRule(item.id)}
+              aria-label={t('Close port {port}', { port: portText(item) })}><X size={14} aria-hidden="true"/> {t('Close port')}</button>
+          </li>)}
+          {ownPorts.length === 0 && <li className="fw-port-row fw-port-none">{firewallStatus ? t('No port is open for a service of your own yet.') : t('Loading…')}</li>}
+          {lockedPorts.length > 0 && <li className="fw-port-row always" title={t('Always open: the panel needs it')}>
+            <span className="fw-port-lock"><Lock size={14} aria-hidden="true"/> {t('Locked')}</span>
+            <span className="fw-port-locked">{lockedPorts.map(item => <code key={item.id}>{portText(item)}</code>)}</span>
+            <span className="fw-port-note fw-port-legend">{t('SSH, the panel port and 80/443/465/587 are always kept open.')}</span>
+          </li>}
+        </ul>
+      </section>
+
+      <section className="section fw-rules">
+        <div className="fw-section-head fw-section-head-row">
+          <div>
+            <h2>{t('IP addresses')}</h2>
+            <p className="hint">{t('Allow or block an address or a network - on every port, or only on some.')}</p>
+          </div>
+          <button type="button" className="secondary" disabled={!firewallStatus}
+            onClick={() => { setFirewallIpQuery(''); setFirewallIpAction(''); setFirewallIpPage(1); setShowFirewallIpList(true); }}>
+            <Ban size={15} aria-hidden="true"/> {t('{blocked} blocked · {allowed} allowed', ipCounts)}</button>
         </div>
-        <details className="raw-output firewall-status">
-          <summary>{t('iptables status')}</summary>
-          <div className="raw-output-body">
-          <pre>{firewallText}</pre>
+        <form className="fw-rule-form" onSubmit={e => { e.preventDefault(); if (ruleIp.trim()) (blocking ? blockFirewallIp() : allowFirewallIp()); }}>
+          <label><span>{t('Action')}</span>
+            <select value={firewallRuleAction} onChange={e => setFirewallRuleAction(e.target.value)}>
+              <option value="allow">{t('Allow')}</option>
+              <option value="block">{t('Block')}</option>
+            </select>
+          </label>
+          <label><span>{t('From address')}</span>
+            <input value={ruleIp} onChange={e => setRuleIp(e.target.value)} placeholder={t('e.g. {example}', { example: '203.0.113.7' })} spellCheck="false" autoComplete="off" />
+          </label>
+          <label><span>{t('Port (optional)')}</span>
+            <input value={rulePort} onChange={e => setRulePort(e.target.value)} placeholder={t('All ports')} inputMode="numeric" autoComplete="off" />
+          </label>
+          <label><span>{t('Protocol')}</span>
+            <select value={ruleProtocol} onChange={e => setRuleProtocol(e.target.value)} disabled={!rulePort.trim()} title={rulePort.trim() ? undefined : t('Only for a rule with a port')}>
+              <option value="tcp">TCP</option><option value="udp">UDP</option>
+            </select>
+          </label>
+          <button type="submit" className={blocking ? 'danger' : undefined} disabled={busy || !ruleIp.trim()}>
+            <Plus size={15} aria-hidden="true"/> {blocking ? t('Add block') : t('Add allow')}
+          </button>
+        </form>
+      </section>
+
+      {renderFirewallFail2ban()}
+
+      <section className="section fw-blocklists">
+        <div className="fw-section-head fw-section-head-row">
+          <div>
+            <h2>{t('IP blocklists')}</h2>
+            <p className="hint">{t('TXT files are fetched daily at 01:00 and enforced by ipset, so large lists do not create thousands of firewall rules.')}</p>
+          </div>
+          <button type="button" className="secondary" disabled={busy || blocklistUrls.length === 0} onClick={updateFirewallBlocklistsNow}>
+            <RefreshCw size={15} aria-hidden="true"/> {t('Update now')}
+          </button>
+        </div>
+        <form className="fw-url-form" onSubmit={e => { e.preventDefault(); if (firewallBlocklistUrl.trim()) addFirewallBlocklistUrl(); }}>
+          <input value={firewallBlocklistUrl} onChange={e => setFirewallBlocklistUrl(e.target.value)}
+            placeholder={t('e.g. {example}', { example: 'https://example.com/blocklist.txt' })} aria-label={t('List URL')} spellCheck="false" autoComplete="off" />
+          <button type="submit" disabled={busy || !firewallBlocklistUrl.trim()}><Plus size={15} aria-hidden="true"/> {t('Add list')}</button>
+        </form>
+        {blocklistUrls.length > 0 && <ul className="fw-url-list">
+          {blocklistUrls.map(url => <li key={url}>
+            <code title={url}>{url}</code>
+            <button type="button" className="secondary icon-button danger-hover" disabled={busy} onClick={() => deleteFirewallBlocklistUrl(url)}
+              aria-label={t('Remove list {url}', { url })} title={t('Remove list {url}', { url })}><Trash2 size={15} aria-hidden="true"/></button>
+          </li>)}
+        </ul>}
+      </section>
+
+      <details className="fw-details">
+        <summary>{t('Technical details')}</summary>
+        <div className="fw-details-body">
+          <h3>{t('Firewall status')}</h3>
+          <pre>{firewallText || t('Not loaded yet.')}</pre>
           <div className="firewall-delete-inline">
             <label><span>{t('Delete rule #')}</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
-            <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>{t('Delete')}</button>
+            <button type="button" className="danger" disabled={busy || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>{t('Delete')}</button>
           </div>
-          </div>
-        </details>
-      </section>
-      <div className="firewall-rule-forms">
-      <section className="section">
-        <h2>{t('Open port')}</h2>
-        <div className="firewall-form">
-          <label><span>{t('Port')}</span><input value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" /></label>
-          <label><span>{t('Protocol')}</span><select value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button disabled={!!loading || !firewallPort} onClick={openFirewallPort}>{t('Open port')}</button>
+          <h3>{t('IP blocklist status')}</h3>
+          <pre>{blocklistText || t('Not loaded yet.')}</pre>
         </div>
-      </section>
-      <section className="section">
-        <h2>{t('Allow IP')}</h2>
-        <div className="firewall-form">
-          <label><span>{t('IP / CIDR')}</span><input value={firewallAllowIp} onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>
-          <label><span>{t('Port (optional)')}</span><input value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" /></label>
-          <label><span>{t('Protocol')}</span><select value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button disabled={!!loading || !firewallAllowIp} onClick={allowFirewallIp}>{t('Allow')}</button>
-        </div>
-      </section>
-      <section className="section">
-        <h2>{t('Block IP')}</h2>
-        <div className="firewall-form">
-          <label><span>{t('IP / CIDR')}</span><input value={firewallBlockIp} onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>
-          <label><span>{t('Port (optional)')}</span><input value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder={t('All ports')} inputMode="numeric" /></label>
-          <label><span>{t('Protocol')}</span><select value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button className="danger" disabled={!!loading || !firewallBlockIp} onClick={blockFirewallIp}>{t('Block')}</button>
-        </div>
-      </section>
-      </div>
-      {renderFirewallFail2ban()}
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Blocklist URLs')}</h2><p className="hint">{t('TXT files are fetched daily at 01:00 and enforced by ipset, so large lists do not create thousands of firewall rules.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={loadFirewallBlocklists}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="firewall-form firewall-blocklist-form">
-          <label><span>{t('TXT URL')}</span><input value={firewallBlocklistUrl} onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
-          <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> {t('Add URL')}</button>
-          <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> {t('Update now')}</button>
-        </div>
-        {blocklistUrls.length > 0 && <div className="table firewall-blocklist-table">
-          {blocklistUrls.map(url => <div className="firewall-rule" key={url}>
-            <span>{url}</span>
-            <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> {t('Delete')}</button></div>
-          </div>)}
-        </div>}
-        <details className="raw-output firewall-status"><summary>{t('Blocklist status')}</summary><pre>{blocklistText}</pre></details>
-      </section>
-    </>;
+      </details>
+    </div>;
   }
 
+  // The WAF, as SNPanel's (pages/Waf.jsx there): one switch per website,
+  // the engine's state and how many sites it protects above them; the global
+  // bad bots as chips; then BPanel's OWASP rule set and global custom rules.
   function renderWaf() {
     // The status probe prints whether the ModSecurity module is there; that is
-    // all the list needs to say. The full dump stays folded below it.
+    // all the list needs to say. The full dump stays folded below.
     const wafProbe = `${wafRules.status?.stdout || ''}`;
-    const wafEngine = /ModSecurity module:\s*not installed/.test(wafProbe) ? 'off' : /ModSecurity module:\s*installed/.test(wafProbe) ? 'on' : 'unknown';
+    const engine = /ModSecurity module:\s*not installed/.test(wafProbe) ? false : /ModSecurity module:\s*installed/.test(wafProbe) ? true : null;
     const statusText = wafRules.status?.stdout || wafRules.status?.stderr || t('Click Refresh to load WAF status.');
     // The effective list, not the site's own: a site with nothing of its own
     // still enforces the global list, and reporting "No bots" for it was a lie.
@@ -10019,56 +10680,96 @@ function App() {
     const botCountFor = id => (rowFor(id)?.effective_blocked_bots || []).length;
     const ownCountFor = id => (rowFor(id)?.blocked_bots || []).length;
     const savedGlobalRules = wafRules.custom_rules || '';
+    const protectedCount = websites.filter(site => site.waf_enabled).length;
+    const globalBots = globalBotText.split('\n').map(line => line.trim()).filter(Boolean);
+    const savedBots = botBlocks?.global_blocked_bots || [];
+    const botsChanged = JSON.stringify(globalBots) !== JSON.stringify(savedBots);
+    const addBots = (text) => {
+      const more = String(text || '').split(/[\n,]+/).map(line => line.trim()).filter(Boolean).filter(name => !globalBots.includes(name));
+      if (more.length) setGlobalBotText([...globalBots, ...more].join('\n'));
+    };
+    const removeBot = (name) => setGlobalBotText(globalBots.filter(item => item !== name).join('\n'));
+    const filter = wafBotFilter.trim().toLowerCase();
     return <>
+      <PageHeader subtitle={t("One switch per website: the panel's rules and the OWASP rule set, blocking attacks before they reach the site.")}
+        onRefresh={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }} refreshDisabled={!!loading}/>
+      {isAdmin && <div className="waf-status-line">
+        {engine === null
+          ? <span className="hint">{t('Reading the WAF status…')}</span>
+          : <span className={engine ? 'badge ok' : 'badge bad'}>{engine ? t('Engine installed') : t('Engine not available')}</span>}
+        <span className="badge">{t('{count} of {total} website(s) protected', { count: protectedCount, total: websites.length })}</span>
+      </div>}
+
+      <section className="section">
+        <div className="section-title"><h2>{isAdmin ? t('Websites') : t('Your websites')}</h2></div>
+        {websites.length === 0 && <EmptyState icon={Globe} message={t('No websites yet.')} />}
+        <div className="waf-sites">
+          {websites.map(site => {
+            const bots = botCountFor(site.id);
+            return <div className="waf-site-row" key={site.id}>
+              <Switch checked={!!site.waf_enabled} disabled={!!loading || engine === false}
+                onChange={() => toggleWebsiteWaf(site)} label={t('WAF for {domain}', { domain: site.domain })}
+                title={site.waf_enabled ? t('Turn the WAF off for {domain}', { domain: site.domain }) : t('Turn the WAF on for {domain}', { domain: site.domain })}/>
+              <div className="waf-site-name">
+                <strong>{site.domain}</strong>
+                <small>{site.waf_enabled ? t('Protected') : t('Not protected')}</small>
+              </div>
+              <div className="waf-site-badges">
+                <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
+                <span className={bots > 0 ? 'badge ok' : 'badge'}
+                  title={ownCountFor(site.id) > 0 ? t('{n} set on this website, the rest from the global list', { n: ownCountFor(site.id) }) : t('All from the global list')}
+                >{bots > 0 ? t('{n} bot(s)', { n: bots }) : t('No bots')}</span>
+              </div>
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openWafSite(site.id)}
+                aria-label={t('Configure {domain}', { domain: site.domain })}><SettingsIcon size={14} aria-hidden="true"/> <span className="waf-configure-label">{t('Configure')}</span></button>
+            </div>;
+          })}
+        </div>
+      </section>
+
       {isAdmin && <section className="section">
         <div className="section-title">
           <div>
-            <h2>{t('Global bad bot')} <span className="badge">{(botBlocks?.global_blocked_bots || []).length}</span></h2>
-            <p className="hint">{t('One bot per line, applied to every website. A request whose User-Agent contains the text gets 403 — plain text, no regex.')}</p>
+            <h2>{t('Global bad bots')}</h2>
+            <p className="hint">{savedBots.length > 0
+              ? t('Blocked on every website on this server. A site can add more of its own from its page. Currently {count} bot(s).', { count: savedBots.length })
+              : t('Blocked on every website on this server. A site can add more of its own from its page. Nothing blocked globally yet.')}</p>
           </div>
-          <button className="secondary" disabled={!!loading} onClick={loadBotBlocks}><RefreshCw size={14}/> {t('Refresh')}</button>
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => setWafBotsOpen(open => !open)}>{wafBotsOpen ? t('Hide') : t('Edit')}</button>
         </div>
-        <textarea className="code-editor badbot-input" value={globalBotText} onChange={e => setGlobalBotText(e.target.value)}
-          spellCheck={false}
-          placeholder={'AhrefsBot\nSemrushBot\nMJ12bot\nGPTBot\nBytespider'} />
-        {botBlocks?.max_bots ? <p className="hint">{t('Up to {n} bots.', { n: botBlocks.max_bots })}</p> : null}
-        <div className="actions"><button disabled={!!loading} onClick={() => saveGlobalBots(globalBotText)}><Shield size={14}/> {t('Save and apply to all websites')}</button></div>
+        {wafBotsOpen && <div className="global-bots">
+          <div className="global-bots-add">
+            <input value={wafNewBot} placeholder={t('Add one bot, e.g. Amazonbot')} onChange={e => setWafNewBot(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addBots(wafNewBot); setWafNewBot(''); } }} />
+            <button type="button" disabled={!wafNewBot.trim()} onClick={() => { addBots(wafNewBot); setWafNewBot(''); }}><Plus size={14}/> {t('Add')}</button>
+            <input className="global-bots-filter" value={wafBotFilter} placeholder={t('Filter the list')} onChange={e => setWafBotFilter(e.target.value)} />
+          </div>
+          <div className="global-bots-list">
+            {globalBots.length === 0 && <p className="hint">{t('No bots yet. Add one above, or paste a list below.')}</p>}
+            {globalBots.filter(name => !filter || name.toLowerCase().includes(filter)).map(name => <span className="global-bot-chip" key={name}>
+              <code>{name}</code>
+              <button type="button" title={t('Remove {name}', { name })} aria-label={t('Remove {name}', { name })} onClick={() => removeBot(name)}><X size={12}/></button>
+            </span>)}
+          </div>
+          <details className="global-bots-paste">
+            <summary>{t('Paste a list')}</summary>
+            <textarea className="code-editor" rows={6} spellCheck={false} value={wafBotPaste} onChange={e => setWafBotPaste(e.target.value)}
+              placeholder={'AhrefsBot\nSemrushBot\nMJ12bot'} />
+            <button type="button" disabled={!wafBotPaste.trim()} onClick={() => { addBots(wafBotPaste); setWafBotPaste(''); }}><Plus size={14}/> {t('Add to list')}</button>
+          </details>
+          <div className="global-bots-actions">
+            <button type="button" disabled={!!loading} onClick={() => saveGlobalBots(globalBotText)}>
+              <Shield size={14}/> {t('Save and apply to all {count} website(s)', { count: websites.length })}
+            </button>
+            <button type="button" className="secondary-light" disabled={!!loading || !botsChanged} onClick={() => setGlobalBotText(savedBots.join('\n'))}>{t('Reset')}</button>
+            <span className="hint">
+              {t('{n} bot(s)', { n: globalBots.length })}
+              {botBlocks?.max_bots ? ` · ${t('at most {max}', { max: botBlocks.max_bots })}` : ''}
+              {botsChanged ? ` · ${t('unsaved changes')}` : ''}
+            </span>
+          </div>
+        </div>}
       </section>}
-
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{isAdmin ? t('Websites') : t('Your websites')} {isAdmin && <span className={wafEngine === 'on' ? 'badge ok' : wafEngine === 'off' ? 'badge warn' : 'badge'}>{wafEngine === 'on' ? t('WAF engine on') : wafEngine === 'off' ? t('WAF engine off') : t('WAF engine: checking…')}</span>}</h2>
-            <p className="hint">{t('Open a website to configure its rules and bad bots.')}</p>
-          </div>
-          <button className="secondary" disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        {websites.length === 0
-          ? <EmptyState icon={Globe} message={t('No websites yet.')} />
-          : <div className="waf-site-table">
-              {websites.map(site => {
-                const bots = botCountFor(site.id);
-                // No CRS here: "WAF on" beside "CRS block" read as two things
-                // to worry about. CRS is switched on the site's own page.
-                return <button key={site.id} type="button" className="waf-site-row"
-                  disabled={!!loading} onClick={() => openWafSite(site.id)}>
-                  <span className="waf-site-domain">{site.domain}</span>
-                  <span className="waf-site-badges">
-                    <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
-                    <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
-                    <span className={bots > 0 ? 'badge ok' : 'badge'}
-                      title={ownCountFor(site.id) > 0 ? t('{n} set on this website, the rest from the global list', { n: ownCountFor(site.id) }) : t('All from the global list')}
-                    >{bots > 0 ? t('{n} bot(s)', { n: bots }) : t('No bots')}</span>
-                  </span>
-                  <span className="waf-site-open">{t('Configure')}</span>
-                </button>;
-              })}
-            </div>}
-        {isAdmin && <details className="raw-output firewall-status">
-          <summary>{t('WAF status')}</summary>
-          <pre>{statusText}</pre>
-        </details>}
-      </section>
 
       {isAdmin && <section className="section">
         <div className="section-title">
@@ -10080,7 +10781,6 @@ function App() {
             </h2>
             <p className="hint">{t('Inspects each request for SQL injection, XSS and similar attacks. Each website turns it on from its own page.')}</p>
           </div>
-          <button className="secondary" disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         {!crs && <p className="hint">{t('Click Refresh to load status.')}</p>}
         {crs && <>
@@ -10097,12 +10797,8 @@ function App() {
           </div>
           <div className="segmented-control">
             {[['off', 'Off'], ['detect', 'Detect only'], ['block', 'Block']].map(([value, label]) => (
-              <button
-                key={value}
-                className={crs.mode === value ? 'active' : ''}
-                disabled={!!loading || crs.mode === value}
-                onClick={() => saveCrsMode(value)}
-              >{t(label)}</button>
+              <button type="button" key={value} className={crs.mode === value ? 'active' : ''}
+                disabled={!!loading || crs.mode === value} onClick={() => saveCrsMode(value)}>{t(label)}</button>
             ))}
           </div>
           <p className="hint">
@@ -10130,13 +10826,18 @@ function App() {
           <button type="button" className="secondary-light" disabled={!!loading || wafGlobalRules === savedGlobalRules} onClick={() => setWafGlobalRules(savedGlobalRules)}>{t('Reset')}</button>
         </div>
       </section>}
+
+      {isAdmin && <details className="fw-details">
+        <summary>{t('Technical details')}</summary>
+        <div className="fw-details-body"><h3>{t('WAF status')}</h3><pre>{statusText}</pre></div>
+      </details>}
     </>;
   }
 
   // Its own route (/waf-site), so a reload or a shared link comes back to the
   // same website; drawn as OPanel draws its in-page site view, the way back
   // first.
-  function renderWafSite() {
+  function renderWafSite(embedded = false) {
     const selectedSite = websites.find(site => String(site.id) === String(selectedWafWebsiteId));
     const groupedRules = (wafSiteConfig?.default_rules || wafRules.default_rule_definitions || []).reduce((groups, rule) => {
       const category = rule.category || 'General';
@@ -10151,20 +10852,12 @@ function App() {
     // whether this account may write them.
     const mayEditCustomRules = wafSiteConfig?.may_edit_custom_rules !== false;
     return <>
-      <section className="section">
-        <div className="section-title waf-detail-head">
-          <div className="waf-detail-title">
-            <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/> {t('All websites')}</button>
-            <div><h2>{wafSiteConfig?.domain || selectedSite?.domain || t('Website')}</h2><p className="hint">{t('WAF configuration for this website.')}</p></div>
-          </div>
-          <div className="waf-detail-actions">
-            <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</span>
-            <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}>
-              <Shield size={14}/> {selectedSite?.waf_enabled ? t('Disable WAF') : t('Enable WAF')}
-            </button>
-          </div>
-        </div>
-      </section>
+      {/* As SNPanel's WafSite: the way back in the breadcrumbs, the WAF's
+          on/off as the page's one switch. */}
+      <PageHeader breadcrumbs={embedded ? undefined : [{ label: t('WAF'), onClick: () => navigateToPage('waf') }, { label: wafSiteConfig?.domain || selectedSite?.domain || t('Website') }]}
+        title={embedded ? t('Web application firewall') : (wafSiteConfig?.domain || selectedSite?.domain || t('Website'))} subtitle={t('WAF configuration for this website.')}
+        actions={<Switch checked={!!selectedSite?.waf_enabled} disabled={!selectedSite || !!loading}
+          onChange={() => selectedSite && toggleWebsiteWaf(selectedSite)}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</Switch>}/>
 
       {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message={t('No websites yet.')} /></section>}
 
@@ -10265,127 +10958,133 @@ function App() {
     </>;
   }
 
+  // Access logs, as SNPanel's (pages/WafAccessLogs.jsx there): Refresh and
+  // Export in the page's head, one bar of labelled filters, the count, the
+  // table, and clearing at the foot.
   function renderWafAccessLogs() {
     const rows = wafAccessLogs.items || [];
     const total = Number(wafAccessLogs.total || 0);
-    const entryCount = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total);
+    const selectedSite = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
     return <>
-      <section className="access-log-hero">
-        <div>
-          <p className="eyebrow">{t('Protected Traffic')}</p>
-          <h1>{t('Access Logs')}</h1>
-        </div>
-        <div className="access-log-hero-actions">
-          <button className="secondary-light icon-only" onClick={() => loadWafAccessLogs(wafAccessLogFilters, true)} disabled={!!loading} aria-label={t('Refresh logs')} title={t('Refresh logs')}><RefreshCw size={16}/></button>
-          <button className="secondary-light icon-only" onClick={() => navigateToPage('waf')} aria-label={t('Open WAF settings')} title={t('Open WAF settings')}><ExternalLink size={16}/></button>
-        </div>
-      </section>
-      <section className="section access-log-section">
-        <div className="access-log-toolbar">
-          <div className="access-log-title">
-            <strong>{t('Access Logs')}</strong>
-            <span>{entryCount} {t('entries')}</span>
-            <button className="secondary-light" onClick={exportWafAccessLogs} disabled={!rows.length}><Download size={14}/> {t('Export')}</button>
-            <button className="danger-light" onClick={clearWafAccessLogs} disabled={!!loading || websites.length === 0}><Trash2 size={14}/> {t('Clear')}</button>
+      <PageHeader subtitle={t('Protected traffic across every website.')}
+        onRefresh={() => loadWafAccessLogs(wafAccessLogFilters, true)} refreshDisabled={!!loading}
+        actions={<>
+          <button type="button" className="secondary-light" disabled={rows.length === 0} onClick={exportWafAccessLogs}><Download size={14}/> {t('Export')}</button>
+          {selectedSite && <a className="button-link secondary-light" href={websiteUrl(selectedSite)} target="_blank" rel="noopener noreferrer"><ExternalLink size={14}/> {t('Open website')}</a>}
+        </>}/>
+      <div className="access-log-panel">
+          <form className="al-filters" onSubmit={e => { e.preventDefault(); applyWafAccessLogFilters(); }}>
+            <label className="al-filter"><span>{t('Website')}</span>
+              <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
+                <option value="">{t('All websites')}</option>
+                {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+              </select>
+            </label>
+            <label className="al-filter"><span>{t('Verdict')}</span>
+              <select value={wafAccessLogFilters.verdict} onChange={e => updateWafAccessLogFilters({ verdict: e.target.value }, true)}>
+                <option value="all">{t('All verdicts')}</option>
+                <option value="block">{t('Blocked')}</option>
+                <option value="allow">{t('Allowed')}</option>
+                <option value="error">{t('Errors')}</option>
+              </select>
+            </label>
+            <label className="al-filter al-filter-grow"><span>{t('Search')}</span>
+              <input type="search" value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} placeholder={t('A path, an address, a reason')} />
+            </label>
+            <label className="al-filter al-filter-small"><span>{t('Rows')}</span>
+              <select value={wafAccessLogFilters.limit} onChange={e => updateWafAccessLogFilters({ limit: Number(e.target.value) }, true)}>
+                {[50, 100, 200, 500].map(size => <option key={size} value={size}>{t('{n} / page', { n: size })}</option>)}
+              </select>
+            </label>
+            <label className="al-filter al-filter-refresh"><span>{t('Automatic refresh')}</span>
+              <select value={wafAccessLogFilters.refresh} onChange={e => updateWafAccessLogFilters({ refresh: Number(e.target.value) })}>
+                <option value={0}>{t('Manual refresh')}</option>
+                <option value={5}>{t('Refresh 5s')}</option>
+                <option value={10}>{t('Refresh 10s')}</option>
+                <option value={30}>{t('Refresh 30s')}</option>
+              </select>
+            </label>
+            <button type="submit" disabled={!!loading}><Search size={14}/> {t('Apply')}</button>
+          </form>
+          <p className="al-count" aria-live="polite">{t('{count} entries', { count: total.toLocaleString() })}
+            {rows.length > 0 && rows.length < total ? <small> · {t('{count} shown', { count: rows.length.toLocaleString() })}</small> : null}</p>
+          <div className="access-log-table-wrap">
+            <table className="access-log-table">
+              <thead>
+                <tr>
+                  <th>{t('Verdict')}</th>
+                  <th>{t('Time')}</th>
+                  <th>{t('Site')}</th>
+                  <th>{t('Method')}</th>
+                  <th>{t('Path')}</th>
+                  <th>IP</th>
+                  <th>{t('Country')}</th>
+                  <th>{t('Reason')}</th>
+                  <th>{t('Status')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(item => <tr key={item.id}>
+                  <td data-label={t('Verdict')}><span className={`verdict-pill ${item.verdict === 'allow' ? 'allow' : item.verdict === 'error' ? 'error' : 'block'}`}>{t(accessLogVerdictLabel(item.verdict))}</span></td>
+                  <td data-label={t('Time')}><span className="access-log-time">{formatAccessLogTime(item.timestamp) || '-'}</span><small>{item.duration_ms || 0} ms</small></td>
+                  <td data-label={t('Site')}><span className="access-log-site">{item.domain}</span></td>
+                  <td data-label={t('Method')}>{item.method || '-'}</td>
+                  <td data-label={t('Path')}><code className="access-log-path">{item.path || '-'}</code></td>
+                  <td data-label="IP"><span className="access-log-ip">{item.ip || '-'}</span></td>
+                  <td data-label={t('Country')}>{accessLogCountryLabel(item)}</td>
+                  <td data-label={t('Reason')}>{item.reason || (item.verdict === 'block' ? t('Blocked') : item.verdict === 'error' ? t('Error') : t('Allowed'))}</td>
+                  <td data-label={t('Status')}>{item.status || '-'}</td>
+                </tr>)}
+              </tbody>
+            </table>
+            {rows.length === 0 && <EmptyState icon={Shield} message={t('No access log entries match the current filters.')} />}
           </div>
-          <div className="access-log-filters">
-            <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
-              <option value="">{t('All websites')}</option>
-              {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-            </select>
-            <select value={wafAccessLogFilters.verdict} onChange={e => updateWafAccessLogFilters({ verdict: e.target.value }, true)}>
-              <option value="all">{t('All verdicts')}</option>
-              <option value="block">{t('Block')}</option>
-              <option value="allow">{t('Allow')}</option>
-              <option value="error">{t('Error')}</option>
-            </select>
-            {/* The search runs on Enter: every request reads the logs afresh. */}
-            <input value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder={t('Filter logs')} />
-            <select value={wafAccessLogFilters.limit} onChange={e => updateWafAccessLogFilters({ limit: Number(e.target.value) }, true)}>
-              {[50, 100, 200, 500].map(size => <option key={size} value={size}>{size} {t('/ page')}</option>)}
-            </select>
-            <select value={wafAccessLogFilters.refresh} onChange={e => updateWafAccessLogFilters({ refresh: Number(e.target.value) })} title={t('Auto refresh')}>
-              <option value={0}>{t('Auto refresh off')}</option>
-              <option value={5}>{t('Refresh 5s')}</option>
-              <option value={10}>{t('Refresh 10s')}</option>
-              <option value={30}>{t('Refresh 30s')}</option>
-            </select>
+          <div className="al-foot">
+            {(wafAccessLogs.missing || []).length > 0 && <p className="hint">{t('Missing log files: {list}', { list: wafAccessLogs.missing.join(', ') })}</p>}
+            <button type="button" className="secondary-light danger-hover al-clear" disabled={!!loading || websites.length === 0} onClick={clearWafAccessLogs}>
+              <Trash2 size={14}/> {selectedSite ? t('Clear the logs of {domain}', { domain: selectedSite.domain }) : t("Clear every website's logs")}
+            </button>
           </div>
-        </div>
-        <div className="access-log-table-wrap">
-          <table className="access-log-table">
-            <thead>
-              <tr>
-                <th>{t('Verdict')}</th>
-                <th>{t('Time')}</th>
-                <th>{t('Site')}</th>
-                <th>{t('Method')}</th>
-                <th>{t('Path')}</th>
-                <th>IP</th>
-                <th>{t('Reason')}</th>
-                <th>{t('Status')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(item => <tr key={item.id}>
-                <td><span className={`verdict-pill ${item.verdict === 'allow' ? 'allow' : item.verdict === 'error' ? 'error' : 'block'}`}>{t(accessLogVerdictLabel(item.verdict))}</span></td>
-                <td><span>{formatAccessLogTime(item.timestamp) || '-'}</span><small>{item.duration_ms || 0} ms</small></td>
-                <td><span>{item.domain}</span></td>
-                <td>{item.method || '-'}</td>
-                <td><span className="access-log-path">{item.path || '-'}</span></td>
-                <td><span>{item.ip || '-'}</span><small>{accessLogCountryLabel(item) === '-' ? '' : accessLogCountryLabel(item)}</small></td>
-                <td>{item.reason || (item.verdict === 'block' ? t('Blocked') : item.verdict === 'error' ? t('Error') : t('Allowed'))}</td>
-                <td>{item.status || '-'}</td>
-              </tr>)}
-            </tbody>
-          </table>
-          {rows.length === 0 && <EmptyState icon={Shield} message={t('No access log entries match the current filters.')} />}
-        </div>
-        {(wafAccessLogs.missing || []).length > 0 && <div className="access-log-footer">
-          <span>{t('Missing log files:')} {wafAccessLogs.missing.join(', ')}</span>
-        </div>}
-      </section>
+      </div>
     </>;
   }
 
+  // Updates, as SNPanel's: the panel's release with its one action, the
+  // update, beside "Check releases"; then the operating system's packages,
+  // updated now (a secondary action) or by themselves on a schedule.
   function renderUpdates() {
-    if (!isAdmin) return <section className="section"><h2>{t('Updates')}</h2><p className="hint">{t('No permission.')}</p></section>;
+    if (!isAdmin) return <section className="section"><p className="hint">{t('No permission.')}</p></section>;
     const statusText = updatesStatus?.stdout || updatesStatus?.stderr || t('Click View logs to load update logs.');
     const panelUpdate = updatesStatus?.panel || {};
     // Three states, not two. `update_available` is null when the release check
     // could not tell, and "unknown" must not be dressed up as "up to date".
     const hasUpdate = panelUpdate.update_available;
-    const panelBadge = hasUpdate === true ? t('Update available')
-      : hasUpdate === false ? t('Up to date') : t('Unknown');
-    const panelBadgeClass = hasUpdate === true ? 'badge warn'
-      : hasUpdate === false ? 'badge ok' : 'badge';
+    const panelBadge = hasUpdate === true ? t('Update available') : hasUpdate === false ? t('Up to date') : t('Unknown');
+    const panelBadgeClass = hasUpdate === true ? 'badge warn' : hasUpdate === false ? 'badge ok' : 'badge';
     const currentPanelVersion = panelUpdate.current_version || appVersion || '';
     const latestPanelVersion = panelUpdate.latest_version || '';
     return <>
+      <PageHeader subtitle={t('OS packages update with {manager}; the panel updates with {command}.', { manager: <code>apt</code>, command: <code>bpanel-update</code> })}
+        actions={<button type="button" className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? t('Hide logs') : t('View logs')}</button>}/>
       <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')} <code>bpanel-update</code>.</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? t('Hide logs') : t('View logs')}</button>
-        </div>
         <div className="info-box update-version-box">
           <div className="update-version-head"><strong>{t('Panel release')}</strong><span className={panelBadgeClass}>{panelBadge}</span></div>
           <div className="update-version-grid">
-            <span>{t('Current')} <strong>{currentPanelVersion ? `v${currentPanelVersion}` : t('unknown')}</strong></span>
-            <span>{t('Latest')} <strong>{latestPanelVersion ? `v${latestPanelVersion}` : t('unknown')}</strong></span>
-            <span>{t('Checked')} <strong>{panelUpdate.last_checked_at || t('never')}</strong></span>
-            <span>{t('State file')} <strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
+            <span>{t('Current {version}', { version: <strong>{currentPanelVersion ? `v${currentPanelVersion}` : t('unknown')}</strong> })}</span>
+            <span>{t('Latest {version}', { version: <strong>{latestPanelVersion ? `v${latestPanelVersion}` : t('unknown')}</strong> })}</span>
+            <span>{t('Checked {when}', { when: <strong>{panelUpdate.last_checked_at || t('never')}</strong> })}</span>
           </div>
-          {panelUpdate.check_error && <p className="hint">{t('Release check failed:')} {panelUpdate.check_error}</p>}
+          {panelUpdate.check_error && <p className="hint update-check-problem">{t('Release check failed:')} {panelUpdate.check_error}</p>}
           {panelUpdate.last_update_status && <p className="hint">{t('Last update:')} {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? t(' at {when}', { when: panelUpdate.last_update_finished_at }) : ''}</p>}
         </div>
-        <div className="actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/> {t('Refresh status')}</button>
-          <button className="secondary" disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? t('Updating OS...') : t('Update OS now')}</button>
+        <div className="actions update-actions">
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/> {t('Check releases')}</button>
           {/* Releases, not a branch: until a newer one is out there is nothing to install. */}
-          <button disabled={!!loading || panelUpdating || hasUpdate !== true} onClick={runPanelUpdate}><RotateCcw size={14} className={panelUpdating ? 'spin' : ''}/> {panelUpdating ? t('Updating panel...') : t('Update panel now')}</button>
+          <button type="button" className={hasUpdate === true ? undefined : 'secondary-light'} disabled={!!loading || panelUpdating || hasUpdate !== true} onClick={runPanelUpdate}
+            title={hasUpdate === true ? undefined : t('No newer release is known.')}><Download size={14} className={panelUpdating ? 'spin' : ''}/> {panelUpdating ? t('Updating panel...') : t('Update panel now')}</button>
         </div>
         {showUpdateLog && <div className="info-box firewall-status update-log-box">
-          <div className="update-log-head"><strong>{t('Update logs')}</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> {t('Refresh')}</button></div>
+          <div className="update-log-head"><strong>{t('Update logs')}</strong><button type="button" className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> {t('Refresh')}</button></div>
           <pre>{statusText}</pre>
         </div>}
         {/* Number(...) > 0, not the bare value: a progress of 0 made this
@@ -10401,19 +11100,19 @@ function App() {
             </div>
             <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${Number(panelUpdate.progress_percent) || 0}%` }} /></div>
             {panelUpdate.progress_message && <p className="hint update-progress-msg">{panelUpdate.progress_message}</p>}
-            {panelUpdateLog.length > 0 && (
-              <pre className="update-progress-log">{panelUpdateLog.join('\n')}</pre>
-            )}
+            {panelUpdateLog.length > 0 && <pre className="update-progress-log">{panelUpdateLog.join('\n')}</pre>}
           </div>
         )}
       </section>
       <section className="section">
-        <h2>{t('Auto Update OS')}</h2>
+        <PageHeader title={t('Operating system')} subtitle={t("Package updates for the server itself, separate from the panel's.")}
+          actions={<button type="button" className="secondary-light" disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? t('Updating OS...') : t('Update OS now')}</button>}/>
+        <h3 className="updates-os-title">{t('Auto Update OS')}</h3>
         <div className="firewall-form updates-os-form">
-          <label><span>{t('Enabled')}</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">{t('On')}</option><option value="off">{t('Off')}</option></select></label>
+          <label><span>{t('Status')}</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">{t('On')}</option><option value="off">{t('Off')}</option></select></label>
           <label><span>{t('Mode')}</span><select value={osAutoUpdate.mode} onChange={e => setOsAutoUpdate(prev => ({ ...prev, mode: e.target.value }))}><option value="security">{t('Security')}</option><option value="all">{t('All packages')}</option></select></label>
           <label><span>{t('Auto reboot')}</span><select value={osAutoUpdate.auto_reboot ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, auto_reboot: e.target.value === 'on' }))}><option value="off">{t('Off')}</option><option value="on">{t('On')}</option></select></label>
-          <button disabled={!!loading} onClick={saveOsAutoUpdate}>{t('Save OS auto update')}</button>
+          <button type="button" disabled={!!loading} onClick={saveOsAutoUpdate}>{t('Save OS auto update')}</button>
         </div>
       </section>
     </>;
@@ -10424,12 +11123,13 @@ function App() {
     const pk = passkeyStatus || {};
     const keys = pk.credentials || [];
     return <>
+      <PageHeader subtitle={t('How you sign in to this panel: sessions, passkeys and the authenticator app.')}/>
       <section className="section">
         <div className="section-title">
           <div><h2>{t('Signed-in devices')}</h2>
             <p className="hint">{t('Signing out ends this browser only. Sign out everywhere ends every session of this account, on other browsers and devices too.')}</p></div>
           <button className="secondary" disabled={!!loading || !!currentUser?.impersonator || !!currentUser?.demo}
-            onClick={() => { if (confirm(t('Sign out of every browser and device, this one included?'))) logout({ everywhere: true }); }}>
+            onClick={async () => { if (await confirmDialog(t('Sign out of every browser and device, this one included?'))) logout({ everywhere: true }); }}>
             <LogOut size={14}/> {t('Sign out everywhere')}</button>
         </div>
       </section>
@@ -10604,14 +11304,11 @@ function App() {
       const finished = job.finished_at ? new Date(job.finished_at) : null;
       const seconds = started && finished ? Math.max(0, Math.round((finished - started) / 1000)) : null;
       const duration = seconds == null ? '—' : seconds >= 3600 ? `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m` : seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
-      return <section className="section scan-detail">
-        <div className="section-title">
-          <div className="waf-detail-title">
-            <button className="secondary" onClick={() => setMalwareDetailJob(null)}><ArrowLeft size={14}/> {t('Malware scanner')}</button>
-            <div><h2>{scanJobTitle(job)}</h2><p className="hint">{scanJobStamp(job)}</p></div>
-          </div>
-          <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>
-        </div>
+      return <>
+        <PageHeader breadcrumbs={[{ label: t('Malware scanner'), onClick: () => setMalwareDetailJob(null) }, { label: scanJobTitle(job) }]}
+          title={scanJobTitle(job)} subtitle={scanJobStamp(job)}
+          actions={<span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>}/>
+        <section className="section scan-detail">
         <div className="scan-detail-stats">
           <div><small>{t('Files scanned')}</small><strong>{job.scanned || 0}{job.total_files ? ` / ${job.total_files}` : ''}</strong></div>
           <div><small>{t('Threats found')}</small><strong className={job.infected > 0 ? 'text-danger' : ''}>{job.infected || 0}</strong></div>
@@ -10628,14 +11325,23 @@ function App() {
           <summary>{t('Scan log')}</summary>
           <pre className="malware-scan-log">{job.log.join('\n')}</pre>
         </details>}
-      </section>;
+        </section>
+      </>;
     }
 
+    const scheduleDirty = ['websites', 'server'].some(scope =>
+      JSON.stringify(malwareSchedulesForm[scope] || {}) !== JSON.stringify(malwareSchedules[scope] || {}));
+    const saveSchedules = async () => {
+      for (const scope of ['websites', 'server']) {
+        if (JSON.stringify(malwareSchedulesForm[scope] || {}) !== JSON.stringify(malwareSchedules[scope] || {})) await saveMalwareSchedule(scope);
+      }
+    };
     return <>
+      <PageHeader subtitle={t('Scans the websites, and the whole server, with Linux Malware Detect and ClamAV.')}
+        onRefresh={() => { loadMalwareScanStatus(); loadMalwareSchedule(); }} refreshDisabled={!!loading}/>
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>{t('Malware Scanner')}</h2>
             <p className="hint badge-row">
               {mwActive ? <span className="badge ok">{t('Active')}</span>
                 : mwEnabled && !mwInstalled ? <span className="badge warn">{t('Installing...')}</span>
@@ -10650,7 +11356,6 @@ function App() {
               </span>}
             </p>
           </div>
-          <button className="secondary" disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         {mw.memory_warning && <div className="info-box malware-ram-warning">
           <strong><AlertCircle size={15}/>{t('Memory warning')}</strong>
@@ -10689,9 +11394,8 @@ function App() {
                 : <span className={mw.realtime_enabled ? 'badge ok' : 'badge'}>{mw.realtime_enabled ? t('On') : t('Off')}</span>}</strong>
               <p className="hint">{t('Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.')}</p>
             </div>
-            {mw.realtime_enabled
-              ? <button className="danger" disabled={!!loading} onClick={() => toggleMalwareRealtime(false)}>{t('Turn off')}</button>
-              : <button disabled={!!loading} onClick={() => toggleMalwareRealtime(true)}><Shield size={14}/> {t('Turn on')}</button>}
+            <Switch checked={!!mw.realtime_enabled} disabled={!!loading} onChange={on => toggleMalwareRealtime(on)}
+              label={t('Real-time protection')}><span>{mw.realtime_enabled ? t('On') : t('Off')}</span></Switch>
           </div>
         </div>}
 
@@ -10703,9 +11407,8 @@ function App() {
               {mw.signature_filter === 'on' && !mw.clamd_running && <p className="hint">{t('With the filtered signatures a scan loads in about 2 seconds and 200 MB.')}</p>}
               {!mw.scan_on_upload_is_cheap && <p className="hint">{t('This server has no resident clamd — start one first and each scan drops to milliseconds.')}</p>}
             </div>
-            {mw.scan_on_upload
-              ? <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScanOnUpload(false)}>{t('Turn off')}</button>
-              : <button disabled={!!loading} onClick={() => toggleMalwareScanOnUpload(true)}><Shield size={14}/> {t('Turn on')}</button>}
+            <Switch checked={!!mw.scan_on_upload} disabled={!!loading} onChange={on => toggleMalwareScanOnUpload(on)}
+              label={t('Scan uploaded files')}><span>{mw.scan_on_upload ? t('On') : t('Off')}</span></Switch>
           </div>
         </div>}
 
@@ -10780,61 +11483,48 @@ function App() {
 
       {/* Weekly, and shown in Vietnam time: the API holds weekday and hour in
           UTC, and utcScheduleToVn / vnScheduleToUtc convert at the form. */}
-      {mwEnabled && [
-        {
-          scope: 'server',
-          title: t('Full server scan'),
-          root: '/',
-          intro: t('Walks the whole VPS as root, so malware parked in /tmp, /root or a home folder outside public_html is found too. Heavier than a website scan and hungry for memory: best run weekly, at a quiet hour.'),
-        },
-        {
-          scope: 'websites',
-          title: t('Website scan (/home)'),
-          root: '/home',
-          intro: t('Scans every website’s files under /home. Each run is a full scan; the incremental scan of recently changed files is run by hand above.'),
-        },
-      ].map(({ scope, title, root, intro }) => {
-        const form = malwareSchedulesForm[scope] || {};
-        const saved = malwareSchedules[scope] || {};
-        // form.weekday/hour are UTC on the wire; show and edit them as VN time.
-        const vn = utcScheduleToVn(form.weekday ?? 6, form.hour ?? 3);
-        const setField = patch => setMalwareSchedulesForm(prev => ({ ...prev, [scope]: { ...prev[scope], ...patch } }));
-        const setVn = patch => setField(vnScheduleToUtc(patch.weekday ?? vn.weekday, patch.hour ?? vn.hour));
-        return <section className="section" key={scope}>
-          <div className="section-title">
-            <div>
-              <h2>{title}</h2>
-              <p className="hint">{intro}</p>
-            </div>
-            <button className="secondary" disabled={!!loading} onClick={loadMalwareSchedule}><RefreshCw size={14}/> {t('Refresh')}</button>
-          </div>
-          <div className="info-box">
-            <strong>{t('Scheduled scan')} <code>{root}</code></strong>
+      {mwEnabled && <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('Automatic schedule')}</h2>
             <p className="hint">{t('The panel scans on its own, with nobody pressing anything. Pick an hour when few visitors are around.')}</p>
-            <div className="scan-schedule-form">
-              <label><span>{t('Enabled')}</span>
-                <select value={form.enabled ? 'on' : 'off'} onChange={e => setField({ enabled: e.target.value === 'on' })}>
-                  <option value="off">{t('Off')}</option>
-                  <option value="on">{t('On')}</option>
-                </select>
+          </div>
+          <button type="button" disabled={!!loading || !scheduleDirty} onClick={saveSchedules}><Clock size={14}/> {t('Save schedule')}</button>
+        </div>
+        <div className="malware-sched-list">
+          {[
+            { scope: 'websites', title: t('Website scan (/home)'), intro: t('Scans every website’s files under /home. Each run is a full scan; the incremental scan of recently changed files is run by hand above.') },
+            { scope: 'server', title: t('Full server scan'), intro: t('Walks the whole VPS as root, so malware parked in /tmp, /root or a home folder outside public_html is found too. Heavier than a website scan and hungry for memory: best run weekly, at a quiet hour.') },
+          ].map(({ scope, title, intro }) => {
+            const form = malwareSchedulesForm[scope] || {};
+            const saved = malwareSchedules[scope] || {};
+            // form.weekday/hour are UTC on the wire; show and edit them as VN time.
+            const vn = utcScheduleToVn(form.weekday ?? 6, form.hour ?? 3);
+            const setField = patch => setMalwareSchedulesForm(prev => ({ ...prev, [scope]: { ...prev[scope], ...patch } }));
+            const setVn = patch => setField(vnScheduleToUtc(patch.weekday ?? vn.weekday, patch.hour ?? vn.hour));
+            return <div className={`malware-sched-row${form.enabled ? ' on' : ''}`} key={scope} title={intro}>
+              <label className="malware-sched-toggle">
+                <input type="checkbox" checked={!!form.enabled} onChange={e => setField({ enabled: e.target.checked })} />
+                <span>{title}</span>
               </label>
-              <label><span>{t('Day of week')}</span>
-                <select value={vn.weekday} disabled={!form.enabled} onChange={e => setVn({ weekday: Number(e.target.value) })}>
+              <div className="malware-sched-when">
+                <select value={vn.weekday} disabled={!form.enabled} aria-label={t('Day of week')} onChange={e => setVn({ weekday: Number(e.target.value) })}>
                   {WEEKDAY_LABELS.map((label, index) => <option key={label} value={index}>{t(label)}</option>)}
                 </select>
-              </label>
-              <label><span>{t('Hour')}</span>
-                <input type="number" min="0" max="23" value={vn.hour} disabled={!form.enabled} onChange={e => setVn({ hour: Math.min(23, Math.max(0, Number(e.target.value) || 0)) })} />
-              </label>
-              <button disabled={!!loading} onClick={() => saveMalwareSchedule(scope)}><Clock size={14}/> {t('Save schedule')}</button>
-            </div>
-            {saved.enabled && saved.next_run_at && <p className="hint" style={{marginTop:8}}>{t('Next:')} <strong>{fmtStamp(saved.next_run_at)}</strong></p>}
-            {saved.last_run_at && <p className="hint" style={{marginTop:8}}>
-              {t('Last scheduled run:')} {fmtStamp(saved.last_run_at)} — <span className={saved.last_status === 'infected' ? 'badge danger' : saved.last_status === 'error' ? 'badge bad' : 'badge ok'}>{scanStatusLabel(saved.last_status)}</span> {saved.last_message || ''}
-            </p>}
-          </div>
-        </section>;
-      })}
+                <select value={vn.hour} disabled={!form.enabled} aria-label={t('Hour')} onChange={e => setVn({ hour: Number(e.target.value) })}>
+                  {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+                </select>
+              </div>
+              <div className="malware-sched-meta">
+                {saved.enabled && saved.next_run_at && <span>{t('Next:')} <strong>{fmtStamp(saved.next_run_at)}</strong></span>}
+                {saved.last_run_at && <span className={saved.last_status === 'infected' ? 'badge danger' : saved.last_status === 'error' ? 'badge bad' : 'badge ok'}>
+                  {fmtStamp(saved.last_run_at)} · {scanStatusLabel(saved.last_status)}
+                </span>}
+              </div>
+            </div>;
+          })}
+        </div>
+      </section>}
     </>;
   }
 
@@ -11058,27 +11748,233 @@ function App() {
     </div>;
   }
 
+  // Users & packages, as SNPanel's (pages/Users.jsx there): a filter by role
+  // (a reseller's, by state) and a search over one table - who each account
+  // is, its role, its package, its disk, its state - with Edit and the other
+  // actions behind "…"; a reseller's customers fold under it. An account and a
+  // package are edited in side sheets, and added in them; moving a domain to
+  // another account is a sheet too. The forms in the sheets are BPanel's own
+  // (renderUserFields, renderPackageFields).
   function renderUsers() {
-    if (!canManageUsers) return <section className="section"><h2>{t('Users')}</h2><p className="hint">{t('No permission.')}</p></section>;
-    const activeUserTab = userTab || 'list';
+    if (!canManageUsers) return <section className="section"><p className="hint">{t('No permission.')}</p></section>;
+    // "Add user" is a side sheet over the list: the 'add' tab (the Dashboard's
+    // tile) opens it there.
+    const tab = userTab === 'packages' ? 'packages' : 'list';
+    const refresh = () => { loadUsers(); loadPackages(); if (isReseller) loadResellerPool(); };
+    const roleBadge = (role) => <span className={`badge role-${role}`}>{t(roleLabel(role))}</span>;
+    const openMove = (user) => { setAssignWebsiteId(''); setAssignUserId(user ? String(user.id) : ''); setMoveDomainOpen(true); };
+    const packageInUse = (item) => users.some(user => user.package_id === item.id);
+
+    function userRow(user, children = [], child = false) {
+      const self = user.id === currentUser?.id;
+      const open = expandedResellers.includes(user.id);
+      const toggle = () => setExpandedResellers(prev => (prev.includes(user.id) ? prev.filter(id => id !== user.id) : [...prev, user.id]));
+      return <React.Fragment key={user.id}>
+        <div className={`ust-row${child ? ' is-child' : ''}${user.is_active ? '' : ' is-suspended'}${editingUser?.id === user.id ? ' is-editing' : ''}`} role="row">
+          <span role="cell" className="ust-account">
+            <span className="users-avatar" aria-hidden="true">{(user.username || '?').charAt(0).toUpperCase()}</span>
+            <span className="ust-name"><strong>{user.username}</strong>{user.email && <small>{user.email}</small>}</span>
+          </span>
+          <div className="ust-meta">
+            {isAdmin && <span role="cell" className="ust-role" data-label={t('Role')}>
+              {roleBadge(user.role)}
+              {user.reseller_id && !child && <small>{t('via {name}', { name: resellerName(user.reseller_id) })}</small>}
+              {children.length > 0 && <button type="button" className="ust-expand" aria-expanded={open} onClick={toggle}
+                aria-label={open ? t('Hide the customers of {name}', { name: user.username }) : t('Show the customers of {name}', { name: user.username })}>
+                <ChevronDown size={14} aria-hidden="true"/>{t('{count} customer(s)', { count: children.length })}</button>}
+            </span>}
+            <span role="cell" className="ust-package" data-label={t('Package')}>
+              {user.role === 'admin' ? <span className="ust-muted" title={t('Administrators are not bound by website or storage limits.')}>—</span>
+                : user.package_name || <span className="ust-muted">{t('Own limits')}</span>}
+            </span>
+            <span role="cell" className="ust-use" data-label={t('Disk')}>{renderUserDisk(user)}</span>
+            {limitsOn && <span role="cell" className="ust-use" data-label={t('CPU / RAM')} title={t('Resource use now')}>{renderUserResources(user)}</span>}
+            <span role="cell" className="ust-status" data-label={t('Status')}>
+              <span className={`ust-state ${user.is_active ? 'is-on' : 'is-off'}`}><i aria-hidden="true"></i>{user.is_active ? t('Active') : t('Suspended')}</span>
+              {user.totp_enabled && <span className="ust-flag" role="img" aria-label={t('Two-step verification is on')} title={t('Two-step verification is on')}><ShieldCheck size={14} aria-hidden="true"/></span>}
+            </span>
+          </div>
+          <span role="cell" className="ust-actions">
+            {(isAdmin || !self) && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}
+              aria-label={t('Edit {name}', { name: user.username })}><Pencil size={14} aria-hidden="true"/> {t('Edit')}</button>}
+            <ActionMenu label={t('More actions for {name}', { name: user.username })} items={[
+              { label: t('Log in as'), icon: LogIn, hidden: self, disabled: !!loading, onClick: () => quickLoginUser(user) },
+              { label: t('Move a domain to {name}', { name: user.username }), icon: ArrowRightLeft, hidden: !isAdmin || websites.length === 0, disabled: !!loading, onClick: () => openMove(user) },
+              { label: t('Reset 2FA'), icon: ShieldOff, hidden: self || !user.totp_enabled, disabled: !!loading, onClick: () => resetUserTwoFactor(user) },
+              user.is_active
+                ? { label: t('Suspend'), icon: Ban, hidden: self, disabled: !!loading, onClick: () => suspendUser(user) }
+                : { label: t('Unsuspend'), icon: Play, hidden: self, disabled: !!loading, onClick: () => unsuspendUser(user) },
+              'separator',
+              { label: t('Delete {name}', { name: user.username }), icon: Trash2, danger: true, hidden: self, disabled: !!loading, onClick: () => deletePanelUser(user) },
+            ]}/>
+          </span>
+        </div>
+        {open && children.map(kid => userRow(kid, [], true))}
+      </React.Fragment>;
+    }
+
+    function renderUserList() {
+      const needle = userSearch.trim().toLowerCase();
+      const matches = (user) => !needle || `${user.username || ''}\n${user.email || ''}`.toLowerCase().includes(needle);
+      const count = (test) => users.filter(test).length;
+      const filters = isAdmin
+        ? [['all', t('All'), () => true], ['admin', t('Admins'), u => u.role === 'admin'],
+          ['reseller', t('Resellers'), u => u.role === 'reseller'], ['end_user', t('Customers'), u => u.role === 'end_user']]
+        : [['all', t('All'), () => true], ['active', t('Active'), u => u.is_active], ['suspended', t('Suspended'), u => !u.is_active]];
+      const chosen = filters.find(([id]) => id === userFilter) || filters[0];
+      const shown = users.filter(chosen[2]).filter(matches);
+      // An administrator's resellers carry their customers, folded, in All and
+      // in Resellers; a search, or the Customers filter, lists everyone flat.
+      const nest = isAdmin && !needle && (chosen[0] === 'all' || chosen[0] === 'reseller');
+      const resellerIds = new Set(users.filter(u => u.role === 'reseller').map(u => u.id));
+      const customersOf = (user) => (nest && user.role === 'reseller' ? users.filter(u => u.reseller_id === user.id && u.role === 'end_user') : []);
+      const top = nest ? shown.filter(u => !(u.role === 'end_user' && u.reseller_id && resellerIds.has(u.reseller_id))) : shown;
+      return <section className="section">
+        <div className="users-toolbar ust-toolbar">
+          <Tabs className={`ust-filter${filters.length === 4 ? ' is-four' : ''}`} label={isAdmin ? t('Show accounts by role') : t('Show customers by state')} value={chosen[0]} onChange={setUserFilter}
+            tabs={filters.map(([id, label, test]) => ({ id, label, badge: count(test) }))}/>
+          <label className="users-search"><Search size={15} aria-hidden="true"/>
+            <input type="search" value={userSearch} onChange={e => setUserSearch(e.target.value)}
+              aria-label={t('Search by username or email')} placeholder={t('Search by username or email')}/>
+          </label>
+        </div>
+        {users.length === 0 && <EmptyState icon={Users} message={isReseller ? t('No customers yet.') : t('No users found.')}/>}
+        {users.length > 0 && shown.length === 0 && <EmptyState icon={Search} message={needle ? t('No users match the search.') : t('No accounts here.')}/>}
+        {shown.length > 0 && <div className={`ust${isAdmin ? ' with-role' : ''}${limitsOn ? ' with-resources' : ''}`} role="table" aria-label={isReseller ? t('Customers') : t('Panel users')}>
+          <div className="ust-row ust-head" role="row">
+            <span role="columnheader">{t('Account')}</span>
+            <div className="ust-meta">
+              {isAdmin && <span role="columnheader">{t('Role')}</span>}
+              <span role="columnheader">{t('Package')}</span>
+              <span role="columnheader">{t('Disk')}</span>
+              {limitsOn && <span role="columnheader">{t('CPU / RAM')}</span>}
+              <span role="columnheader">{t('Status')}</span>
+            </div>
+            <span role="columnheader"><span className="sr-only">{t('Actions')}</span></span>
+          </div>
+          {top.map(user => userRow(user, customersOf(user)))}
+        </div>}
+      </section>;
+    }
+
+    function renderPackageList() {
+      return <section className="section">
+        {packages.length === 0 && <EmptyState icon={PackageOpen} message={t('No packages yet.')}
+          action={{ label: t('New package'), icon: Plus, onClick: () => setPackageSheet(true) }}/>}
+        {packages.length > 0 && <div className="ust ust-plans" role="table" aria-label={t('Packages')}>
+          <div className="ust-row ust-head" role="row"><span role="columnheader">{t('Package')}</span><span role="columnheader">{t('Status')}</span><span role="columnheader"><span className="sr-only">{t('Actions')}</span></span></div>
+          {packages.map(item => <div className={`ust-row${String(editingPackageId) === String(item.id) ? ' is-editing' : ''}`} role="row" key={item.id}>
+            <span role="cell" className="ust-account">
+              <span className="users-avatar" aria-hidden="true"><PackageOpen size={16}/></span>
+              <span><strong>{item.name}</strong>{packageChips(item)}</span>
+            </span>
+            <span role="cell" data-label={t('Status')}><span className={packageInUse(item) ? 'badge ok' : 'badge'}>{packageInUse(item) ? t('In use') : t('Not in use')}</span></span>
+            <span role="cell" className="ust-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}
+                aria-label={t('Edit {name}', { name: item.name })}><Pencil size={14} aria-hidden="true"/> {t('Edit')}</button>
+              <ActionMenu label={t('More actions for {name}', { name: item.name })} items={[
+                { label: t('Delete {name}', { name: item.name }), icon: Trash2, danger: true, disabled: !!loading || packageInUse(item),
+                  hint: packageInUse(item) ? t('Package is in use') : undefined, onClick: () => deletePackage(item) },
+              ]}/>
+            </span>
+          </div>)}
+        </div>}
+      </section>;
+    }
+
+    const site = websites.find(item => String(item.id) === String(assignWebsiteId));
+    const sameOwner = site && String(site.owner_id) === String(assignUserId);
+    const siteOwner = (item) => users.find(u => String(u.id) === String(item.owner_id))?.username;
+    const closeAdd = () => setUserTab('list');
+    const editingPackage = editingPackageId ? packages.find(item => String(item.id) === String(editingPackageId)) : null;
+    // The app and the databases behind the website move with it.
+    const movingWith = [
+      ...(assignPreview?.application ? [t('application {name}', { name: assignPreview.application })] : []),
+      ...(assignPreview?.databases || []).map(name => t('database {name}', { name })),
+    ];
+
     return <>
-      <section className="section">
-        <div className="section-title">
-          <div>{isReseller
-            ? <><h2>{t('Customers')}</h2><p className="hint">{t("Your customers' accounts, your packages, and new customers.")}</p></>
-            : <><h2>{t('Panel Users')}</h2><p className="hint">{t('Manage panel accounts, hosting packages, and create new users.')}</p></>}</div>
-          <button className="secondary" disabled={!!loading} onClick={() => { loadUsers(); loadPackages(); if (isReseller) loadResellerPool(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="tab-bar" role="tablist" aria-label={t('Panel user sections')}>
-          <button type="button" role="tab" aria-selected={activeUserTab === 'list'} className={activeUserTab === 'list' ? 'tab active' : 'tab'} onClick={() => setUserTab('list')}><Users size={14}/> {t('List Users')}</button>
-          <button type="button" role="tab" aria-selected={activeUserTab === 'packages'} className={activeUserTab === 'packages' ? 'tab active' : 'tab'} onClick={() => setUserTab('packages')}><PackageOpen size={14}/> {t('Packages')}</button>
-          <button type="button" role="tab" aria-selected={activeUserTab === 'add'} className={activeUserTab === 'add' ? 'tab active' : 'tab'} onClick={() => setUserTab('add')}><Plus size={14}/> {t('Add User')}</button>
-        </div>
-      </section>
+      <PageHeader className="ust-header"
+        subtitle={isReseller ? t("Your customers' accounts, your packages, and new customers.")
+          : tab === 'packages' ? t('Manage provisioning plans for WHMCS and billing systems.') : t('Manage panel accounts, hosting packages, and create new users.')}
+        onRefresh={refresh} refreshDisabled={!!loading}
+        actions={tab === 'packages'
+          ? <button type="button" onClick={() => setPackageSheet(true)}><Plus size={15} aria-hidden="true"/> {t('New package')}</button>
+          : <>
+            {isAdmin && websites.length > 0 && <button type="button" className="secondary-light" onClick={() => openMove(null)}><ArrowRightLeft size={15} aria-hidden="true"/> {t('Move a domain')}</button>}
+            <button type="button" onClick={() => setUserTab('add')}><Plus size={15} aria-hidden="true"/> {isReseller ? t('Add customer') : t('Add User')}</button>
+          </>}/>
       {renderResellerPool()}
-      {activeUserTab === 'list' && renderUsersListTab()}
-      {activeUserTab === 'packages' && renderUsersPackagesTab()}
-      {activeUserTab === 'add' && renderUsersAddTab()}
+      <Tabs label={t('Panel user sections')} value={tab} onChange={setUserTab} tabs={[
+        { id: 'list', icon: Users, label: isReseller ? t('Customers') : t('List Users') },
+        { id: 'packages', icon: PackageOpen, label: t('Packages') },
+      ]}/>
+      {tab === 'list' && renderUserList()}
+      {tab === 'packages' && renderPackageList()}
+
+      <Drawer open={userTab === 'add'} onClose={closeAdd} wide className="ust-drawer"
+        title={isReseller ? t('Add customer') : t('Add panel user')}
+        subtitle={t('Panel username is also the Linux user. Select a package to auto-fill limits.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={closeAdd}>{t('Cancel')}</button>
+          <button type="button" disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}>
+            <Plus size={14} aria-hidden="true"/> {isReseller ? t('Create customer') : t('Create user')}</button>
+        </>}>
+        {renderUserFields(newUser, setNewUser, { creating: true, applyPackage: applyPackageToNewUser })}
+      </Drawer>
+
+      <Drawer open={!!editingUser} onClose={cancelEditingUser} wide className="ust-drawer"
+        title={editingUser ? t('Edit {name}', { name: editingUser.username }) : ''}
+        subtitle={editingUser ? `${editingUser.id === currentUser?.id ? t('Role is locked for the active admin session.') : t('Role changes sign the user out of existing sessions.')}${editingUserForm.role === 'admin' ? ` ${t('Admin accounts bypass website and storage limits.')}` : ''}` : null}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
+          <button type="button" disabled={!!loading || !editingUserForm.email?.trim()} onClick={updatePanelUser}><Save size={14} aria-hidden="true"/> {t('Save changes')}</button>
+        </>}>
+        {editingUser && renderUserFields(editingUserForm, setEditingUserForm, { user: editingUser, applyPackage: applyPackageToEditingUser })}
+      </Drawer>
+
+      <Drawer open={packageSheet} onClose={() => setPackageSheet(false)} wide className="ust-drawer" title={t('New package')}
+        subtitle={isReseller ? t("Your own packages: only you see them, to fill in your customers' limits.") : t('Manage provisioning plans for WHMCS and billing systems.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setPackageSheet(false)}>{t('Cancel')}</button>
+          <button type="button" disabled={!!loading || !newPackage.name.trim()} onClick={async () => { if (await createPackage()) setPackageSheet(false); }}><Plus size={14} aria-hidden="true"/> {t('Add package')}</button>
+        </>}>
+        {renderPackageFields(newPackage, setNewPackage)}
+      </Drawer>
+
+      <Drawer open={!!editingPackage} onClose={cancelEditingPackage} wide className="ust-drawer"
+        title={editingPackage ? t('Edit {name}', { name: editingPackage.name }) : ''}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
+          <button type="button" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(editingPackage.id)}><Save size={14} aria-hidden="true"/> {t('Save')}</button>
+        </>}>
+        {editingPackage && renderPackageFields(editingPackageForm, setEditingPackageForm)}
+      </Drawer>
+
+      {isAdmin && <Drawer open={moveDomainOpen} onClose={() => setMoveDomainOpen(false)} title={t('Move a domain')}
+        subtitle={t('Give a website to another account.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setMoveDomainOpen(false)}>{t('Cancel')}</button>
+          <button type="button" disabled={!assignWebsiteId || !assignUserId || sameOwner || !!loading}
+            onClick={async () => { if (await assignDomainToUser()) setMoveDomainOpen(false); }}><ArrowRightLeft size={14} aria-hidden="true"/> {t('Move domain')}</button>
+        </>}>
+        <div className="form-sections">
+          <Field label={t('Domain')} required>
+            <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)}>
+              <option value="">{t('Select domain')}</option>
+              {websites.map(item => <option key={item.id} value={item.id}>{siteOwner(item) ? `${item.domain} · ${siteOwner(item)}` : item.domain}</option>)}
+            </select>
+          </Field>
+          <Field label={t('New owner')} required error={sameOwner ? t('The domain already belongs to this account.') : ''}>
+            <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
+              <option value="">{t('Select user')}</option>
+              {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
+            </select>
+          </Field>
+          {movingWith.length > 0 && <p className="hint">{t('Moves with this website:')} <strong>{movingWith.join(', ')}</strong>.
+            {assignPreview?.application ? ` ${t('The application restarts once.')}` : ''}</p>}
+        </div>
+      </Drawer>}
     </>;
   }
 
@@ -11116,100 +12012,7 @@ function App() {
     </span>;
   }
 
-  function renderUsersListTab() {
-    const query = userSearch.trim().toLowerCase();
-    const shown = query
-      ? users.filter(user => user.username.toLowerCase().includes(query) || (user.email || '').toLowerCase().includes(query))
-      : users;
-    return <>
-      <section className="section">
-        {users.length > 0 && <div className="users-toolbar">
-          <label className="users-search">
-            <Search size={15}/>
-            <input type="search" value={userSearch} onChange={e => setUserSearch(e.target.value)} placeholder={t('Search by username or email')} aria-label={t('Search by username or email')} />
-          </label>
-          <span className="users-count">{t('{shown} of {total}', { shown: shown.length, total: users.length })}</span>
-        </div>}
-        {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
-        {users.length > 0 && shown.length === 0 && <p className="hint">{t('No account matches your search.')}</p>}
-        {shown.length > 0 && <div className={`users-table${limitsOn ? ' with-resources' : ''}`}>
-          <div className="users-row users-head" aria-hidden="true">
-            <span>{t('Account')}</span><span>{t('Role')}</span><span>{t('Disk')}</span>{limitsOn && <span>{t('CPU / RAM')}</span>}<span></span>
-          </div>
-          {shown.map(user => {
-            const self = user.id === currentUser?.id;
-            const editing = editingUser?.id === user.id;
-            return <div className={`users-item${editing ? ' is-editing' : ''}${user.is_active ? '' : ' is-suspended'}`} key={user.id}>
-              <div className="users-row">
-                {/* BPanel's package and 2FA sit under the name, with the email. */}
-                <div className="users-account">
-                  <span className="users-avatar" aria-hidden="true">{(user.username || '?').slice(0, 1).toUpperCase()}</span>
-                  <div><strong>{user.username}</strong>
-                    <small>{[user.email, user.role === 'admin' ? '' : (user.package_name || t('Custom')), user.totp_enabled ? '2FA' : ''].filter(Boolean).join(' · ')}</small></div>
-                </div>
-                <div className="users-meta">
-                  <div className="users-badges" data-label={t('Role')}>
-                    <span className={`badge role-${user.role}`}>{t(roleLabel(user.role))}</span>
-                    <span className={`badge ${user.is_active ? 'ok' : 'warn'}`}>{user.is_active ? t('Active') : t('Suspended')}</span>
-                    {isAdmin && user.reseller_id && <span className="badge" title={t('Reseller')}>{t('via {name}', { name: resellerName(user.reseller_id) })}</span>}
-                  </div>
-                  <div className="users-cell" data-label={t('Disk')}>{renderUserDisk(user)}</div>
-                  {limitsOn && <div className="users-cell" data-label={t('CPU / RAM')} title={t('Resource use now')}>{renderUserResources(user)}</div>}
-                </div>
-                <div className="users-actions">
-                  {(isAdmin || !self) && <button type="button" className={`mini ${editing ? '' : 'secondary-light'}`} disabled={!!loading} onClick={() => editing ? cancelEditingUser() : startEditingUser(user)}><Pencil size={14}/> {t('Edit')}</button>}
-                  {!self && <button type="button" className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> {t('Login as')}</button>}
-                  {!self && user.totp_enabled && <button type="button" className="mini secondary-light icon-button" disabled={!!loading} onClick={() => resetUserTwoFactor(user)} title={t('Reset 2FA')} aria-label={t('Reset 2FA')}><KeyRound size={14}/></button>}
-                  {!self && (user.is_active
-                    ? <button type="button" className="mini secondary-light icon-button is-suspend" disabled={!!loading} onClick={() => suspendUser(user)} title={t('Suspend')} aria-label={t('Suspend')}><Ban size={14}/></button>
-                    : <button type="button" className="mini secondary-light icon-button" disabled={!!loading} onClick={() => unsuspendUser(user)} title={t('Unsuspend')} aria-label={t('Unsuspend')}><CheckCircle size={14}/></button>)}
-                  {!self && <button type="button" className="mini danger icon-button" disabled={!!loading} onClick={() => deletePanelUser(user)} aria-label={t('Delete {name}', { name: user.username })} title={t('Delete')}><Trash2 size={14}/></button>}
-                </div>
-              </div>
-              {editing && <div className="user-edit-panel">
-                <div className="user-edit-heading">
-                  <div><strong>{t('Edit')} {user.username}</strong><small>
-                    {self ? t('Role is locked for the active admin session.') : t('Role changes sign the user out of existing sessions.')}
-                    {editingUserForm.role === 'admin' ? ` ${t('Admin accounts bypass website and storage limits.')}` : ''}
-                  </small></div>
-                  <button type="button" className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label={t('Close user editor')} title={t('Close user editor')}><X size={16}/></button>
-                </div>
-                {renderUserFields(editingUserForm, setEditingUserForm, { user, applyPackage: applyPackageToEditingUser })}
-                <div className="user-edit-actions">
-                  <button type="button" className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
-                  <button type="button" disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/> {t('Save changes')}</button>
-                </div>
-              </div>}
-            </div>;
-          })}
-        </div>}
-      </section>
-      {isAdmin && users.length > 0 && websites.length > 0 && <section className="section">
-        <div className="section-title"><div><h2>{t('Assign domain to user')}</h2><p className="hint">{t('Give a website to another account.')}</p></div></div>
-        <div className="assign-row">
-          <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)} aria-label={t('Select domain')}>
-            <option value="">{t('Select domain')}</option>
-            {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-          </select>
-          <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)} aria-label={t('Select user')}>
-            <option value="">{t('Select user')}</option>
-            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
-          </select>
-          <button type="button" disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
-        </div>
-        {(() => {
-          // The app and the databases behind the website move with it: the
-          // app's code sits in its owner's home, out of anyone else's reach.
-          const moving = [
-            ...(assignPreview?.application ? [t('application {name}', { name: assignPreview.application })] : []),
-            ...(assignPreview?.databases || []).map(name => t('database {name}', { name })),
-          ];
-          return moving.length > 0 && <p className="hint">{t('Moves with this website:')} <strong>{moving.join(', ')}</strong>.
-            {assignPreview?.application ? ` ${t('The application restarts once.')}` : ''}</p>;
-        })()}
-      </section>}
-    </>;
-  }
+
 
   // A package's limits as short chips: what it gives at a glance.
   function packageChips(item) {
@@ -11221,6 +12024,7 @@ function App() {
     if (mailAddonInstalled) chips.push([Mail, t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })]);
     if (limitsOn && item.cpu_percent) chips.push([Cpu, `CPU ${item.cpu_percent}%`]);
     if (limitsOn && item.memory_mb) chips.push([MemoryStick, `RAM ${formatMegabytes(item.memory_mb)}`]);
+    if (item.terminal_enabled) chips.push([TerminalIcon, t('Terminal')]);
     return <div className="plan-chips">{chips.map(([Icon, text]) => <span className="plan-chip" key={text}><Icon size={13}/>{text}</span>)}</div>;
   }
 
@@ -11237,78 +12041,16 @@ function App() {
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
         </div>
+        {canGrantTerminal && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
+        {canGrantTerminal && <p className="hint">{t("A shell as the account's own Linux user: it sees its own home and its own processes only, with no root access. Administrators and resellers open it by logging in as the customer.")}</p>}
       </fieldset>
       {limitsOn && renderLimitInputs(form, setForm)}
     </div>;
   }
 
-  function renderUsersPackagesTab() {
-    const packageInUse = item => users.some(user => user.package_id === item.id);
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('New package')}</h2><p className="hint">{isReseller ? t("Your own packages: only you see them, to fill in your customers' limits.") : t('Manage provisioning plans for WHMCS and billing systems.')}</p></div>
-        </div>
-        <div className="user-edit-panel is-form">
-          {renderPackageFields(newPackage, setNewPackage)}
-          <div className="user-edit-actions">
-            <button type="button" disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> {t('Add package')}</button>
-          </div>
-        </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Hosting Packages')}</h2></div>
-          <button type="button" className="secondary" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        {packages.length === 0 && <p className="hint">{t('No packages yet. Create one above.')}</p>}
-        {packages.length > 0 && <div className="users-table plans">
-          {packages.map(item => {
-            const editing = String(editingPackageId) === String(item.id);
-            return <div className={`users-item${editing ? ' is-editing' : ''}`} key={item.id}>
-              <div className="users-row plan-row">
-                <div className="users-account">
-                  <span className="users-avatar" aria-hidden="true"><PackageOpen size={16}/></span>
-                  <div><strong>{item.name}</strong>{packageChips(item)}</div>
-                </div>
-                <span className={packageInUse(item) ? 'badge ok' : 'badge'}>{packageInUse(item) ? t('In use') : t('Not in use')}</span>
-                <div className="users-actions">
-                  <button type="button" className={`mini ${editing ? '' : 'secondary-light'}`} disabled={!!loading} onClick={() => editing ? cancelEditingPackage() : startEditingPackage(item)}><Pencil size={14}/> {t('Edit')}</button>
-                  <button type="button" className="mini danger icon-button" disabled={!!loading || packageInUse(item)} onClick={() => deletePackage(item)}
-                    aria-label={t('Delete {name}', { name: item.name })} title={packageInUse(item) ? t('Package is in use') : t('Delete')}><Trash2 size={14}/></button>
-                </div>
-              </div>
-              {editing && <div className="user-edit-panel">
-                <div className="user-edit-heading">
-                  <div><strong>{t('Edit')} {item.name}</strong></div>
-                  <button type="button" className="user-edit-close secondary-light" onClick={cancelEditingPackage} aria-label={t('Close')} title={t('Close')}><X size={16}/></button>
-                </div>
-                {renderPackageFields(editingPackageForm, setEditingPackageForm)}
-                <div className="user-edit-actions">
-                  <button type="button" className="secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
-                  <button type="button" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/> {t('Save')}</button>
-                </div>
-              </div>}
-            </div>;
-          })}
-        </div>}
-      </section>
-    </>;
-  }
 
-  function renderUsersAddTab() {
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{isReseller ? t('Add customer') : t('Add panel user')}</h2><p className="hint">{t('Panel username is also the Linux user. Select a package to auto-fill limits.')}</p></div>
-      </div>
-      <div className="user-edit-panel is-form">
-        {renderUserFields(newUser, setNewUser, { creating: true, applyPackage: applyPackageToNewUser })}
-        <div className="user-edit-actions">
-          <button type="button" disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> {isReseller ? t('Create customer') : t('Create user')}</button>
-        </div>
-      </div>
-    </section>;
-  }
+
+
 
   function renderStandaloneEditor() {
     const editorLineCount = Math.max(1, String(fileContent || '').split('\n').length);
@@ -11396,7 +12138,7 @@ function App() {
 
   async function revokeMcpToken(token) {
     const owner = token.username && token.username !== currentUser?.username ? ` (${token.username})` : '';
-    if (!window.confirm(t('Revoke MCP token "{name}"{owner}? Anything using it stops working at once.', { name: token.name, owner }))) return;
+    if (!(await confirmDialog({ message: t('Revoke MCP token "{name}"{owner}? Anything using it stops working at once.', { name: token.name, owner }), danger: true, confirmLabel: t('Revoke') }))) return;
     const data = await request(`/mcp/tokens/${token.id}`, { method: 'DELETE' }, t('Revoking...'));
     if (data) {
       setNotice(t('Token revoked.'));
@@ -11423,14 +12165,9 @@ function App() {
     const mine = mcpTokens.filter(token => token.user_id === currentUser?.id);
     const others = mcpTokens.filter(token => token.user_id !== currentUser?.id);
     return <>
+      <PageHeader subtitle={<>{t('Connect Claude Code, Cursor, VS Code or another MCP client to this panel. A token acts as your account: it sees your websites, databases and backups')}{isAdmin ? t(' (as an administrator, every account’s)') : ''} {t('and nothing else. With actions allowed it can also edit your websites’ files, so an assistant can build and fix your sites; deleting a file always asks you first in the client.')}</>}
+        onRefresh={loadMcpTokens} refreshDisabled={!!loading}/>
       <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('AI assistants (MCP)')}</h2>
-            <p className="hint">{t('Connect Claude Code, Cursor, VS Code or another MCP client to this panel. A token acts as your account: it sees your websites, databases and backups')}{isAdmin ? t(' (as an administrator, every account’s)') : ''} {t('and nothing else. With actions allowed it can also edit your websites’ files, so an assistant can build and fix your sites; deleting a file always asks you first in the client.')}</p>
-          </div>
-          <button className="secondary" disabled={!!loading} onClick={loadMcpTokens}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
         {/* An administrator reaches the page while the addon is off; nothing
             answers on the endpoint until it is installed. */}
         {!enabled && <div className="info-box"><AlertCircle size={14}/> {t('MCP is not running on this panel. Install or start the')} <strong>{t('AI assistants (MCP)')}</strong> {t('addon on the Addons page first.')}
@@ -11515,9 +12252,11 @@ function App() {
   function renderPage() {
     if (page === 'processes') return isAdmin ? renderProcessMonitor() : renderDashboard();
     if (page === 'ram-usage') return isAdmin ? renderRamUsage() : renderDashboard();
+    if (page === 'account-resources') return isAdmin ? renderAccountResources() : renderDashboard();
     if (page === 'disk-usage') return isAdmin ? renderDiskUsage() : renderDashboard();
     if (page === 'traffic') return isAdmin ? renderTraffic() : renderDashboard();
     if (page === 'websites') return renderWebsites();
+    if (page === 'website') return renderWebsiteDetail();
     if (page === 'addons') return renderAddons();
     // DNS Manager (2026-09-29): administrators and customers, once installed.
     if (page === 'dns') return dnsAddonInstalled ? renderDns() : renderAddonMissing('dns');
@@ -11529,6 +12268,14 @@ function App() {
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
     if (page === 'git') return gitAddonInstalled ? renderGit() : renderAddonMissing('git');
+    // The WordPress Manager is a page of its own (pages/WordPress.jsx, OPanel's),
+    // reading what it needs from App through PanelContext.
+    if (page === 'wordpress') return wordpressAddonInstalled
+      ? <PanelContext.Provider value={{ isAdmin, loading, navigateToPage, request, setError, setNotice, formatBytes, wordpressEnabled: wordpressAddonInstalled }}>
+        <WordPressPage/>
+      </PanelContext.Provider>
+      : renderAddonMissing('wordpress');
+    if (page === 'terminal') return renderTerminalPage();
     if (page === 'cron') return renderCron();
     if (page === 'files') return renderFiles();
     if (page === 'backups') return renderBackups();
@@ -11547,7 +12294,6 @@ function App() {
     if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing('mcp');
     // Administrators only (operator, 2026-09-27): customers get no notifications.
     if (page === 'notifications') return !isAdmin ? renderAdminOnly() : notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing('notifications');
-    if (page === 'settings') return renderSettingsHub();
     if (page === 'panel-settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
     if (page === 'usage') return renderResourceUsage();
@@ -11615,7 +12361,7 @@ function App() {
 
   if (standaloneEditor) return renderStandaloneEditor();
 
-  const ActiveIcon = pageItem?.[2] || Home;
+  const ActiveIcon = litItem?.[2] || Home;
 
   return <main className="app-shell">
     <section className="layout">
@@ -11632,51 +12378,62 @@ function App() {
           <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label={t('Close menu')}><X size={18}/></button>
         </div>
         <nav className="sidebar-nav">
-          {navSections.map(section => <div className="sidebar-section" key={section.key}>
-            {section.title && <p className="sidebar-section-title">{t(section.title)}</p>}
-            {section.items.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-              <Icon size={16}/><span>{t(label)}</span>
-            </button>)}
-          </div>)}
-        </nav>
-        <div className="sidebar-foot">
-          <div className="user-menu sidebar-user" ref={userMenuRef}>
-            <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
-              <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}</span>
-              <span className="user-menu-name">{currentUser?.username || username}</span>
-              <ChevronDown size={14} className="user-menu-chevron"/>
-            </button>
-            {userMenuOpen && <div className="user-menu-panel" role="menu">
-              <div className="user-menu-head">
-                <strong>{accountLabel}</strong>
-                <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
-              </div>
-              <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
-              <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
-              {currentUser?.impersonator && <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); returnToImpersonator(); }}><ArrowLeft size={15}/>{t('Back to {name}', { name: currentUser.impersonator })}</button>}
-              <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
-              {appVersion && <small className="user-menu-version">{panelSettings.app_name || 'BPanel'} v{appVersion}</small>}
-            </div>}
+          <div className="sidebar-section">
+            {sideItems.map(([key, label, Icon]) => {
+              const current = sidebarPage === key;
+              return <button key={key} type="button" className={current ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={current ? 'page' : undefined}>
+                <Icon size={16}/><span>{t(label)}</span>
+              </button>;
+            })}
           </div>
-          <LanguageToggle language={language} onChange={changeLanguage} className="sidebar-tool"/>
-          <ThemeToggle theme={theme} onToggle={toggleTheme} className="sidebar-tool" size={15}/>
-        </div>
+        </nav>
       </aside>
       <div className="content">
         <section className="topbar">
           <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label={t('Toggle navigation')}>
-            <Menu size={20}/><span><ActiveIcon size={17}/>{t(pageItem?.[1] || 'Menu')}</span>
+            <Menu size={20}/><span><ActiveIcon size={17}/>{pageTitle}</span>
           </button>
           <div className="page-title">
-            {settingsPageItem
-              ? <h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage('settings')}>{t('Settings')}</button><span aria-hidden="true">›</span><span className="page-crumb-current">{t(settingsPageItem[1])}</span></h1>
-              : <h1>{pageItem?.[1] ? t(pageItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>}
+            {activeHub && activeHub.tabs.length > 1
+              ? <h1 className="page-crumbs">
+                {/* The hub, a link to its first tab; then the page. */}
+                <button type="button" onClick={() => navigateToPage(activeHub.tabs[0].page)}>{t(activeHub.hub.title)}</button>
+                <span aria-hidden="true">›</span>
+                <span className="page-crumb-current">{pageTitle}</span>
+              </h1>
+              : <h1>{pageTitle}</h1>}
           </div>
-          {/* The page title, then the server's status and the version, as in
-              OPanel; the account menu is at the foot of the sidebar. */}
+          {/* The language, the theme and the account's menu, as SNPanel has
+              them; the server's figures are the Dashboard's, and the version
+              is in the account's menu, opening Updates. */}
           <div className="top-actions">
-            {isAdmin && renderTopStats()}
-            {appVersion && renderTopVersion()}
+            {currentUser && <NotificationBell summary={dashSummary} checking={dashSummaryChecking} isAdmin={isAdmin}
+              currentUser={currentUser} navigateToPage={navigateToPage} onRefresh={loadDashboardSummary}/>}
+            <LanguageToggle language={language} onChange={changeLanguage} className="top-tool"/>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} className="top-tool" size={15}/>
+            <div className="user-menu top-user" ref={userMenuRef}>
+              <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
+                <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}{panelWaiting && <i className="user-menu-dot"/>}</span>
+                <span className="user-menu-name">{currentUser?.username || username}</span>
+                <ChevronDown size={14} className="user-menu-chevron"/>
+              </button>
+              {userMenuOpen && <div className="user-menu-panel" role="menu">
+                <div className="user-menu-head">
+                  <strong>{accountLabel}</strong>
+                  <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
+                </div>
+                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
+                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
+                {currentUser?.impersonator && <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); returnToImpersonator(); }}><ArrowLeft size={15}/>{t('Back to {name}', { name: currentUser.impersonator })}</button>}
+                {/* The panel's own version, and whether an update is waiting,
+                    is an administrator's concern - an end user sees neither. */}
+                {appVersion && isAdmin && <button type="button" role="menuitem" className={`user-menu-version-item${panelWaiting ? ' has-update' : ''}`} onClick={() => { setUserMenuOpen(false); navigateToPage('updates'); }}>
+                  <RefreshCw size={15}/><span>{panelSettings.app_name || 'BPanel'} v{appVersion}</span>
+                  <small>{panelWaiting ? t('Panel update {version} is available.', { version: resourceUsage?.panel_update?.latest_version }) : t('Updates')}</small>
+                </button>}
+                <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
+              </div>}
+            </div>
           </div>
         </section>
         <div className="content-body">
@@ -11685,6 +12442,8 @@ function App() {
             <LogIn size={15}/> <span>{t('You are logged in as {name}.', { name: currentUser.username })}</span>
             <button type="button" className="mini" disabled={!!loading} onClick={returnToImpersonator}><ArrowLeft size={14}/> {t('Back to {name}', { name: currentUser.impersonator })}</button>
           </div>}
+          {/* The hub's pages as tabs, under the top bar. */}
+          <HubTabs found={activeHub} page={page} navigateToPage={navigateToPage} routeForPage={routeForPage}/>
           {renderPage()}
           {loading && <div className="loading"><span></span>{t(loading)}</div>}
         </div>
@@ -11719,4 +12478,4 @@ function App() {
   </main>;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(<><App /><DialogHost /></>);

@@ -1174,10 +1174,12 @@ def test_the_page_exists_and_is_routed():
 
 
 def test_nobody_sees_the_menu_until_the_addon_is_on():
-    """An addon shows in the sidebar only once it is on - for administrators
-    too, who reach a switched-off addon from the Addons page (operator,
-    2026-09-27)."""
-    assert "...(mcpAddonInstalled ? [['mcp', 'AI assistants (MCP)', Bot]] : [])," in APP_JSX
+    """An addon shows only once it is on - for administrators too, who reach a
+    switched-off addon from the Addons page (operator, 2026-09-27). Its way in
+    is its Dashboard tile (operator, 2026-10-18: addons are not in the sidebar)."""
+    features = (PROJECT_ROOT / "frontend" / "src" / "lib" / "features.jsx").read_text(encoding="utf-8")
+    assert "mcp: { label: msg('AI assistants (MCP)'), icon: 'mcp', page: 'mcp', addon: 'mcp' }," in features
+    assert "if (tile.addon && !ctx.installed(tile.addon)) return false;" in features
 
 
 def test_the_page_says_a_self_signed_certificate_will_not_work():
@@ -1221,7 +1223,7 @@ def test_a_token_row_says_whether_it_can_act():
 
 def test_revoking_asks_first():
     block = APP_JSX.split("async function revokeMcpToken")[1].split("function ")[0]
-    assert "window.confirm" in block
+    assert "await confirmDialog(" in block
 
 
 def test_the_page_is_in_the_sidebar_and_the_sidebar_is_not_folded():
@@ -1229,12 +1231,13 @@ def test_the_page_is_in_the_sidebar_and_the_sidebar_is_not_folded():
     was collapsed by default, and the operator could not find it - reported
     from a real panel on .88 where the code was deployed and working.
 
-    The sidebar now holds the everyday pages and the addons that are on, and
-    everything else sits on the Settings page - a page one click away, not a
-    submenu that can be left folded (operator, 2026-09-27).
+    Since 2026-10-18 an addon's way in is its Dashboard tile, in a section
+    that a search finds even when folded; the sidebar has no submenu.
     """
-    sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
-    assert "['mcp', 'AI assistants (MCP)', Bot]" in sidebar
+    features = (PROJECT_ROOT / "frontend" / "src" / "lib" / "features.jsx").read_text(encoding="utf-8")
+    advanced = features.split("const ADMIN = [")[1].split("];")[0]
+    assert "'mcp'" in advanced
+    assert "const open = !!needle || !collapsedTools.includes(section.key);" in APP_JSX
     assert "sidebar-subnav" not in APP_JSX and "settingsMenuOpen" not in APP_JSX
 
 
@@ -1242,36 +1245,33 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
     """The operator's rule: an addon that is on must show on the map.
 
     Read from the backend catalogue rather than a list written here, so an
-    addon added later fails this until it has an entry. fail2ban has no page
-    of its own - its ban list is a section of the Firewall page - so its way
-    in is Settings, then Firewall.
+    addon added later fails this until it has a way in. Since 2026-10-18 that
+    is a Dashboard tile (lib/features.jsx) - the operator's: addons are not in
+    the sidebar - or, for one with no page of its own, the page it lives on.
     """
     from app.services import addons
 
-    sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
-    sidebar += APP_JSX.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
+    src = PROJECT_ROOT / "frontend" / "src"
+    features = (src / "lib" / "features.jsx").read_text(encoding="utf-8")
+    navigation = (src / "lib" / "navigation.jsx").read_text(encoding="utf-8")
     for slug in sorted(addons.CATALOGUE):
-        way_in = {"application": "appsFeatureEnabled ? [['applications',",
-                  "fail2ban": "isAdmin && ['firewall', 'Firewall', BrickWall,",
-                  # An addon since 2026-09-27, in the sidebar once it is on.
-                  "malware": "malwareAddonInstalled && isAdmin ? [['malware', 'Malware Scanner', Bug]]",
-                  "mcp": "mcpAddonInstalled ? [['mcp',",
-                  # No page of its own: its accounts are set on its card in
-                  # Settings, then Addons (2026-09-28).
-                  "demo": "isAdmin && ['addons', 'Addons', PackageOpen,",
-                  # Administrators and customers alike (2026-09-29).
-                  "dns": "dnsAddonInstalled ? [['dns', 'DNS Manager', Network]]",
-                  # Administrators and customers alike (2026-10-10).
-                  "git": "gitAddonInstalled ? [['git', 'Git', GitBranch]]",
-                  # Administrators and customers alike (2026-09-29).
-                  "mail": "mailAddonInstalled ? [['mail', 'Email', Mail]]",
-                  # Administrators only (operator, 2026-09-27).
-                  "notifications": "notificationsAddonInstalled && isAdmin ? [['notifications',",
-                  # No page of its own: limits are set on accounts and packages,
-                  # and each account's use is shown there (2026-10-04).
-                  "limits": "canManageUsers ? [['users', 'Panel users', Users]]"}.get(slug)
-        assert way_in, f"addon {slug} has no sidebar entry named in this test"
-        assert way_in in sidebar, f"addon {slug} is installable but has no way in from the sidebar"
+        way_in = {"application": "applications: { label: msg('Applications'), icon: 'applications', page: 'applications', when: (c) => c.appsFeatureEnabled },",
+                  # No page of its own: its ban list is a section of the Firewall page.
+                  "fail2ban": "firewall: { label: msg('Firewall'), icon: 'firewall', page: 'firewall', roles: ['admin'] },",
+                  "malware": "page: 'malware', addon: 'malware'",
+                  "mcp": "page: 'mcp', addon: 'mcp'",
+                  # No page of its own: its accounts are set on its card in Addons.
+                  "demo": "addons: { label: msg('Addons'), icon: 'addons', page: 'addons', roles: ['admin'] },",
+                  "dns": "page: 'dns', addon: 'dns'",
+                  "git": "page: 'git', addon: 'git'",
+                  "mail": "page: 'mail', before: 'mailMailboxes', addon: 'mail'",
+                  "notifications": "page: 'notifications', addon: 'notifications', roles: ['admin']",
+                  "wordpress": "page: 'wordpress', addon: 'wordpress'",
+                  # Each account's use: Server > Account resources, and the
+                  # customer's own Resource usage.
+                  "limits": "page: 'account-resources', roles: ['admin'], when: (c) => c.limitsOn"}.get(slug)
+        assert way_in, f"addon {slug} has no way in named in this test"
+        assert way_in in features + navigation, f"addon {slug} is installable but has no way in"
 
 
 def test_the_client_snippets_carry_the_token_that_was_just_created():

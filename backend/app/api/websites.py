@@ -368,6 +368,7 @@ def _rewrite_website_vhost(website: Website, **overrides) -> str:
         "aliases": overrides.pop("aliases", _alias_domains(website)),
         "redirects": overrides.pop("redirects", _redirect_domains(website)),
         "app_port": overrides.pop("app_port", site_apps.app_port_for_website(website)),
+        "fastcgi_cache": overrides.pop("fastcgi_cache", bool(getattr(website, "nginx_cache_enabled", True))),
     }
     if overrides.pop("include_ssl", True):
         rewrite_kwargs.update(_rewrite_ssl_kwargs(website))
@@ -1184,6 +1185,10 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
     teardown.purge_website_sftp_accounts(db, website.id)
     had_http_flood = bool(website.http_flood_enabled)
     owner_id = website.owner_id
+    # The WordPress Manager forgets the WordPress it found in it.
+    from app.services import wp_manager
+
+    wp_manager.forget_website(db, website.id)
     db.delete(website)
     if had_http_flood:
         try:

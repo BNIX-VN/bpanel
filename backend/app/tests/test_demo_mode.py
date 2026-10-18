@@ -67,13 +67,19 @@ REVIEWED_READS = {
     # The server pages behind the top bar's chips (2026-10-06): memory, disks
     # and interface counters, as resource-usage. Not the process list.
     "/api/system/disk", "/api/system/memory", "/api/system/traffic",
+    # WordPress Manager (2026-10-18): what each WordPress runs and its tasks;
+    # the one-time sign-in link and a new password are POSTs, which a demo
+    # session cannot make.
+    "/api/wordpress/info", "/api/wordpress", "/api/wordpress/installs/{install_id}",
+    "/api/wordpress/jobs/{job_id}", "/api/wordpress/installs/{install_id}/search",
+    "/api/wordpress/installs/{install_id}/clone-targets",
     # Git repositories (2026-10-09): never the deploy key's private half nor
     # the token; the webhook URL is left out for a demo session.
     "/api/git/info", "/api/git/overview", "/api/git/repos/{repo_id}",
     "/api/git/repos/{repo_id}/operations/{operation_id}",
     "/api/sftp-accounts/limits", "/api/site-apps", "/api/site-apps/suggest-port",
     "/api/site-apps/{app_id}/logs", "/api/site-apps/{app_id}/status", "/api/site-runtimes/status",
-    "/api/terminal/allowed-commands", "/api/updates/status", "/api/users", "/api/users/audit/log",
+    "/api/terminal/info", "/api/updates/status", "/api/users", "/api/users/audit/log",
     "/api/users/me", "/api/users/storage-usage", "/api/users/pool", "/api/users/{user_id}/pool",
     "/api/resource-limits", "/api/resource-limits/{user_id}/history",
     "/api/waf/access-logs", "/api/waf/bots",
@@ -292,8 +298,12 @@ def test_visitors_do_not_see_each_others_addresses(env):
 
 
 def test_the_terminal_websocket_asks_the_same_question():
-    source = (PROJECT_ROOT / "backend" / "app" / "api" / "terminal.py").read_text(encoding="utf-8")
-    assert "demo_mode.is_demo_session(current_user, payload)" in source
+    # The browser terminal (2026-10-17): no demo account gets one, not even an
+    # administrator logged in as it.
+    source = (PROJECT_ROOT / "backend" / "app" / "services" / "terminal.py").read_text(encoding="utf-8")
+    assert "if demo_mode.is_demo_user(user):" in source
+    api = (PROJECT_ROOT / "backend" / "app" / "api" / "terminal.py").read_text(encoding="utf-8")
+    assert "terminal.access_problem(user)" in api
 
 
 def test_every_get_route_has_been_looked_at():

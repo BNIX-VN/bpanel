@@ -103,13 +103,14 @@ def test_traffic_reads_each_interface_but_lo(tmp_path, monkeypatch):
 
 
 def test_the_shell_has_the_chips_on_top_and_the_account_below():
-    assert "{isAdmin && renderTopStats()}" in APP
-    assert "{appVersion && renderTopVersion()}" in APP
-    assert '<div className="sidebar-foot">' in APP and '<div className="user-menu sidebar-user" ref={userMenuRef}>' in APP
+    """SNPanel's shell (2026-10-18): the top bar holds the language, the theme
+    and the account's menu; the server's figures are the Dashboard's Server
+    information card, each opening its page in the Server hub."""
     assert 'className="secondary compact-btn top-lang"' not in APP
-    stats = APP.split("  function renderTopStats() {", 1)[1].split("\n  function ", 1)[0]
+    assert '<div className="user-menu' in APP
+    dashboard = APP.split("  function renderDashboard() {", 1)[1].split("\n  function ", 1)[0]
     for page in ("processes", "ram-usage", "disk-usage", "traffic"):
-        assert f"['{page}'," in stats, page
+        assert f"figure('{page}'," in dashboard, page
     for route in ("processes: '/processes'", "'ram-usage': '/ram-usage'", "'disk-usage': '/disk-usage'", "traffic: '/traffic'"):
         assert route in APP, route
     for page, render in (("processes", "renderProcessMonitor"), ("ram-usage", "renderRamUsage"),
@@ -118,8 +119,11 @@ def test_the_shell_has_the_chips_on_top_and_the_account_below():
 
 
 def test_the_version_opens_updates_and_marks_a_waiting_release():
-    version = APP.split("  function renderTopVersion() {", 1)[1].split("\n  function ", 1)[0]
-    assert "if (!isAdmin) return <span" in version
-    assert "navigateToPage('updates')" in version and "panel_update?.update_available === true" in version
+    """The version is the account menu's, an administrator's, and opens
+    Updates; a waiting release marks it."""
+    assert "const panelWaiting = isAdmin && resourceUsage?.panel_update?.update_available === true;" in APP
+    menu = APP.split("{appVersion && isAdmin && <button type=\"button\" role=\"menuitem\"", 1)[1].split("</button>", 1)[0]
+    assert "navigateToPage('updates')" in menu and "panelWaiting ? ' has-update' : ''" in menu
     source = inspect.getsource(services.get_resource_usage)
     assert "ensure_role(current_user.role, Role.admin)" in source and "updates.cached_release_summary()" in source
+

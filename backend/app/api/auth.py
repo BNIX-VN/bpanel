@@ -37,7 +37,7 @@ from app.schemas.schemas import (
     TwoFactorSetupRequest,
     TwoFactorStatus,
 )
-from app.services import demo_mode, storage_quota
+from app.services import demo_mode, storage_quota, terminal
 from app.services.audit import log_action
 from app.services.sso_tokens import consume_panel_login_token
 
@@ -779,6 +779,10 @@ def session_status(
         # Set while an admin is logged in as this user: the panel offers the
         # way back.
         "impersonator": _impersonator(request) or None,
+        # The browser terminal: a customer whose package has it, or an admin
+        # or reseller logged in as one.
+        "terminal": terminal.access_problem(current_user) is None,
+        "terminal_enabled": bool(current_user.terminal_enabled),
     }
     user_data.update(storage_quota.storage_usage_summary(db, current_user))
     return {"authenticated": True, "user": user_data}

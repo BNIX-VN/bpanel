@@ -30,6 +30,7 @@ MAIL = "mail"
 MALWARE = "malware"
 MCP = "mcp"
 NOTIFICATIONS = "notifications"
+WORDPRESS = "wordpress"
 
 # What an administrator sees in the Addons page. The version is the addon's own:
 # it moves when the addon changes, independently of the panel's version.
@@ -100,6 +101,23 @@ CATALOGUE: dict[str, dict] = {
         "notes": [
             "Turning the addon off hides the Git page and refuses its webhooks; the repositories and their files are kept.",
             "Webhooks need the panel's address to be reachable from GitHub or GitLab.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    WORDPRESS: {
+        "name": "WordPress Manager",
+        "version": "1.0.0",
+        "summary": "Every WordPress in the websites: updates, plugins, themes, one-click sign-in and Nginx cache.",
+        "details": [
+            "Finds every WordPress in the accounts' websites - the website itself and the folders under it - and keeps what each one runs: WordPress, its plugins and themes and which have updates, its administrators.",
+            "From the panel: update everything or one thing, switch plugins and themes on and off, add them from wordpress.org or a .zip, delete them, turn maintenance mode and debugging on and off, sign in to wp-admin with one click, and give an administrator a new password.",
+            "Restore points before every update, a security check, a staging copy into another website of the account and a push back, and the website's Nginx page cache on, off or emptied.",
+            "Every WP-CLI command runs as the website's own user.",
+        ],
+        "notes": [
+            "Every account sees the WordPress in its own websites; a reseller its customers' too.",
+            "The one-click sign-in puts a small must-use plugin, bpanel-sso.php, in a site the first time it is used. A link works once, for 60 seconds.",
+            "Turning the addon off hides the WordPress Manager; what it found, the restore points and the Nginx cache settings are kept. The sites are not touched.",
         ],
         "keeps_data_on_uninstall": True,
     },

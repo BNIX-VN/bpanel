@@ -166,6 +166,9 @@ class Website(Base):
     # side table because it is edited and applied as one list, and the lists
     # people import run to a few hundred names.
     blocked_bots: Mapped[str] = mapped_column(Text, default="")
+    # Nginx's FastCGI page cache for a WordPress site (the WordPress Manager's
+    # Nginx cache tab): on, as every WordPress vhost had it, until turned off.
+    nginx_cache_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     # Set when app_type is "application": the installed app this domain serves.
     app_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("site_apps.id", ondelete="SET NULL"), nullable=True, index=True
@@ -701,4 +704,68 @@ class GitOperation(Base):
     commit_after: Mapped[str] = mapped_column(String(64), default="", server_default="")
     log: Mapped[str] = mapped_column(Text, default="", server_default="")
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class WpInstall(Base):
+    """A WordPress the WordPress Manager addon found in a website (as OPanel's, 2026-10-18).
+
+    Found by a scan of the website's folder (its public_html, and the folders
+    one level under it); what it runs - core, plugins, themes, administrators -
+    is read with WP-CLI as the site's own Linux user and kept in `inventory`
+    (JSON) until the next check.
+    """
+
+    __tablename__ = "wp_installs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    website_id: Mapped[int] = mapped_column(ForeignKey("websites.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # Below the website's public_html; "" for the website itself.
+    rel_path: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    path: Mapped[str] = mapped_column(String(512), unique=True)
+    title: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    url: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    # ok | missing (the last scan did not find it)
+    status: Mapped[str] = mapped_column(String(16), default="ok", server_default="ok")
+    # installed | setup (its files are there, wp-config.php is not)
+    state: Mapped[str] = mapped_column(String(16), default="installed", server_default="installed")
+    core_version: Mapped[str] = mapped_column(String(32), default="", server_default="")
+    core_update: Mapped[str] = mapped_column(String(32), default="", server_default="")
+    plugins_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    plugins_updates: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    themes_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    themes_updates: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    inventory: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+    # A staging copy: the WordPress it was copied from, which a push goes back to.
+    staging_of: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class WpJob(Base):
+    """One task of the WordPress Manager: a scan, a check, an update, a switch.
+
+    Tasks on one WordPress run one at a time, in the order they were asked
+    for; the page follows them by id.
+    """
+
+    __tablename__ = "wp_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    install_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    website_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    owner_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    actor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    label: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    params: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+    # queued | running | completed | failed | interrupted
+    status: Mapped[str] = mapped_column(String(16), default="queued", server_default="queued")
+    stage: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    log: Mapped[str] = mapped_column(Text, default="", server_default="")
+    error: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

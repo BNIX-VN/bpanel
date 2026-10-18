@@ -19,6 +19,14 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SRC = PROJECT_ROOT / "frontend" / "src"
 APP = (SRC / "App.jsx").read_text(encoding="utf-8")
+# The components translate too (the terminal's messages live in its own file),
+# and so do the pages that are files of their own and the lib/ tables (the
+# Dashboard's tiles, the navigation's titles).
+COMPONENTS = "".join(
+    path.read_text(encoding="utf-8")
+    for folder, pattern in (("components", "*.jsx"), ("pages", "*.jsx"), ("lib", "*.js*"))
+    for path in sorted((SRC / folder).glob(pattern))
+)
 I18N = (SRC / "i18n.js").read_text(encoding="utf-8")
 VI = (SRC / "locales" / "vi.js").read_text(encoding="utf-8")
 
@@ -85,7 +93,7 @@ def test_every_key_is_a_string_something_actually_shows():
     # found. A confirm() dialog with a blank line in it is the same problem one
     # character further on: the source spells the newline \n, the string the
     # panel shows - and so the key - has a real one.
-    unescaped = (APP.replace("\\'", "'").replace('\\"', '"')
+    unescaped = ((APP + COMPONENTS).replace("\\'", "'").replace('\\"', '"')
                  .replace("\\n", "\n").replace("\\t", "\t"))
     orphans = [k for k in DICTIONARY if k not in unescaped and k not in api]
     assert not orphans, f"{len(orphans)} keys match nothing: {orphans[:10]}"
@@ -193,13 +201,12 @@ def test_the_switch_is_two_letters_and_no_icon():
     assert "Languages," not in APP
 
 def test_the_switch_sits_with_the_theme_toggle():
-    """Where OPanel has them: the corners of the sign-in page, and the foot of
-    the sidebar beside the account menu (2026-10-06: the top bar keeps the
-    server's status)."""
+    """Where OPanel has them: the corners of the sign-in page, and - in the
+    SNPanel-style shell (2026-10-18) - the top bar, beside the account menu."""
     assert '<ThemeToggle theme={theme} onToggle={toggleTheme} className="theme-toggle-btn"/>' in APP
     assert '<LanguageToggle language={language} onChange={changeLanguage} className="lang-toggle-btn"/>' in APP
-    assert '<LanguageToggle language={language} onChange={changeLanguage} className="sidebar-tool"/>' in APP
-    assert '<ThemeToggle theme={theme} onToggle={toggleTheme} className="sidebar-tool" size={15}/>' in APP
+    assert '<LanguageToggle language={language} onChange={changeLanguage} className="top-tool"/>' in APP
+    assert '<ThemeToggle theme={theme} onToggle={toggleTheme} className="top-tool" size={15}/>' in APP
 
 def test_changing_the_language_re_renders():
     """t() is read during render, so the tree has to render again. The hook
@@ -262,11 +269,12 @@ def test_every_string_the_overview_draws_reads_in_vietnamese():
 
 
 def test_every_sidebar_entry_reads_in_vietnamese():
-    body = APP.split("const navSections = [")[1].split("].filter(section")[0]
-    labels = re.findall(r"\['[a-z-]+', '([^']+)'", body) + re.findall(r"title: '([^']+)'", body)
-    # Thirteen since the sidebar was cut to the everyday pages (2026-09-27);
-    # the rest are checked on the Settings page.
-    assert len(labels) >= 12, labels
+    # The sidebar is lib/navigation.jsx's sidebarItems since the SNPanel-style
+    # shell (2026-10-18): the everyday pages and the hubs.
+    navigation = (SRC / "lib" / "navigation.jsx").read_text(encoding="utf-8")
+    body = navigation.split("export function sidebarItems(")[1].split("\n}\n")[0]
+    labels = re.findall(r"\['[a-z-]+', msg\('([^']+)'\)", body)
+    assert len(labels) >= 9, labels
     missing = [label for label in labels if label not in DICTIONARY and label not in KEPT_IN_ENGLISH]
     assert not missing, f"sidebar still in English: {missing}"
 
@@ -315,14 +323,16 @@ def test_a_translated_label_is_not_glued_to_its_value():
 
 
 def test_every_settings_page_entry_reads_in_vietnamese():
-    """The Settings page's names and one-line hints live in an array, like the
-    sidebar's, and are translated where they are drawn."""
-    hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
-    rows = [(label, single or double) for label, single, double in
-            re.findall(r"\['[a-z-]+', '([^']+)', \w+, (?:'([^']+)'|\"([^\"]+)\")\]", hub)]
-    # Nine since the malware scanner became an addon with a sidebar entry.
-    assert len(rows) >= 9, rows
-    texts = [text for row in rows for text in row] + re.findall(r"title: '([^']+)'", hub)
+    """The old Settings tile grid is the hubs now (SNPanel-style shell,
+    2026-10-18): each hub's title and its tabs' labels live in an array in
+    lib/navigation.jsx and are translated where they are drawn; the
+    Dashboard's tiles in lib/features.jsx likewise."""
+    navigation = (SRC / "lib" / "navigation.jsx").read_text(encoding="utf-8")
+    hubs = navigation.split("export const HUBS = [")[1].split("\n];")[0]
+    features = (SRC / "lib" / "features.jsx").read_text(encoding="utf-8")
+    texts = re.findall(r"(?:title|label): msg\('([^']+)'\)", hubs)
+    assert len(texts) >= 15, texts
+    texts += re.findall(r"msg\('([^']+)'\)", features)
     missing = [text for text in texts if text not in DICTIONARY and text not in KEPT_IN_ENGLISH]
     assert not missing, f"Settings page still in English: {missing}"
 

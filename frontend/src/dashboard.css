@@ -1,0 +1,76 @@
+/* The dashboard. See App.jsx's renderDashboard().
+
+   bpanel.css where it has a rule (via shared/ui.css: .cp-layout, .dash-card,
+   .attention-*, .side-card, .status-row, .info-row, .stat-row). What is
+   here is what that stylesheet does not say: the feature tiles (.dash-*). */
+
+/* ---- The features: sections of tiles ----
+   A tile is the feature's picture (icons/feature, 40px) over its name. Six
+   to a row on a desktop, two (picture beside name) on a phone. */
+.dash-features{gap:4px}
+.dash-features .tools-search{margin-bottom:8px}
+.dash-section{border-top:1px solid var(--border)}
+.dash-section:first-of-type{border-top:0}
+.dash-section-head{
+  width:100%;height:auto;min-height:44px;display:flex;align-items:center;gap:10px;padding:10px 2px;
+  background:none;border:0;border-radius:0;box-shadow:none;color:var(--text);text-align:left;justify-content:flex-start;
+}
+.dash-section-head:hover:not(:disabled){background:none;color:var(--primary-ink, var(--primary-text))}
+.dash-section-head:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.dash-section-head h3{margin:0;font-size:14px;font-weight:700;color:inherit}
+.dash-section-chevron{margin-left:auto;color:var(--text-secondary);flex:none;transition:transform .15s}
+.dash-section:not(.is-open) .dash-section-chevron{transform:rotate(-90deg)}
+.dash-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;padding:2px 0 14px}
+.dash-tile{position:relative;min-width:0}
+.dash-tile-link{
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:8px;height:100%;min-height:98px;
+  padding:14px 8px 11px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);
+  color:var(--text);text-decoration:none;text-align:center;transition:border-color .15s,background-color .15s,box-shadow .15s;
+}
+/* A button, not OPanel's link: it fills its cell and wraps its label. */
+button.dash-tile-link{width:100%;white-space:normal;font:inherit;cursor:pointer}
+.dash-tile-link:hover{background:var(--surface-hover);border-color:var(--primary-soft, var(--primary-border));color:var(--text)}
+.dash-tile-link:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+/* Wraps between words only, never inside one. */
+.dash-tile-label{font-size:13px;font-weight:600;line-height:1.3;overflow-wrap:normal;word-break:normal;hyphens:none;min-width:0}
+.dash-tile-note{font-size:11.5px;color:var(--text-muted);line-height:1.2}
+.dash-tile.is-missing .dash-tile-link{border-style:dashed;background:transparent}
+.dash-tile.is-missing .dash-tile-label{color:var(--text-secondary)}
+.dash-tile-art{position:relative;display:inline-flex}
+.dash-tile-badge{position:absolute;right:-6px;bottom:-4px;display:grid;place-items:center;width:18px;height:18px;border-radius:50%;
+  background:var(--primary);color:#fff;box-shadow:0 0 0 2px var(--surface)}
+@media (prefers-reduced-motion:reduce){.dash-tile-link,.dash-section-chevron{transition:none}}
+
+/* ---- The administrator's server card: four figures with a sparkline ---- */
+.dash-figures{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:2px 0 6px}
+.dash-figure{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:2px 8px;padding:9px 10px 6px;
+  border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-alt);color:var(--text);text-decoration:none;
+}
+/* A button: the panel's own button rules (a fixed height, inline-flex,
+   centred) cut the sparkline off below the figure. */
+button.dash-figure{height:auto;min-height:0;width:100%;display:grid;justify-content:stretch;text-align:left;white-space:normal;font:inherit;cursor:pointer;box-shadow:none}
+.dash-figure:hover{border-color:var(--border-hover);background:var(--surface-hover);color:var(--text)}
+.dash-figure-label{font-size:12px;font-weight:600;color:var(--text-secondary)}
+.dash-figure strong{font-size:15px;font-variant-numeric:tabular-nums}
+.dash-figure .dash-spark{grid-column:1/-1}
+.dash-spark{width:100%;height:24px;display:block;overflow:visible}
+.dash-spark-line{fill:none;stroke:var(--primary);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.dash-spark-area{fill:var(--primary-light);stroke:none;opacity:.7}
+.dash-figure.tone-warn .dash-spark-line{stroke:var(--warning)}
+.dash-figure.tone-bad .dash-spark-line{stroke:var(--danger)}
+.dash-figure.tone-warn strong{color:var(--warning-text)}
+.dash-figure.tone-bad strong{color:var(--danger-text)}
+
+@media (width<=1100px){
+  .dash-tiles{grid-template-columns:repeat(auto-fill,minmax(132px,1fr))}
+}
+@media (width<=720px){
+  .dash-tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .dash-tile-link{flex-direction:row;justify-content:flex-start;text-align:left;min-height:60px;padding:8px;gap:8px}
+  .dash-tile-link .feature-icon{width:30px;height:30px}
+  .dash-tile-label{font-size:12.5px}
+}
+
+/* No website yet: the hint under the tool search. */
+.dash-features .dash-first-hint{display:flex;align-items:center;gap:6px;margin:0 0 10px}

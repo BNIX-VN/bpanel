@@ -27,7 +27,7 @@
  * its own JSON-RPC rather than the mcp package, minio rather than boto3.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { cloneElement, isValidElement, useCallback, useEffect, useState } from 'react';
 
 import { vi } from './locales/vi.js';
 
@@ -103,8 +103,24 @@ export function t(text, values) {
   const hit = dictionary && dictionary[text];
   const out = typeof hit === 'string' && hit ? hit : text;
   if (!values) return out;
-  return out.replace(/\{(\w+)\}/g, (whole, name) =>
-    Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : whole);
+  const own = (name) => Object.prototype.hasOwnProperty.call(values, name);
+  // A value that is an element (`{ word: <code>x</code> }`) cannot become
+  // text: the sentence is handed back as parts for React to render.
+  if (!Object.values(values).some((value) => value !== null && typeof value === 'object')) {
+    return out.replace(/\{(\w+)\}/g, (whole, name) => (Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : whole));
+  }
+  const parts = [];
+  let last = 0;
+  out.replace(/\{(\w+)\}/g, (whole, name, offset) => {
+    if (!own(name)) return whole;
+    if (offset > last) parts.push(out.slice(last, offset));
+    const value = values[name];
+    parts.push(isValidElement(value) ? cloneElement(value, { key: `t${parts.length}` }) : (value !== null && typeof value === 'object' ? value : String(value)));
+    last = offset + whole.length;
+    return whole;
+  });
+  if (last < out.length) parts.push(out.slice(last));
+  return parts;
 }
 
 /* Re-render when the language changes, and hand back the switcher.

@@ -1,0 +1,15 @@
+/* The Git repositories list (App.jsx renderGit), in the table SNPanel's
+   lists use (pages/Databases.css .dbt): a row a repository, the whole row
+   opening it. */
+.dbt.git-table .dbt-row{grid-template-columns:minmax(180px,1.4fr) minmax(200px,2fr) auto minmax(120px,1fr)}
+.dbt-row.is-link{cursor:pointer}
+.dbt-row.is-link:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+.git-row-path{flex-basis:100%;color:var(--text-muted);font-size:12px}
+.git-drawer-form{display:grid;gap:14px}
+.git-drawer-form .git-create-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:900px){
+  .dbt.git-table .dbt-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:640px){
+  .git-drawer-form .git-create-grid{grid-template-columns:minmax(0,1fr)}
+}

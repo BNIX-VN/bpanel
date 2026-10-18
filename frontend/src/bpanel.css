@@ -138,3 +138,8 @@
 @media(max-width:768px){
   .token-create-form.package-form{grid-template-columns:1fr}
 }
+
+/* Turn on email: a domain typed by hand, with the way back to the list. */
+.mail-domain-other{display:flex;gap:8px;min-width:0}
+.mail-domain-other input{flex:1;min-width:0}
+.mail-domain-other button{flex:none}

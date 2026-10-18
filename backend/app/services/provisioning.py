@@ -169,6 +169,9 @@ def terminate_account(db: Session, account: ProvisioningAccount, backup: bool = 
             waf.remove_site_rules(website.domain)
             wordpress.delete_wordpress(website.root_path)
             deleted_domains.append(website.domain)
+            from app.services import wp_manager
+
+            wp_manager.forget_website(db, website.id)
             db.delete(website)
 
         # The loop above finds databases by website_id, so it cannot reach one

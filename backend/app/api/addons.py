@@ -247,6 +247,8 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         if slug == addons.MALWARE
         else "Every limit is lifted. The limits set on accounts and packages are kept and apply again when you install the addon again."
         if slug == addons.LIMITS
+        else "The WordPress the panel found, their restore points and each website's Nginx cache setting are kept. The sites are not touched."
+        if slug == addons.WORDPRESS
         else (f"{revoked} MCP token(s) were revoked. Assistants using them can no longer reach the panel."
               if slug == addons.MCP
               else "Application directories, volumes and panel data are all kept."),
