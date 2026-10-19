@@ -1038,6 +1038,8 @@ function App() {
   // whether its Advanced tab has the terminal open.
   const [siteWhere, setSiteWhere] = useState(() => websiteFromPathname(window.location.pathname) || { domain: '', tab: 'overview' });
   const [siteTermOpen, setSiteTermOpen] = useState(false);
+  // The Cache tab's switch while its change is on its way: where it is going.
+  const [siteCacheGoing, setSiteCacheGoing] = useState(null);
   // The firewall's one address form: whether it allows or blocks.
   const [firewallRuleAction, setFirewallRuleAction] = useState('allow');
   // The PHP page's extension filter.
@@ -8592,10 +8594,13 @@ function App() {
         ? <p className="hint">{t('The Nginx cache serves websites in WordPress mode: set this website\'s mode to WordPress on its PHP tab first.')}</p>
         : <>
           <div className="wsd-cache-row">
-            <Switch checked={on} disabled={!!loading} onChange={next => setSiteNginxCache(site, next)} label={t('Nginx cache')}>
-              <span>{on ? t('On') : t('Off')}</span>
+            {/* Rewriting the vhost and reloading Nginx takes a few seconds:
+                the switch shows where it is going until the server says so. */}
+            <Switch checked={siteCacheGoing ?? on} pending={siteCacheGoing !== null} disabled={siteCacheGoing !== null}
+              onChange={next => setSiteNginxCache(site, next)} label={t('Nginx cache')}>
+              <span>{(siteCacheGoing ?? on) ? t('On') : t('Off')}</span>
             </Switch>
-            <button type="button" className="secondary-light" disabled={!!loading || !on} onClick={() => purgeSiteNginxCache(site)}>
+            <button type="button" className="secondary-light" disabled={!!loading || !on || siteCacheGoing !== null} onClick={() => purgeSiteNginxCache(site)}>
               <RefreshCw size={14} aria-hidden="true"/> {t('Empty the cache')}</button>
           </div>
           <p className="hint">{t('A post you change shows at once to you, signed in; visitors see it within 10 minutes, or at once after Empty the cache.')}</p>
@@ -8604,11 +8609,16 @@ function App() {
   }
 
   async function setSiteNginxCache(site, enabled) {
+    setSiteCacheGoing(enabled);
     const data = await request(`/websites/${site.id}/nginx-cache`, { method: 'PUT', body: JSON.stringify({ enabled }) },
       enabled ? t('Turning the Nginx cache on...') : t('Turning the Nginx cache off...'));
+    setSiteCacheGoing(null);
     if (!data) return;
+    // The answer is the website as it is now: no wait for the whole list.
+    const merge = list => list.map(item => (item.id === data.id ? { ...item, ...data } : item));
+    setWebsites(merge);
+    setWebsiteList(merge);
     setNotice(enabled ? t('The Nginx cache is on.') : t('The Nginx cache is off, and what it kept is gone.'));
-    await loadWebsiteList('', false);
   }
 
   async function purgeSiteNginxCache(site) {
