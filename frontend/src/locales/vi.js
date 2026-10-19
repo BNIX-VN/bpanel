@@ -27,6 +27,14 @@
  */
 
 export const vi = {
+  "Cache": "Bộ nhớ đệm",
+  "The Nginx cache serves websites in WordPress mode: set this website's mode to WordPress on its PHP tab first.": "Cache Nginx chỉ dùng cho website ở chế độ WordPress: hãy chuyển chế độ của website sang WordPress ở tab PHP trước.",
+  "Turning the Nginx cache on...": "Đang bật cache Nginx...",
+  "Turning the Nginx cache off...": "Đang tắt cache Nginx...",
+  "The Nginx cache is on.": "Cache Nginx đã bật.",
+  "The Nginx cache is off, and what it kept is gone.": "Cache Nginx đã tắt và các trang đã lưu đã được xoá.",
+  "Emptying the cache...": "Đang xoá cache...",
+  "Emptied {count} cached page(s).": "Đã xoá {count} trang trong cache.",
   "A restore point before every update": "Tạo điểm khôi phục trước mỗi lần cập nhật",
   "The files without the uploads, and the database, only when you take one; the newest two are kept, in the account's home.": "Các tệp (trừ thư mục uploads) và cơ sở dữ liệu, chỉ khi bạn tự tạo; giữ hai bản mới nhất, trong thư mục home của tài khoản.",
   "Every WordPress in the websites: updates, plugins, themes, one-click sign-in and Nginx cache.": "Mọi WordPress trong các website: cập nhật, plugin, theme, đăng nhập một chạm và cache Nginx.",

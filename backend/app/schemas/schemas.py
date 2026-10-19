@@ -879,6 +879,8 @@ class WebsiteOut(BaseModel):
     http_flood_enabled: bool = False
     http_flood_config: str = ""
     blocked_bots: str = ""
+    # The website's Nginx page cache (services/page_cache.py).
+    nginx_cache_enabled: bool = True
     # Whether this site opted into the OWASP Core Rule Set, and whether that
     # opt-in is actually being enforced (it is not, if CRS is off server-wide).
     #

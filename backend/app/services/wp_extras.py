@@ -20,7 +20,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models.entities import DatabaseAccount, Website, WpInstall
-from app.services import da_import, mariadb, wp_manager
+from app.services import da_import, mariadb, page_cache, wp_manager
 from app.services.shell import shell
 
 STAGE_DIR = ".bpanel-wp-stage"
@@ -287,49 +287,21 @@ def handle_upload(db: Session, task, params: dict) -> None:
 # 10 minutes; never wp-admin, a logged-in visitor, a POST, a cart). It is the
 # website's - every WordPress in it shares it - and needs no plugin.
 
-def purge_nginx_cache(website: Website) -> int:
-    """The website's pages out of Nginx's cache; how many went."""
-    result = shell.privileged("fastcgi-cache-purge", helper_args=[website.domain], check=False,
-                              fallback=["bash", "-lc", "echo 0"])
-    if result.returncode != 0:
-        raise wp_manager.WpError("The cache could not be emptied: " + wp_manager._clean_error(result.stderr or result.stdout))
-    numbers = [word for word in (result.stdout or "").split() if word.isdigit()]
-    return int(numbers[-1]) if numbers else 0
-
-
-def set_nginx_cache(db: Session, website: Website, enabled: bool) -> None:
-    """Turn the website's Nginx page cache on or off: its vhost written again."""
-    if (website.app_type or "wordpress") != "wordpress":
-        raise wp_manager.WpError("The Nginx cache serves websites in WordPress mode: set this website's mode to WordPress first")
-    from app.api.websites import _rewrite_website_vhost
-
-    previous = bool(website.nginx_cache_enabled)
-    website.nginx_cache_enabled = bool(enabled)
-    db.commit()
-    try:
-        _rewrite_website_vhost(website)
-    except Exception:
-        website.nginx_cache_enabled = previous
-        db.commit()
-        raise
-
-
 def handle_nginx_cache(db: Session, task, params: dict) -> None:
+    """The website's cache (services/page_cache.py), from the WordPress Manager."""
     install, website = wp_manager._install_and_site(db, task.job)
     action = params.get("action")
-    if action in ("on", "off"):
-        task.stage("Nginx cache " + action)
-        try:
-            set_nginx_cache(db, website, action == "on")
-        except (RuntimeError, ValueError) as exc:
-            raise wp_manager.WpError(str(exc)) from exc
-        if action == "off":
-            task.log(f"Emptied {purge_nginx_cache(website)} cached page(s)")
-    elif action == "purge":
-        task.stage("Emptying the Nginx cache")
-        task.log(f"Emptied {purge_nginx_cache(website)} cached page(s)")
-    else:
-        raise wp_manager.WpError("Unknown Nginx cache action")
+    try:
+        if action in ("on", "off"):
+            task.stage("Nginx cache " + action)
+            page_cache.set_enabled(db, website, action == "on")
+        elif action == "purge":
+            task.stage("Emptying the Nginx cache")
+            task.log(f"Emptied {page_cache.purge(website)} cached page(s)")
+        else:
+            raise wp_manager.WpError("Unknown Nginx cache action")
+    except (RuntimeError, ValueError) as exc:
+        raise wp_manager.WpError(str(exc)) from exc
 
 
 wp_manager.HANDLERS.update({

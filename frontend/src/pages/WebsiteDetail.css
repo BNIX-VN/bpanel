@@ -56,3 +56,5 @@
   .wsd-actions>button,.wsd-actions>.button-link{flex:1 1 calc(50% - 8px)}
   .wsd-savebar>button{flex:1}
 }
+/* The Cache tab: its switch and Empty the cache on one row. */
+.wsd-cache-row{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:12px 0 8px}
