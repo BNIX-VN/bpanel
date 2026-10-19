@@ -23,6 +23,7 @@ import Drawer from './components/Drawer.jsx';
 import { DialogHost, confirmDialog, promptDialog } from './components/Dialog.jsx';
 import { Checkbox, Field, PasswordField } from './components/Form.jsx';
 import ActionMenu from './components/ActionMenu.jsx';
+import IconActions from './components/IconActions.jsx';
 import PageHeader from './components/PageHeader.jsx';
 import EmptyState from './components/EmptyState.jsx';
 import Switch from './components/Switch.jsx';
@@ -8332,11 +8333,13 @@ function App() {
               {(site.aliases || []).length > 0 && <span>{t('Domains')} <strong>{(site.aliases || []).length + 1}</strong></span>}
             </div>
             <div className="site-actions" aria-label={t('Website actions for {domain}', { domain: site.domain })}>
-              <div className="site-feature-actions">
-                <button className="secondary-light" onClick={() => navigateToPage('website', { path: websiteRoute(site.domain) })}>
-                  <SettingsIcon size={14} aria-hidden="true"/> {t('Manage')}</button>
-                <ActionMenu label={t('More actions for {domain}', { domain: site.domain })} items={siteMenuItems(site)}/>
-              </div>
+              {/* Every action an icon, one click each (operator, 2026-10-19:
+                  the "…" menu cost a click every time). */}
+              <IconActions className="site-feature-actions" label={t('Website actions for {domain}', { domain: site.domain })} items={[
+                { label: t('Manage'), icon: SettingsIcon, primary: true, onClick: () => navigateToPage('website', { path: websiteRoute(site.domain) }) },
+                { label: 'SSL', icon: Lock, onClick: () => navigateToPage('website', { path: websiteRoute(site.domain, 'ssl') }) },
+                ...siteMenuItems(site),
+              ]}/>
             </div>
           </article>
           {renderWordPressPanel(site)}
