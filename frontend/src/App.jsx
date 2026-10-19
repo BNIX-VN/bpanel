@@ -5927,19 +5927,17 @@ function App() {
 
   // The Dashboard's features: one tile each (lib/features.jsx), in sections
   // that fold, searchable with "/" - the picture each has from
-  // icons/feature. An administrator also sees each addon not installed yet,
-  // greyed, in Extensions, as the way to install it.
+  // icons/feature. An addon not installed has none (operator, 2026-10-19):
+  // it is installed from the Addons page.
   function renderFeaturesCard() {
     const ctx = dashboardNavCtx();
     const needle = normalizeSearch(toolQuery.trim());
     const sections = dashboardSections(ctx)
       .map(([key, title, keys]) => ({ key, title: t(title), tiles: keys.filter(tileKey => tileVisible(tileKey, ctx)) }))
       .map(section => ({ ...section, tiles: section.tiles.filter(tileKey => !needle || normalizeSearch(`${t(tileLabel(TILES[tileKey], ctx))} ${section.title}`).includes(needle)) }));
-    const missingAddons = isAdmin
-      ? addons.items.filter(addon => !addon.installed && ADDON_META[addon.slug] && addon.slug !== 'demo'
-          && (!needle || normalizeSearch(`${addonLabel(addon, t)} ${t('Addons')}`).includes(needle)))
-      : [];
-    const shownSections = sections.filter(section => section.tiles.length > 0 || (section.key === 'extensions' && missingAddons.length > 0));
+    // An addon not installed has no tile: the Addons page is where it is
+    // installed (operator, 2026-10-19).
+    const shownSections = sections.filter(section => section.tiles.length > 0);
     const sitesTotal = dashSummary?.websites?.total ?? websites.length;
     const tile = (key) => {
       const item = TILES[key];
@@ -5949,15 +5947,6 @@ function App() {
         </button>
       </div>;
     };
-    const missingTile = (addon) => <div key={`addon-${addon.slug}`} className="dash-tile is-missing">
-      <button type="button" className="dash-tile-link" onClick={() => navigateToPage('addons')}
-        aria-label={t('{name}: not installed. Open Addons to install it.', { name: addonLabel(addon, t) })}>
-        <span className="dash-tile-art"><FeatureIcon name={addonFeatureIcon(addon.slug)} size={40} muted/>
-          <span className="dash-tile-badge" aria-hidden="true"><Download size={11}/></span></span>
-        <span className="dash-tile-label">{addonLabel(addon, t)}</span>
-        <small className="dash-tile-note">{t('Not installed')}</small>
-      </button>
-    </div>;
     return <section className="section dash-card dash-features" aria-label={t('Features')}>
       <label className="tools-search">
         <Search size={16} aria-hidden="true"/>
@@ -5977,7 +5966,6 @@ function App() {
           </button>
           {open && <div className="dash-tiles" id={`dash-section-${section.key}`}>
             {section.tiles.map(tile)}
-            {section.key === 'extensions' && missingAddons.map(missingTile)}
           </div>}
         </div>;
       })}
