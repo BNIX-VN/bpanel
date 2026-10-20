@@ -34,7 +34,9 @@ from app.schemas.schemas import (
     WebsiteWordPressInstall,
     WildcardSslRequest,
 )
-from app.services import addons, cloudflare, cron, dns, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
+from pydantic import BaseModel
+
+from app.services import addons, cloudflare, cron, dns, file_manager, mariadb, nginx, page_cache, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -1155,6 +1157,37 @@ def set_website_nginx_custom(website_id: int, payload: WebsiteNginxCustom, reque
     db.refresh(website)
     log_action(db, current_user.id, "update_nginx_custom", website.domain, request=request)
     return website
+
+
+class WebsiteNginxCache(BaseModel):
+    enabled: bool
+
+
+@router.put("/{website_id}/nginx-cache", response_model=WebsiteOut)
+def set_website_nginx_cache(website_id: int, payload: WebsiteNginxCache, request: Request, db: Session = Depends(get_db),
+                            current_user: User = Depends(get_current_user)):
+    """The website's Nginx page cache on or off (operator, 2026-10-19: the
+    website's settings had no Cache tab)."""
+    website = _get_authorized_website(db, website_id, current_user)
+    try:
+        page_cache.set_enabled(db, website, payload.enabled)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.refresh(website)
+    log_action(db, current_user.id, "website_nginx_cache", website.domain, "on" if payload.enabled else "off", request=request)
+    return website
+
+
+@router.post("/{website_id}/nginx-cache/purge")
+def purge_website_nginx_cache(website_id: int, request: Request, db: Session = Depends(get_db),
+                              current_user: User = Depends(get_current_user)):
+    website = _get_authorized_website(db, website_id, current_user)
+    try:
+        count = page_cache.purge(website)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "website_nginx_cache_purge", website.domain, str(count), request=request)
+    return {"purged": count}
 
 
 @router.delete("/{website_id}")

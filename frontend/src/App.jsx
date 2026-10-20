@@ -298,7 +298,7 @@ const ROUTE_PAGES = new Map([
 ]);
 
 // One website's page: /website/<domain>, or /website/<domain>/<tab>.
-const WEBSITE_TABS = ['overview', 'domains', 'ssl', 'php', 'security', 'logs', 'advanced'];
+const WEBSITE_TABS = ['overview', 'domains', 'ssl', 'php', 'cache', 'security', 'logs', 'advanced'];
 
 function websiteFromPathname(pathname) {
   const match = /^\/website\/([^/]+)(?:\/([a-z]+))?\/?$/i.exec(String(pathname || ''));
@@ -1038,6 +1038,8 @@ function App() {
   // whether its Advanced tab has the terminal open.
   const [siteWhere, setSiteWhere] = useState(() => websiteFromPathname(window.location.pathname) || { domain: '', tab: 'overview' });
   const [siteTermOpen, setSiteTermOpen] = useState(false);
+  // The Cache tab's switch while its change is on its way: where it is going.
+  const [siteCacheGoing, setSiteCacheGoing] = useState(null);
   // The firewall's one address form: whether it allows or blocks.
   const [firewallRuleAction, setFirewallRuleAction] = useState('allow');
   // The PHP page's extension filter.
@@ -8393,6 +8395,7 @@ function App() {
       { id: 'domains', label: t('Domains'), icon: Globe, badge: (site.aliases || []).length || undefined },
       { id: 'ssl', label: 'SSL', icon: Lock },
       { id: 'php', label: 'PHP', icon: Code2 },
+      { id: 'cache', label: t('Cache'), icon: Gauge },
       { id: 'security', label: t('Security'), icon: ShieldCheck },
       { id: 'logs', label: t('Logs'), icon: FileText },
       { id: 'advanced', label: t('Advanced'), icon: SlidersHorizontal },
@@ -8423,6 +8426,7 @@ function App() {
       {tab === 'domains' && renderSiteDomains(site, goTab)}
       {tab === 'ssl' && renderSsl(true)}
       {tab === 'php' && renderSitePhp(site)}
+      {tab === 'cache' && renderSiteCache(site)}
       {tab === 'security' && (String(selectedWafWebsiteId) === String(site.id) && wafSiteConfig
         ? renderWafSite(true)
         : <section className="section"><p className="hint">{t('Loading…')}</p></section>)}
@@ -8575,6 +8579,51 @@ function App() {
         <button type="button" disabled={!ready || !dirty || !!loading} onClick={saveWebsiteSettings}><Save size={14} aria-hidden="true"/> {t('Save changes')}</button>
       </div>
     </section>;
+  }
+
+  // The website's Nginx page cache (services/page_cache.py), as OPanel's
+  // website has a Cache tab for LiteSpeed's (operator, 2026-10-19). The
+  // WordPress Manager's Nginx cache tab switches the same setting.
+  function renderSiteCache(site) {
+    const wordpressMode = (site.app_type || 'wordpress') === 'wordpress';
+    const on = wordpressMode && site.nginx_cache_enabled !== false;
+    return <section className="section">
+      <PageHeader title={t('Nginx cache')}
+        subtitle={t('Nginx keeps the pages it served to visitors who are not signed in and gives them out again for 10 minutes without running PHP. wp-admin, signed-in visitors, comments and carts are never cached.')}/>
+      {!wordpressMode
+        ? <p className="hint">{t('The Nginx cache serves websites in WordPress mode: set this website\'s mode to WordPress on its PHP tab first.')}</p>
+        : <>
+          <div className="wsd-cache-row">
+            {/* Rewriting the vhost and reloading Nginx takes a few seconds:
+                the switch shows where it is going until the server says so. */}
+            <Switch checked={siteCacheGoing ?? on} pending={siteCacheGoing !== null} disabled={siteCacheGoing !== null}
+              onChange={next => setSiteNginxCache(site, next)} label={t('Nginx cache')}>
+              <span>{(siteCacheGoing ?? on) ? t('On') : t('Off')}</span>
+            </Switch>
+            <button type="button" className="secondary-light" disabled={!!loading || !on || siteCacheGoing !== null} onClick={() => purgeSiteNginxCache(site)}>
+              <RefreshCw size={14} aria-hidden="true"/> {t('Empty the cache')}</button>
+          </div>
+          <p className="hint">{t('A post you change shows at once to you, signed in; visitors see it within 10 minutes, or at once after Empty the cache.')}</p>
+        </>}
+    </section>;
+  }
+
+  async function setSiteNginxCache(site, enabled) {
+    setSiteCacheGoing(enabled);
+    const data = await request(`/websites/${site.id}/nginx-cache`, { method: 'PUT', body: JSON.stringify({ enabled }) },
+      enabled ? t('Turning the Nginx cache on...') : t('Turning the Nginx cache off...'));
+    setSiteCacheGoing(null);
+    if (!data) return;
+    // The answer is the website as it is now: no wait for the whole list.
+    const merge = list => list.map(item => (item.id === data.id ? { ...item, ...data } : item));
+    setWebsites(merge);
+    setWebsiteList(merge);
+    setNotice(enabled ? t('The Nginx cache is on.') : t('The Nginx cache is off, and what it kept is gone.'));
+  }
+
+  async function purgeSiteNginxCache(site) {
+    const data = await request(`/websites/${site.id}/nginx-cache/purge`, { method: 'POST' }, t('Emptying the cache...'));
+    if (data) setNotice(t('Emptied {count} cached page(s).', { count: data.purged }));
   }
 
   function renderSiteLogs(site) {

@@ -178,3 +178,25 @@ def test_a_vhost_without_the_cache_stays_without_it():
     assert "fastcgi_cache BPANEL_FASTCGI;" in on and nginx.FASTCGI_CACHE_OFF_MARK not in on
     assert "fastcgi_cache BPANEL_FASTCGI;" not in off and "BPANEL FASTCGI CACHE" not in off.replace(nginx.FASTCGI_CACHE_OFF_MARK, "")
     assert nginx.FASTCGI_CACHE_OFF_MARK in off and "fastcgi_pass" in off
+
+
+def test_the_website_page_switches_and_empties_its_own_cache(env, monkeypatch):
+    """The website's Cache tab (operator, 2026-10-19), without the addon."""
+    import app.api.websites as websites_api
+    rewritten = []
+    monkeypatch.setattr(websites_api, "_rewrite_website_vhost", lambda website, **kw: rewritten.append(website.nginx_cache_enabled) or "")
+    site = env.sites["alice"]
+    client = env.as_user("alice")
+    env.calls.clear()
+    off = client.put(f"/api/websites/{site.id}/nginx-cache", json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert off.json()["nginx_cache_enabled"] is False and rewritten == [False]
+    # Turning it off empties what it kept.
+    assert [call["user"] for call in env.calls if call["command"] == "fastcgi-cache-purge"] == ["alice.example"]
+    assert client.post(f"/api/websites/{site.id}/nginx-cache/purge").json() == {"purged": 0}
+    # Another account's website is not reachable.
+    assert env.as_user("bob").put(f"/api/websites/{site.id}/nginx-cache", json={"enabled": True}).status_code in (403, 404)
+    site.app_type = "php"
+    env.db.commit()
+    refused = env.as_user("alice").put(f"/api/websites/{site.id}/nginx-cache", json={"enabled": True})
+    assert refused.status_code == 400 and "WordPress mode" in refused.json()["detail"]
