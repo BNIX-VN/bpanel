@@ -2651,7 +2651,7 @@ export const vi = {
   "Website not found.": "Không tìm thấy website.",
   "Your session has ended. Sign in again.": "Phiên đăng nhập đã hết. Hãy đăng nhập lại.",
   "Service versions": "Phiên bản dịch vụ",
-  "The web server, PHP, database and mail software. Update one service or all of them; the nightly automatic update installs the same packages, except Docker.": "Web server, PHP, cơ sở dữ liệu và phần mềm mail. Cập nhật từng dịch vụ hoặc tất cả; bản cập nhật tự động hằng đêm cũng cài đúng các gói này, trừ Docker.",
+  "The web server, PHP, database and mail software. Update one service or all of them. Security fixes for the web server, PHP and the database also install on their own each night.": "Web server, PHP, cơ sở dữ liệu và phần mềm mail. Cập nhật từng dịch vụ hoặc tất cả. Bản vá bảo mật của web server, PHP và cơ sở dữ liệu cũng tự cài mỗi đêm.",
   "Check for updates": "Kiểm tra bản cập nhật",
   "Checking for service updates...": "Đang kiểm tra bản cập nhật dịch vụ...",
   "Loading service versions...": "Đang tải phiên bản dịch vụ...",
