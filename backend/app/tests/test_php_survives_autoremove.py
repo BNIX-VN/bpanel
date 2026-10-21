@@ -76,3 +76,30 @@ def test_the_repair_actually_runs():
     calls = [line.strip() for line in update.splitlines()
              if line.strip() == "migrate_protect_php_from_autoremove"]
     assert len(calls) == 1, "the migration is defined but never invoked"
+
+
+ONDREJ_ORIGIN = '"o=LP-PPA-ondrej-php,a=${distro_codename}";'
+
+
+def _function(text, name):
+    body = text[text.index(f"{name}() {{"):]
+    return body[:body.index("\n}\n")]
+
+
+def test_php_from_the_ppa_gets_unattended_security_updates():
+    """unattended-upgrades followed only Ubuntu's archive, so PHP fixes from the
+    ondrej PPA waited for someone to press "OS update" (2026-10-21)."""
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    writer = _function(helper, "write_service_update_origins")
+    assert ONDREJ_ORIGIN in writer
+    assert "<<'APT'" in writer, "quoted heredoc: apt expands ${distro_codename}, not bash"
+    assert "write_service_update_origins" in _function(helper, "configure_unattended_upgrades")
+
+
+def test_existing_servers_get_the_ppa_origin_on_update():
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    migration = _function(update, "migrate_service_update_origins")
+    assert ONDREJ_ORIGIN in migration and "<<'APT'" in migration
+    assert "52bpanel-service-updates" in migration
+    calls = [line.strip() for line in update.splitlines()]
+    assert calls.count("migrate_service_update_origins") == 1

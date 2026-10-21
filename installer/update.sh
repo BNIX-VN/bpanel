@@ -670,6 +670,21 @@ migrate_user_backup_dir_owner() {
   fi
 }
 
+migrate_service_update_origins() {
+  # Operator's request of 2026-10-21. unattended-upgrades only followed
+  # Ubuntu's archive, so PHP security fixes from the ondrej PPA never arrived
+  # on their own. Kept identical to write_service_update_origins in
+  # bpanel-helper.sh.
+  local conf=/etc/apt/apt.conf.d/52bpanel-service-updates
+  [[ -f "$conf" ]] && grep -q 'o=LP-PPA-ondrej-php' "$conf" && return 0
+  cat >"$conf" <<'APT'
+Unattended-Upgrade::Origins-Pattern {
+        "o=LP-PPA-ondrej-php,a=${distro_codename}";
+};
+APT
+  echo "    apt: PHP from the ondrej PPA now gets unattended updates"
+}
+
 # Cron lines written before the PHP pinning fix call a bare `php`, which
 # resolves through /etc/alternatives to the newest installed version instead of
 # the version the website runs on, and carry shell-quoted redirections such as
@@ -1984,6 +1999,7 @@ log "Reloading nginx"
 update_progress 92 "restarting" "Restarting services and reloading nginx"
 migrate_nginx_wordpress_csp_worker_src
 migrate_protect_php_from_autoremove
+migrate_service_update_origins
 migrate_user_backup_dir_owner
 migrate_site_cron_php_binary
 nginx -t
