@@ -293,6 +293,20 @@ NGINX
   systemctl reload nginx || true
 }
 
+write_service_update_origins() {
+  # PHP comes from the ondrej PPA, which no Allowed-Origins line above
+  # matches: security fixes for every site's PHP waited for someone to press
+  # "OS update". The PPA has no -security suite, so this takes all of its
+  # updates for this release (operator's choice, 2026-10-21, knowing PHP-FPM
+  # restarts briefly). nginx comes from Ubuntu and is already covered.
+  # A separate file because the list in 51bpanel is rewritten per mode.
+  cat >/etc/apt/apt.conf.d/52bpanel-service-updates <<'APT'
+Unattended-Upgrade::Origins-Pattern {
+        "o=LP-PPA-ondrej-php,a=${distro_codename}";
+};
+APT
+}
+
 configure_unattended_upgrades() {
   local enabled="$1" mode="$2" reboot="$3" origins
   [[ "$enabled" == "on" || "$enabled" == "off" ]] || deny "enabled must be on/off"
@@ -338,6 +352,7 @@ Unattended-Upgrade::Remove-Unused-Dependencies "false";
 Unattended-Upgrade::Automatic-Reboot "$([[ "$reboot" == "on" ]] && echo true || echo false)";
 Unattended-Upgrade::Automatic-Reboot-Time "03:00";
 APT
+  write_service_update_origins
   systemctl enable --now unattended-upgrades.service 2>/dev/null || true
   echo "OS auto updates enabled (${mode}, reboot=${reboot})"
 }
