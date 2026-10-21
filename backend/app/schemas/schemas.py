@@ -723,6 +723,11 @@ class WebsiteAccessLogsOut(BaseModel):
     generated_at: str = ""
 
 
+class ServiceUpdateRun(BaseModel):
+    all: bool = False
+    services: list[str] = Field(default_factory=list, max_length=40)
+
+
 class SystemAutoUpdateConfig(BaseModel):
     enabled: bool = True
     mode: Literal["security", "all"] = "security"
