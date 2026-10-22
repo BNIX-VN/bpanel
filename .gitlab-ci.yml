@@ -52,7 +52,8 @@ backend:
     # every string assertion and still made nginx refuse the config). Without
     # it the cache tests skip silently.
     - apt-get update -qq && apt-get install -y -qq nginx >/dev/null
-    - pip install pytest
+    # httpx2: starlette 1.x's TestClient needs it; tests only, not the panel.
+    - pip install pytest httpx2
     - pytest backend/app/tests backend/tests -q
     - python -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f in glob.glob('backend/app/**/*.py', recursive=True)]"
 
