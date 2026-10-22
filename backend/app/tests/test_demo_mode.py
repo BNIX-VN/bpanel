@@ -80,6 +80,9 @@ REVIEWED_READS = {
     "/api/sftp-accounts/limits", "/api/site-apps", "/api/site-apps/suggest-port",
     "/api/site-apps/{app_id}/logs", "/api/site-apps/{app_id}/status", "/api/site-runtimes/status",
     "/api/terminal/info", "/api/updates/status", "/api/users", "/api/users/audit/log",
+    # Service versions (2026-10-22): package names and versions, admin only;
+    # ?refresh=true runs apt-get update, the same as the nightly apt timer.
+    "/api/updates/services",
     "/api/users/me", "/api/users/storage-usage", "/api/users/pool", "/api/users/{user_id}/pool",
     "/api/resource-limits", "/api/resource-limits/{user_id}/history",
     "/api/waf/access-logs", "/api/waf/bots",
