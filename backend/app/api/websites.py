@@ -62,7 +62,7 @@ def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: b
 def _ensure_default_waf_file(domain: str) -> None:
     # No CRS: a website starts with crs_enabled off, and the rule file has to
     # agree with the flag or the opt-in means nothing.
-    result = waf.sync_site_rules(domain, [rule["id"] for rule in waf.DEFAULT_RULES], "", crs_mode="off")
+    result = waf.sync_site_rules(domain, waf.default_enabled_rule_ids(), "", crs_mode="off")
     if result.returncode != 0:
         raise HTTPException(status_code=400, detail=_command_error(result))
 

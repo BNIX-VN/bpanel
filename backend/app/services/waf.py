@@ -189,6 +189,13 @@ def _default_enabled_ids() -> set[str]:
     return {rule["id"] for rule in DEFAULT_RULES if rule.get("enabled_default", True)}
 
 
+def default_enabled_rule_ids() -> list[str]:
+    """The groups a new or imported site starts with, in DEFAULT_RULES order.
+    Not every group: an opt-in one stays off until the site turns it on."""
+    enabled = _default_enabled_ids()
+    return [rule["id"] for rule in DEFAULT_RULES if rule["id"] in enabled]
+
+
 def _parse_enabled_rule_ids(value: str | None) -> set[str]:
     valid = _rule_ids()
     if not value:

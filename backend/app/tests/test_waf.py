@@ -32,6 +32,18 @@ def test_the_installer_block_is_off_unless_a_site_asks_for_it():
     assert "id:1001104" in waf.render_site_rules("example.test", chosen)
 
 
+def test_a_new_or_imported_site_starts_with_the_default_set():
+    """Creating a site wrote its first rules file with every group, the opt-in
+    installer block included, until its settings were saved (found on .88
+    while testing the fix, 2026-10-22)."""
+    assert "wordpress-installer-block" not in waf.default_enabled_rule_ids()
+    assert set(waf.default_enabled_rule_ids()) == waf._parse_enabled_rule_ids("")
+    project = Path(__file__).resolve().parents[2]
+    for rel in ("app/api/websites.py", "app/services/da_import.py"):
+        text = (project / rel).read_text(encoding="utf-8")
+        assert 'for rule in waf.DEFAULT_RULES]' not in text, f"{rel} turns on every group"
+
+
 def test_legacy_heavy_rule_ids_are_mapped_or_ignored():
     assert waf.validate_enabled_rule_ids([
         "general-sensitive-files",
