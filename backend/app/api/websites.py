@@ -62,7 +62,7 @@ def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: b
 def _ensure_default_waf_file(domain: str) -> None:
     # No CRS: a website starts with crs_enabled off, and the rule file has to
     # agree with the flag or the opt-in means nothing.
-    result = waf.sync_site_rules(domain, [rule["id"] for rule in waf.DEFAULT_RULES], "", crs_mode="off")
+    result = waf.sync_site_rules(domain, waf.default_enabled_rule_ids(), "", crs_mode="off")
     if result.returncode != 0:
         raise HTTPException(status_code=400, detail=_command_error(result))
 
@@ -522,7 +522,11 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_type_value = "wordpress"
     else:
-        app_type_value = "php" if payload.app_type == "wordpress" else payload.app_type
+        # A WordPress site stays one when the panel is not asked to install it:
+        # the owner uploads WordPress themselves. Turning it into "php" gave it
+        # a vhost without WordPress's front controller, so every permalink of
+        # the uploaded site answered 404 (operator, 2026-10-22).
+        app_type_value = payload.app_type
         runtime_php_version = payload.php_version if app_type_value in {"wordpress", "php"} else None
         selected_app = (
             _resolve_app_for_owner(db, owner_id, payload.app_id, current_user)
@@ -544,7 +548,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 php_version=payload.php_version,
                 php_fpm_socket_override=site_users.site_php_fpm_socket(linux_user, root_path, runtime_php_version),
                 document_root="public_html",
-                rewrite_mode="none",
+                rewrite_mode="front_controller" if app_type_value == "wordpress" else "none",
                 app_port=selected_app.port if selected_app else None,
             )
         except (RuntimeError, ValueError, OSError) as exc:

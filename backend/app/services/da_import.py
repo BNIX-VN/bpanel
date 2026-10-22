@@ -1648,7 +1648,7 @@ def import_da_backup(archive_path: str, force: bool = False, replace_own: bool =
                 else:
                     _log(f"  {domain}: backup carried no files, importing empty")
 
-                selected_rules = [rule["id"] for rule in waf.DEFAULT_RULES]
+                selected_rules = waf.default_enabled_rule_ids()
                 waf_enabled = True
                 # Imported sites arrive with crs_enabled off like any new site.
                 waf_result = waf.sync_site_rules(domain, selected_rules, "", crs_mode="off")
