@@ -154,9 +154,10 @@ def test_the_create_website_form_is_not_in_front_of_the_list():
     """Making a site is occasional; finding one is why the page gets opened.
     As in SNPanel the form is a side sheet, closed by its own X, and "New
     website" on the list (or its empty state) opens it; with no website yet
-    it is open, the only thing to do."""
+    it is open, the only thing to do - except while a create it sent is
+    running: Create closes the sheet at once (operator, 2026-10-22)."""
     assert "const [createFormOpen, setCreateFormOpen] = useState(false);" in APP
-    assert "const createOpen = createFormOpen || websites.length === 0;" in APP
+    assert "const createOpen = !createPending && (createFormOpen || websites.length === 0);" in APP
     page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl(")[0]
     assert "<Drawer open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}" in page
     assert "action={{ label: t('New website'), icon: Plus, onClick: openCreate }}" in page
