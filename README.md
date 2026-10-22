@@ -160,7 +160,7 @@ Chạy bằng root trên server Ubuntu 24.04 mới:
 curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/install.sh | bash
 ```
 
-Script tải bản phát hành mới nhất trên GitHub rồi cài. Trình cài sẽ hỏi:
+Script tải bản phát hành mới nhất trên [GitLab](https://gitlab.sieunhim.com/bnix/bpanel/-/releases) rồi cài. Trình cài sẽ hỏi:
 
 - Tên miền của panel (để trống thì dùng IP của server).
 - Cổng của panel (mặc định `2222`; tường lửa chỉ mở cổng này).
@@ -175,6 +175,20 @@ export SSL_EMAIL=admin@example.com
 export BPANEL_ADMIN_PASSWORD='mật-khẩu-mạnh'   # bỏ trống thì trình cài tự tạo
 curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/install.sh | bash
 ```
+
+Cài đúng một phiên bản thay vì bản mới nhất:
+
+```bash
+curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/install.sh | BPANEL_VERSION=v1.7.2 bash
+```
+
+Chưa chọn web server? Lệnh này hỏi Nginx (BPanel) hay OpenLiteSpeed (OPanel) rồi chạy đúng trình cài:
+
+```bash
+bash <(curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/panel-setup.sh)
+```
+
+Mã nguồn và bản phát hành ở [GitLab](https://gitlab.sieunhim.com/bnix/bpanel); [GitHub](https://github.com/BNIX-VN/bpanel) chỉ là bản sao đồng bộ.
 
 Trình cài sẽ cài Nginx, MariaDB, Redis, PHP-FPM (mặc định PHP 8.4), OpenSSH/SFTP,
 certbot, phpMyAdmin, WP-CLI, iptables, ipset và Node.js; dựng panel ở
