@@ -138,7 +138,7 @@ tính năng, không xoá dữ liệu nó đã tạo.
 | **Quét mã độc** | LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực (Lớp 2), quét file tải lên. |
 | **Trợ lý AI (MCP)** | Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân. |
 | **Quản lý DNS** | Chạy DNS cho tên miền ngay trên server bằng PowerDNS (mở cổng 53). Quản trị viên sửa mọi zone, khách hàng sửa zone của website mình; bản ghi A, AAAA, CNAME, MX, TXT, NS, SRV, CAA. Website mới tự có zone theo mẫu bản ghi tuỳ chỉnh; SPF tự theo smarthost. |
-| **Email** | Mail server trên VPS: Exim gửi/nhận, Dovecot cho IMAP/POP3, và [BNIX Webmail](https://github.com/bnixvn/webmail) trên cổng 2096. Khách hàng tạo hộp thư trên tên miền của mình trong số lượng gói cho phép, mở webmail từ panel không cần mật khẩu (SSO). Thư lưu trong home của khách, tính vào dung lượng và có trong backup. Ký DKIM; có Quản lý DNS thì bản ghi DKIM, DMARC, webmail tự được thêm. Rspamd lọc thư rác (từ chối hoặc chuyển vào Junk), có nhật ký lọc thư kèm lý do và danh sách cho phép; gửi thư qua smarthost khi nhà cung cấp chặn cổng 25. |
+| **Email** | Mail server trên VPS: Exim gửi/nhận, Dovecot cho IMAP/POP3, và [BNIX Webmail](https://gitlab.sieunhim.com/bnix/webmail) trên cổng 2096. Khách hàng tạo hộp thư trên tên miền của mình trong số lượng gói cho phép, mở webmail từ panel không cần mật khẩu (SSO). Thư lưu trong home của khách, tính vào dung lượng và có trong backup. Ký DKIM; có Quản lý DNS thì bản ghi DKIM, DMARC, webmail tự được thêm. Rspamd lọc thư rác (từ chối hoặc chuyển vào Junk), có nhật ký lọc thư kèm lý do và danh sách cho phép; gửi thư qua smarthost khi nhà cung cấp chặn cổng 25. |
 | **Chế độ demo** | Tài khoản demo công khai cho quản trị và khách hàng, có nút đăng nhập nhanh trên trang đăng nhập. Xem mọi trang, mọi thay đổi bị từ chối; không mở được nội dung file, tải xuống, phpMyAdmin hay terminal. |
 | **Thông báo** | Gửi cảnh báo cho quản trị viên qua email (SMTP) và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật... |
 
@@ -157,7 +157,7 @@ Tiện ích có trang riêng sẽ hiện trên menu bên trái khi được bậ
 Chạy bằng root trên server Ubuntu 24.04 mới:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash
+curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/install.sh | bash
 ```
 
 Script tải bản phát hành mới nhất trên GitHub rồi cài. Trình cài sẽ hỏi:
@@ -173,7 +173,7 @@ export PANEL_URL=https://panel.example.com:2222
 export ENABLE_SSL=yes
 export SSL_EMAIL=admin@example.com
 export BPANEL_ADMIN_PASSWORD='mật-khẩu-mạnh'   # bỏ trống thì trình cài tự tạo
-curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash
+curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/install.sh | bash
 ```
 
 Trình cài sẽ cài Nginx, MariaDB, Redis, PHP-FPM (mặc định PHP 8.4), OpenSSH/SFTP,
@@ -397,7 +397,7 @@ bpanel/
   miễn phí**.
 - Dùng VPS ở nơi khác: BPanel vẫn miễn phí theo giấy phép AGPL-3.0, và bạn có thể
   báo lỗi hoặc đề xuất tính năng qua
-  [GitHub Issues](https://github.com/BNIX-VN/bpanel/issues).
+  [GitLab Issues](https://gitlab.sieunhim.com/bnix/bpanel/-/issues).
 
 ## Giấy phép
 

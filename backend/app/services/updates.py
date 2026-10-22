@@ -10,7 +10,7 @@ from app.core.version import APP_VERSION
 from app.services.shell import shell
 
 
-REPO_URL = os.environ.get("BPANEL_REPO_URL", "https://github.com/BNIX-VN/bpanel.git")
+REPO_URL = os.environ.get("BPANEL_REPO_URL", "https://gitlab.sieunhim.com/bnix/bpanel.git")
 UPDATE_STATE_FILE = Path(os.environ.get("BPANEL_UPDATE_STATE_FILE", "/var/lib/bpanel/update-status.json"))
 SEMVER_TAG_RE = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 STATUS_CACHE_SECONDS = 300

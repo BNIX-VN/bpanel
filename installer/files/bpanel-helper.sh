@@ -477,7 +477,7 @@ run_panel_update() {
       --description="Update BPanel from GitHub" \
       --property="Environment=SOURCE_DIR=${SOURCE_DIR}" \
       --property="Environment=APP_DIR=${APP_DIR}" \
-      --property="Environment=REPO_URL=${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}" \
+      --property="Environment=REPO_URL=${REPO_URL:-https://gitlab.sieunhim.com/bnix/bpanel.git}" \
       --property="Environment=GIT_REMOTE=${GIT_REMOTE:-origin}" \
       --property="Environment=UPDATE_CHANNEL=${UPDATE_CHANNEL:-release}" \
       --property="Environment=BRANCH=${BRANCH:-main}" \
@@ -492,7 +492,7 @@ run_panel_update() {
   nohup env \
     SOURCE_DIR="$SOURCE_DIR" \
     APP_DIR="$APP_DIR" \
-    REPO_URL="${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}" \
+    REPO_URL="${REPO_URL:-https://gitlab.sieunhim.com/bnix/bpanel.git}" \
     GIT_REMOTE="${GIT_REMOTE:-origin}" \
     UPDATE_CHANNEL="${UPDATE_CHANNEL:-release}" \
     BRANCH="${BRANCH:-main}" \
@@ -2192,7 +2192,8 @@ MAIL_TLS_SCRIPT="/usr/local/sbin/bpanel-mail-tls"
 MAIL_INSTALL_LOG="/var/log/bpanel-mail-install.log"
 MAIL_MARKER="# Managed by BPanel (Email addon)."
 WEBMAIL_HOME="/opt/bnix-webmail"
-WEBMAIL_REPO="https://github.com/bnixvn/webmail.git"
+# On the panel's own GitLab since 2026-10-22; GitHub keeps a copy.
+WEBMAIL_REPO="https://gitlab.sieunhim.com/bnix/webmail.git"
 WEBMAIL_ENV="/etc/bnix-webmail.env"
 WEBMAIL_UNIT="/etc/systemd/system/bpanel-webmail.service"
 WEBMAIL_PORT="8096"

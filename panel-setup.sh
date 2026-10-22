@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # Trình cài trung gian: chọn web server, rồi chạy trình cài chính thức tương ứng.
 #
-#   Nginx          -> BPanel  https://github.com/BNIX-VN/bpanel
-#   OpenLiteSpeed  -> OPanel  https://github.com/bnixvn/opanel
+#   Nginx          -> BPanel  https://gitlab.sieunhim.com/bnix/bpanel
+#   OpenLiteSpeed  -> OPanel  https://gitlab.sieunhim.com/bnix/opanel
 #
 # Script chỉ chọn và gọi đúng trình cài; mọi câu hỏi khác (tên miền, cổng, SSL)
 # là của trình cài đó, và các biến môi trường của nó (PANEL_URL, ENABLE_SSL,
 # SSL_EMAIL...) vẫn dùng được như khi chạy trực tiếp.
 #
 # Cách dùng (bằng root, trên Ubuntu 24.04 mới):
-#   bash <(curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/panel-setup.sh)
+#   bash <(curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/panel-setup.sh)
 #       hỏi chọn web server
-#   bash <(curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/panel-setup.sh) nginx
+#   bash <(curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/panel-setup.sh) nginx
 #       cài BPanel, không hỏi
-#   bash <(curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/panel-setup.sh) openlitespeed
+#   bash <(curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/panel-setup.sh) openlitespeed
 #       cài OPanel, không hỏi
 set -euo pipefail
 
-BPANEL_INSTALLER="https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh"
-OPANEL_INSTALLER="https://raw.githubusercontent.com/bnixvn/opanel/main/installer/install.sh"
+BPANEL_INSTALLER="https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/install.sh"
+OPANEL_INSTALLER="https://gitlab.sieunhim.com/bnix/opanel/-/raw/main/installer/install.sh"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Hãy chạy script này bằng root." >&2

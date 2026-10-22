@@ -52,16 +52,38 @@ fi
 # via bash <(curl ...), BASH_SOURCE[0] resolves to /dev/fd/N, so PROJECT_ROOT
 # becomes /dev and BACKEND_SRC becomes /dev/backend. Detect this and download
 # the release tarball via curl.
-BPANEL_GITHUB="${BPANEL_GITHUB:-https://github.com/BNIX-VN/bpanel}"
-BPANEL_REPO_SLUG="${BPANEL_GITHUB#*github.com/}"
+# The panel's own GitLab since 2026-10-22. BPANEL_GITHUB is still read, for a
+# script that set it.
+BPANEL_SOURCE="${BPANEL_SOURCE:-${BPANEL_GITHUB:-https://gitlab.sieunhim.com/bnix/bpanel}}"
+BPANEL_SOURCE="${BPANEL_SOURCE%.git}"
+bpanel_latest_tag() {
+  local url
+  case "$BPANEL_SOURCE" in
+    https://github.com/*) url="https://api.github.com/repos/${BPANEL_SOURCE#https://github.com/}/tags?per_page=100" ;;
+    *) url="${BPANEL_SOURCE%/*/*}/api/v4/projects/$(printf '%s' "${BPANEL_SOURCE#https://*/}" | sed 's|/|%2F|g')/repository/tags?per_page=100" ;;
+  esac
+  # GitLab answers on one line, GitHub one field a line: split on commas
+  # so both read the same.
+  curl -fsSL --connect-timeout 10 --max-time 60 "$url" \
+    | tr ',' '\n' \
+    | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(v[^"]*\)".*/\1/p' \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V \
+    | tail -n 1
+}
+bpanel_tarball_url() {
+  case "$BPANEL_SOURCE" in
+    https://github.com/*) printf '%s/archive/refs/tags/%s.tar.gz\n' "$BPANEL_SOURCE" "$1" ;;
+    *) printf '%s/-/archive/%s/%s-%s.tar.gz\n' "$BPANEL_SOURCE" "$1" "${BPANEL_SOURCE##*/}" "$1" ;;
+  esac
+}
 if [[ -z "${BACKEND_SRC}" || ! -d "${BACKEND_SRC}" ]]; then
   # --- resolve release tag (no git required) -------------------------
   if [[ -z "${BPANEL_VERSION:-}" ]]; then
     BPANEL_VERSION="${BPANEL_INSTALLER_VERSION:-}"
   fi
   if [[ -z "${BPANEL_VERSION:-}" ]]; then
-    BPANEL_VERSION="$(curl -fsSL --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${BPANEL_REPO_SLUG}/tags?per_page=1" \
-      | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -1)" || true
+    BPANEL_VERSION="$(bpanel_latest_tag)" || true
   fi
   if [[ ! "${BPANEL_VERSION:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "ERROR: Could not detect latest BPanel release tag." >&2
@@ -74,7 +96,7 @@ if [[ -z "${BACKEND_SRC}" || ! -d "${BACKEND_SRC}" ]]; then
   echo ""
   echo "==> Source not found locally - downloading ${BPANEL_VERSION} to ${BPANEL_CLONE_DIR}"
 
-  curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 "${BPANEL_GITHUB}/archive/refs/tags/${BPANEL_VERSION}.tar.gz" \
+  curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 "$(bpanel_tarball_url "$BPANEL_VERSION")" \
     | tar xz -C "${BPANEL_CLONE_DIR}" --strip-components=1
 
   PROJECT_ROOT="${BPANEL_CLONE_DIR}"
