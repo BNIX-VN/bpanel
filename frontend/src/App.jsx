@@ -20,6 +20,7 @@ import HubTabs from './components/HubTabs';
 import Tabs from './components/Tabs.jsx';
 import NotificationBell from './components/NotificationBell.jsx';
 import Drawer from './components/Drawer.jsx';
+import { generatePassword } from './lib/password.js';
 import { DialogHost, confirmDialog, promptDialog } from './components/Dialog.jsx';
 import { Checkbox, Field, PasswordField } from './components/Form.jsx';
 import ActionMenu from './components/ActionMenu.jsx';
@@ -2597,16 +2598,19 @@ function App() {
     };
     if (siteOwnerId) body.owner_id = Number(siteOwnerId);
     if (siteType === 'application') body.app_id = Number(createSiteAppId);
+    // Blank means a random one, as the form says; it was a fixed
+    // 'StrongPass123!', the same on every site made without one.
+    const wpPassword = installWp ? (wpAdminPassword || generatePassword()) : '';
     if (installWp) {
       body.admin_user = wpAdminUser;
       body.admin_email = cleanAdminEmail || `admin@${cleanDomain}`;
-      body.admin_password = wpAdminPassword || 'StrongPass123!';
+      body.admin_password = wpPassword;
     }
     const data = await request('/websites', { method: 'POST', body: JSON.stringify(body) },
-      installWp ? 'Creating WordPress website...' : 'Creating website...');
+      installWp ? t('Creating WordPress website...') : t('Creating website...'));
     if (data) {
       if (installWp) {
-        setNotice(`Created WordPress site: https://${cleanDomain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}`);
+        setNotice(`Created WordPress site: https://${cleanDomain}\nAdmin: ${wpAdminUser} | Password: ${wpPassword}`);
       } else if (siteType === 'application') {
         setNotice(`Created ${cleanDomain}, serving the selected application.`);
         setCreateSiteAppId('');
@@ -8248,7 +8252,14 @@ function App() {
     return <>
       <Drawer open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}
         title={websites.length ? t('Create website') : t('Attach first domain')}
-        footer={<button type="submit" form="website-create-form" disabled={!!loading || !domain}><Plus size={15} aria-hidden="true"/> {t('Create')}</button>}>
+        footer={<>
+          {/* A WordPress site takes a minute or more, and the page's own progress
+              line and errors sit behind this sheet (operator, 2026-10-22). */}
+          {loading && <span className="sn-drawer-foot-note is-progress" role="status">{loading}</span>}
+          {!loading && error && <span className="sn-drawer-foot-note" role="alert">{error}</span>}
+          <button type="submit" form="website-create-form" disabled={!!loading || !domain}>
+            {loading ? <RefreshCw size={15} className="spin" aria-hidden="true"/> : <Plus size={15} aria-hidden="true"/>} {loading ? t('Creating...') : t('Create')}</button>
+        </>}>
         <form id="website-create-form" onSubmit={(e) => { e.preventDefault(); createWordPress(); }}>
         <div className="sn-drawer-grid create-site-fields">
           <Field className="is-wide" label={t('Domain')}>
