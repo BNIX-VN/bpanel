@@ -136,15 +136,26 @@ DEFAULT_RULES = [
         "rules": """SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'""",
     },
     {
-        "id": "wordpress-install-upgrade",
+        # Off unless a site asks for it (operator, 2026-10-22). WordPress
+        # sends every visitor to wp-admin/install.php while its tables are
+        # missing - a manual install, a restore or migration with another
+        # table prefix - and this answered 403 there, so the site could not be
+        # set up. WordPress already refuses install.php once installed and
+        # setup-config.php once wp-config.php exists. A new id: the old one,
+        # "wordpress-install-upgrade", sits in every saved selection only
+        # because it was on by default, and is dropped (LEGACY_RULE_ID_MAP).
+        "id": "wordpress-installer-block",
+        "enabled_default": False,
         "category": "WordPress",
         "title": "WordPress installer probes",
-        "description": "Blocks direct access to WordPress installation scripts after deployment.",
+        "description": "Blocks direct access to WordPress installation scripts after deployment. Off by default: a site that is not installed yet needs wp-admin/install.php.",
         "rules": """SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\\.php(?:$|[?])|/wp-admin/setup-config\\.php(?:$|[?]))" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'""",
     },
 ]
 
 LEGACY_RULE_ID_MAP = {
+    # Was on by default; its successor wordpress-installer-block is opt-in.
+    "wordpress-install-upgrade": None,
     "general-sensitive-files": "php-sensitive-files",
     "general-path-traversal": "php-path-traversal",
     "general-command-injection": "php-runtime-probes",
@@ -173,16 +184,21 @@ def _validate_custom_rules(content: str) -> str:
     return value.replace("\r\n", "\n").strip()
 
 
+def _default_enabled_ids() -> set[str]:
+    """Rule groups a site gets when its selection has never been saved."""
+    return {rule["id"] for rule in DEFAULT_RULES if rule.get("enabled_default", True)}
+
+
 def _parse_enabled_rule_ids(value: str | None) -> set[str]:
     valid = _rule_ids()
     if not value:
-        return set(valid)
+        return _default_enabled_ids()
     try:
         raw = json.loads(value)
     except (TypeError, ValueError):
-        return set(valid)
+        return _default_enabled_ids()
     if not isinstance(raw, list):
-        return set(valid)
+        return _default_enabled_ids()
     selected = {
         LEGACY_RULE_ID_MAP.get(rule_id, rule_id)
         for item in raw
@@ -213,7 +229,7 @@ def default_rule_definitions() -> list[dict]:
             "category": rule["category"],
             "title": rule["title"],
             "description": rule["description"],
-            "enabled_default": True,
+            "enabled_default": bool(rule.get("enabled_default", True)),
         }
         for rule in DEFAULT_RULES
     ]

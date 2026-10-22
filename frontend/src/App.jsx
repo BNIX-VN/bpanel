@@ -806,6 +806,11 @@ function App() {
      panel with no sites yet is the exception - there the form is the only
      thing to do, so it opens itself. */
   const [createFormOpen, setCreateFormOpen] = useState(false);
+  // Create website closes the sheet at once (operator, 2026-10-22): a
+  // WordPress site takes a minute or more, and the page beneath is where
+  // "Creating..." and any error show. With no website yet the sheet is
+  // otherwise always open, so it stays shut while the request runs.
+  const [createPending, setCreatePending] = useState(false);
   const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // Website settings editor state
   const [websiteSettingsForm, setWebsiteSettingsForm] = useState(websiteConfigForm());
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
@@ -8226,7 +8231,7 @@ function App() {
           || (s.root_path || '').toLowerCase().includes(wsQuery)
           || (s.linux_user || '').toLowerCase().includes(wsQuery))
       : websites;
-    const createOpen = createFormOpen || websites.length === 0;
+    const createOpen = !createPending && (createFormOpen || websites.length === 0);
     const openCreate = () => {
       setCreateFormOpen(true);
       setTimeout(() => { const el = document.getElementById('create-website-domain'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); }, 0);
@@ -8253,14 +8258,16 @@ function App() {
       <Drawer open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}
         title={websites.length ? t('Create website') : t('Attach first domain')}
         footer={<>
-          {/* A WordPress site takes a minute or more, and the page's own progress
-              line and errors sit behind this sheet (operator, 2026-10-22). */}
-          {loading && <span className="sn-drawer-foot-note is-progress" role="status">{loading}</span>}
+          {/* Shown when the first site of an account failed and the sheet came back. */}
           {!loading && error && <span className="sn-drawer-foot-note" role="alert">{error}</span>}
-          <button type="submit" form="website-create-form" disabled={!!loading || !domain}>
-            {loading ? <RefreshCw size={15} className="spin" aria-hidden="true"/> : <Plus size={15} aria-hidden="true"/>} {loading ? t('Creating...') : t('Create')}</button>
+          <button type="submit" form="website-create-form" disabled={!!loading || !domain}><Plus size={15} aria-hidden="true"/> {t('Create')}</button>
         </>}>
-        <form id="website-create-form" onSubmit={(e) => { e.preventDefault(); createWordPress(); }}>
+        <form id="website-create-form" onSubmit={(e) => {
+          e.preventDefault();
+          setCreateFormOpen(false);
+          setCreatePending(true);
+          Promise.resolve(createWordPress()).finally(() => setCreatePending(false));
+        }}>
         <div className="sn-drawer-grid create-site-fields">
           <Field className="is-wide" label={t('Domain')}>
             <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" autoCapitalize="none" spellCheck={false} />

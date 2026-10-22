@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -12,7 +13,23 @@ def test_default_rules_only_cover_wordpress_laravel_and_php():
     definitions = waf.default_rule_definitions()
 
     assert {rule["category"] for rule in definitions} == {"Laravel", "PHP", "WordPress"}
-    assert all(rule["enabled_default"] for rule in definitions)
+    # All on out of the box except the WordPress installer block, which 403'd
+    # wp-admin/install.php on every site not installed yet (operator, 2026-10-22).
+    off = {rule["id"] for rule in definitions if not rule["enabled_default"]}
+    assert off == {"wordpress-installer-block"}
+
+
+def test_the_installer_block_is_off_unless_a_site_asks_for_it():
+    # Unsaved, and saved under the old id - every saved selection named it,
+    # only because it was on by default.
+    assert "wordpress-installer-block" not in waf._parse_enabled_rule_ids("")
+    old = json.dumps(["wordpress-sensitive-files", "wordpress-install-upgrade"])
+    assert waf._parse_enabled_rule_ids(old) == {"wordpress-sensitive-files"}
+    assert waf.validate_enabled_rule_ids(["wordpress-install-upgrade"]) == []
+    assert "id:1001104" not in waf.render_site_rules("example.test", waf._parse_enabled_rule_ids(""))
+    # A site that switches it on still gets it.
+    chosen = waf._parse_enabled_rule_ids(json.dumps(["wordpress-installer-block"]))
+    assert "id:1001104" in waf.render_site_rules("example.test", chosen)
 
 
 def test_legacy_heavy_rule_ids_are_mapped_or_ignored():
@@ -295,7 +312,8 @@ def test_shipped_rules_match_the_helper_copy():
     def phases(text):
         return sorted(re.findall(r"id:(\d+),phase:(\d)", text))
 
-    shipped = "\n".join(rule["rules"] for rule in waf.DEFAULT_RULES)
+    # The server-wide copy is the default set: an opt-in group is not in it.
+    shipped = "\n".join(rule["rules"] for rule in waf.DEFAULT_RULES if rule.get("enabled_default", True))
     assert rule_ids(block) == rule_ids(shipped)
     assert phases(block) == phases(shipped)
 

@@ -2671,7 +2671,6 @@ export const vi = {
   "Last service update failed": "Lần cập nhật dịch vụ gần nhất bị lỗi",
   "Service update log": "Nhật ký cập nhật dịch vụ",
   "Creating website...": "Đang tạo website...",
-  "Creating...": "Đang tạo...",
 };
 
 /* Said in English by the people who run these servers. Translating them
