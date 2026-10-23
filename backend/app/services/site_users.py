@@ -235,6 +235,16 @@ def ensure_site_runtime(domain: str, root_path: str, php_version: Optional[str] 
     return username
 
 
+def set_php_basedir(root_path: str, php_version: Optional[str], linux_user: str, on: bool) -> None:
+    """open_basedir on or off for one site's PHP-FPM pool (services/php_isolation.py).
+    The helper keeps it in a marker, so every later rewrite of the pool keeps it."""
+    shell.privileged(
+        "site-php-basedir",
+        helper_args=[validate_linux_user(linux_user), root_path, php_version or "none", "on" if on else "off"],
+        fallback=["true"],
+    )
+
+
 def ensure_document_root(root_path: str, relative_path: str, linux_user: Optional[str]) -> Path:
     target = document_root(root_path, relative_path)
     if not linux_user:

@@ -24,7 +24,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import demo_mode, git_repos, mail, mariadb, nginx, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, terminal, waf, wordpress
+from app.services import demo_mode, git_repos, mail, mariadb, nginx, php_isolation, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, terminal, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -376,6 +376,9 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
 
     db.commit()
     db.refresh(user)
+    if package_change and package:
+        # The package's open_basedir for the account's sites.
+        php_isolation.sync_user(db, user)
     # A shell the account is no longer entitled to ends now, not at its next
     # check.
     if not user.is_active or not user.terminal_enabled or role_changed:

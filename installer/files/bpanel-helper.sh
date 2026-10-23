@@ -26,11 +26,17 @@ NGINX_CONF_DIR="/etc/nginx/conf.d"
 PHP_CONF_DIRS=(/etc/php/{5.6,7.4,8.0,8.1,8.2,8.3,8.4,8.5}/fpm/conf.d)
 # sys_temp_dir of each site user's PHP-FPM pools: ${PHP_TMP_ROOT}/<user>.
 PHP_TMP_ROOT="/var/lib/php/tmp"
+# One empty file per site whose PHP-FPM pool runs under open_basedir:
+# ${PHP_BASEDIR_ROOT}/<user>-<site hash>. Root's, so every rewrite of the pool
+# (PHP version change, update, cron) keeps what the panel last set.
+PHP_BASEDIR_ROOT="/etc/bpanel/php-basedir"
 BPANEL_SITES_GROUP="bpanel-sites"
 # Default permissions for everything inside a site tree. 0644/0755 is what every
 # hosting panel gives a customer, and what PHP applications, SFTP clients and
-# their documentation assume. Sites stay separated by the PHP-FPM open_basedir
-# of each pool, by the SFTP chroot and by the panel terminal, not by these bits.
+# their documentation assume. Customers stay separated by /home/<user>, which is
+# root:<user> 0750 (the panel gets traverse only, through an ACL), by the SFTP
+# chroot and by the panel terminal, not by these bits. open_basedir on a pool is
+# an extra fence between one customer's own sites, opt-in per site.
 SITE_FILE_MODE="0644"
 SITE_DIR_MODE="0755"
 # Files that carry database credentials are kept off the default mode.
@@ -7205,10 +7211,24 @@ ensure_panel_user_home() {
   usermod -aG "$BPANEL_SFTP_GROUP" "$user" 2>/dev/null || true
   mkdir -p "$home_dir"
   chown "root:$user" "$home_dir"
-  chmod 0751 "$home_dir"
+  chmod 0750 "$home_dir"
   chmod a-s "$home_dir" 2>/dev/null || true
   chmod -t "$home_dir" 2>/dev/null || true
   clear_path_acl "$home_dir"
+  allow_panel_traverse "$home_dir"
+}
+
+# /home/<user> is 0750 so one customer's PHP cannot walk into another's home:
+# with open_basedir off (the default, it costs a third of PHP's speed) this is
+# the wall between customers. nginx and the site's own processes get in through
+# the <user> group. The panel, which runs as bpanel, reads backups, mailboxes
+# and disk usage under it and used to get in through "other" (0751): an ACL
+# keeps exactly that traverse for bpanel and nobody else. A group membership
+# would not do - the running API only picks up new groups when it restarts.
+allow_panel_traverse() {
+  local target="$1"
+  command -v setfacl >/dev/null 2>&1 || { chmod o+x "$target"; return 0; }
+  setfacl -m u:bpanel:x "$target" 2>/dev/null || chmod o+x "$target"
 }
 
 set_panel_user_password() {
@@ -7238,6 +7258,7 @@ delete_panel_user_runtime() {
       systemctl reload "php${php_version}-fpm" 2>/dev/null || true
     done
   done
+  rm -f "${PHP_BASEDIR_ROOT}/${user}-"* 2>/dev/null || true
   crontab -r -u "$user" 2>/dev/null || true
   # Ask, then insist. An SFTP session or a PHP worker still winding down is
   # enough to make the userdel below refuse.
@@ -7867,8 +7888,29 @@ time_sync() {
   echo "clock stepped by ${skew}s from an HTTPS Date header; now $(date -u +%FT%TZ)"
 }
 
+site_php_basedir_marker() {
+  local user="$1" target="$2" site_hash
+  require_linux_user "$user"
+  target=$(readlink -m "$target") || deny "cannot resolve $target"
+  site_hash="$(printf '%s' "$target" | sha256sum | awk '{print substr($1, 1, 12)}')"
+  printf '%s/%s-%s' "$PHP_BASEDIR_ROOT" "$user" "$site_hash"
+}
+
+set_site_php_basedir() {
+  local user="$1" target="$2" state="$3" marker
+  marker="$(site_php_basedir_marker "$user" "$target")"
+  if [[ "$state" == "on" ]]; then
+    install -d -o root -g root -m 0755 "$PHP_BASEDIR_ROOT"
+    : >"$marker"
+    chmod 0644 "$marker"
+  else
+    rm -f "$marker"
+  fi
+}
+
 delete_site_php_pools() {
   local user="$1" target="$2" glob
+  rm -f "$(site_php_basedir_marker "$user" "$target")"
   glob="$(site_php_pool_glob "$user" "$target")"
   for dir in /etc/php/*/fpm/pool.d; do
     [[ -d "$dir" ]] || continue
@@ -7907,6 +7949,13 @@ ensure_php_pool() {
   local sess_dir="/var/lib/php/sessions/${user}"
   local upload_dir="/var/lib/php/uploads/${user}"
   local tmp_dir="${PHP_TMP_ROOT}/${user}"
+  # open_basedir makes PHP resolve and check every path it opens, which cost a
+  # third of a WordPress page (.88, 2026-10-23: 0.22 s -> 0.15 s, 14 -> 22
+  # req/s). It is off unless the panel turned it on for this site.
+  local basedir_line=";php_admin_value[open_basedir] is off for this site (BPanel > Website > PHP)"
+  if [[ -f "${PHP_BASEDIR_ROOT}/${user}-${site_hash}" ]]; then
+    basedir_line="php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:${tmp_dir}:/usr/share/php"
+  fi
   ensure_php_runtime_dirs "$user"
   calculate_php_fpm_pool_tuning "$pool_file"
   cat >"$pool_file" <<POOL
@@ -7927,7 +7976,7 @@ pm.process_idle_timeout = ${PHP_FPM_PROCESS_IDLE_TIMEOUT}s
 pm.max_requests = ${PHP_FPM_MAX_REQUESTS}
 request_terminate_timeout = ${PHP_FPM_REQUEST_TERMINATE_TIMEOUT}s
 chdir = /
-php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:${tmp_dir}:/usr/share/php
+${basedir_line}
 php_admin_value[upload_tmp_dir] = ${upload_dir}
 php_admin_value[session.save_path] = ${sess_dir}
 php_admin_value[sys_temp_dir] = ${tmp_dir}
@@ -10023,6 +10072,16 @@ PY
     delete_sftp_account "$1"
     ;;
 
+  site-php-basedir)
+    [[ $# -eq 4 ]] || deny "usage: site-php-basedir <site-user> <path> <php-version|none> <on|off>"
+    user="$1"; path="$2"; php_version="$3"; state="$4"
+    [[ "$state" == "on" || "$state" == "off" ]] || deny "open_basedir must be on or off"
+    require_linux_user "$user"
+    target=$(require_managed_path "$path" "$user")
+    set_site_php_basedir "$user" "$target" "$state"
+    ensure_php_pool "$user" "$target" "$php_version"
+    ;;
+
   site-runtime-ensure)
     [[ $# -eq 3 ]] || deny "usage: site-runtime-ensure <site-user> <path> <php-version|none>"
     user="$1"; path="$2"; php_version="$3"
@@ -10054,9 +10113,13 @@ PY
     ensure_panel_user_home "$user"
     if [[ "$old_target" != "$new_target" ]]; then
       [[ ! -e "$new_target" ]] || deny "target path already exists: $new_target"
+      # The open_basedir marker is keyed by the path, so it moves with the site.
+      basedir_state="off"
+      [[ -f "$(site_php_basedir_marker "$old_user" "$old_target")" ]] && basedir_state="on"
       delete_site_php_pools "$old_user" "$old_target"
       mkdir -p "$(dirname "$new_target")"
       mv "$old_target" "$new_target"
+      set_site_php_basedir "$user" "$new_target" "$basedir_state"
     fi
     if [[ -d "$new_target/public" && ! -e "$new_target/public_html" ]]; then
       mv "$new_target/public" "$new_target/public_html"
@@ -10358,10 +10421,11 @@ PY
     # PHP started from the terminal was completely unconfined, while the same
     # site's PHP-FPM pool runs under open_basedir. That gap let one tenant read
     # another's files: the terminal runs as the site user, site files are
-    # world-readable by design, and /home/<user> is 0751 - not listable, but
+    # world-readable by design, and /home/<user> was 0751 - not listable, but
     # traversable if you know the name. `php -r "readfile('/home/other/...')"`
     # was enough. Verified on a live test server before the fix: it printed
-    # /etc/passwd.
+    # /etc/passwd. Homes are 0750 now (2026-10-23), and this stays as a second
+    # wall.
     #
     # The boundary is the tenant's own home, not one site root: a customer with
     # several sites still has to be able to work across them, and the leak
@@ -10384,9 +10448,9 @@ PY
     # So confine the filesystem instead of the arguments. In a private mount
     # namespace, /home is replaced by a tmpfs holding exactly one directory -
     # this tenant's own - so every other customer's files are simply not there
-    # to read, whatever the tool. Site trees are 0644 and homes 0751 by design
-    # (see the header at the top of this file), which is what made the read
-    # possible; this removes the path rather than the permission.
+    # to read, whatever the tool. Site trees are 0644 by design and homes were
+    # 0751 (see the header at the top of this file), which is what made the
+    # read possible; this removes the path rather than the permission.
     #
     # Outside the namespace /home is untouched, and the namespace dies with the
     # command. /etc/passwd stays readable: it is world-readable system data and

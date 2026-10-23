@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_reseller_role
 from app.models.entities import User, UserPackage
 from app.schemas.schemas import RESOURCE_LIMIT_FIELDS, UserPackageCreate, UserPackageOut, UserPackageUpdate
-from app.services import reseller as reseller_pool, resource_limits, terminal
+from app.services import php_isolation, reseller as reseller_pool, resource_limits, terminal
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/packages", tags=["packages"])
@@ -78,6 +78,7 @@ def create_package(
         terminal_enabled=payload.terminal_enabled,
         waf_enabled=payload.waf_enabled,
         wordpress_enabled=payload.wordpress_enabled,
+        open_basedir=payload.open_basedir,
         node_apps_limit=payload.node_apps_limit,
         sftp_accounts_limit=payload.sftp_accounts_limit,
         mail_accounts_limit=payload.mail_accounts_limit,
@@ -125,6 +126,9 @@ def update_package(
         package.waf_enabled = payload.waf_enabled
     if payload.wordpress_enabled is not None:
         package.wordpress_enabled = payload.wordpress_enabled
+    basedir_before = bool(package.open_basedir)
+    if payload.open_basedir is not None:
+        package.open_basedir = payload.open_basedir
     if payload.node_apps_limit is not None:
         package.node_apps_limit = payload.node_apps_limit
     if payload.sftp_accounts_limit is not None:
@@ -165,8 +169,12 @@ def update_package(
             terminal.end_sessions(user.id, "access-changed")
     if assigned:
         resource_limits.sync_in_background()
+    # Turning open_basedir on or off moves every site of the package's
+    # accounts with it (operator, 2026-10-22).
+    failed = php_isolation.sync_package(db, package) if bool(package.open_basedir) != basedir_before else []
     db.refresh(package)
     log_action(db, current_user.id, "update_package", package.name, request=request)
+    package.open_basedir_failed = failed
     return package
 
 

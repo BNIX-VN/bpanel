@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.7.2}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.8.0}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -516,6 +516,54 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 NGINX
+}
+
+# Open-file and TLS-session caches for every site. The FastCGI cache makes a
+# cached page cost almost nothing; what is left is nginx opening the same
+# static files and redoing the same TLS handshakes for every request.
+configure_nginx_performance() {
+  cat >/etc/nginx/conf.d/00-bpanel-performance.conf <<'NGINX'
+# Managed by BPanel.
+open_file_cache max=20000 inactive=60s;
+open_file_cache_valid 60s;
+open_file_cache_min_uses 2;
+open_file_cache_errors on;
+ssl_session_cache shared:BPANEL_SSL:20m;
+ssl_session_timeout 1d;
+keepalive_requests 1000;
+NGINX
+  # Two nginx.conf defaults are far below what one VPS serves.
+  sed -i -E 's/^([[:space:]]*worker_connections)[[:space:]]+[0-9]+;/\1 4096;/' /etc/nginx/nginx.conf
+  grep -qE '^[[:space:]]*worker_rlimit_nofile' /etc/nginx/nginx.conf \
+    || sed -i -E 's/^(worker_processes[^;]*;)/\1\nworker_rlimit_nofile 16384;/' /etc/nginx/nginx.conf
+}
+
+# BBR congestion control and a larger accept queue: a phone on a lossy 4G link
+# gets the page sooner with BBR than with the kernel's default cubic. Kernels
+# without the module keep their default.
+configure_network_tuning() {
+  local conf=/etc/sysctl.d/60-bpanel-network.conf
+  local bbr=0
+  if grep -qw bbr /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null \
+     || modprobe tcp_bbr 2>/dev/null; then
+    bbr=1
+  fi
+  {
+    echo "# Managed by BPanel."
+    if [[ "$bbr" == "1" ]]; then
+      echo "net.core.default_qdisc = fq"
+      echo "net.ipv4.tcp_congestion_control = bbr"
+    fi
+    echo "net.core.somaxconn = 65535"
+    echo "net.core.netdev_max_backlog = 16384"
+    echo "net.ipv4.tcp_max_syn_backlog = 16384"
+    echo "net.ipv4.tcp_fastopen = 3"
+    echo "net.ipv4.tcp_slow_start_after_idle = 0"
+  } >"$conf"
+  if [[ "$bbr" == "1" ]]; then
+    echo tcp_bbr >/etc/modules-load.d/bpanel-bbr.conf
+  fi
+  sysctl -q -p "$conf" >/dev/null 2>&1 || true
 }
 
 write_modsec_base_conf() {
@@ -1605,6 +1653,8 @@ main() {
   log "Configuring Nginx FastCGI cache"
   configure_fastcgi_cache
   configure_proxy_upgrade_map
+  configure_nginx_performance
+  configure_network_tuning
 
   log "Installing Nginx ModSecurity WAF engine"
   if ! install_waf_engine; then

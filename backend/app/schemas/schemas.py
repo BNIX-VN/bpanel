@@ -223,6 +223,7 @@ class UserPackageCreate(ResourceLimitsIn):
     terminal_enabled: bool = False
     waf_enabled: bool = True
     wordpress_enabled: bool = True
+    open_basedir: bool = False
     node_apps_limit: int = Field(default=0, ge=0, le=100)
     node_app_memory_mb: int = Field(default=512, ge=64, le=16384)
     sftp_accounts_limit: int = Field(default=3, ge=0, le=100)
@@ -254,6 +255,7 @@ class UserPackageUpdate(ResourceLimitsIn):
     terminal_enabled: Optional[bool] = None
     waf_enabled: Optional[bool] = None
     wordpress_enabled: Optional[bool] = None
+    open_basedir: Optional[bool] = None
     node_apps_limit: Optional[int] = Field(default=None, ge=0, le=100)
     node_app_memory_mb: Optional[int] = Field(default=None, ge=64, le=16384)
     sftp_accounts_limit: Optional[int] = Field(default=None, ge=0, le=100)
@@ -287,6 +289,10 @@ class UserPackageOut(BaseModel):
     terminal_enabled: bool = False
     waf_enabled: bool = True
     wordpress_enabled: bool = True
+    open_basedir: bool = False
+    # Set by an update that moved open_basedir: the sites whose pool could not
+    # be rewritten, and kept their old value.
+    open_basedir_failed: list[str] = []
     node_apps_limit: int = 0
     sftp_accounts_limit: int = 3
     mail_accounts_limit: int = 10
@@ -886,6 +892,8 @@ class WebsiteOut(BaseModel):
     blocked_bots: str = ""
     # The website's Nginx page cache (services/page_cache.py).
     nginx_cache_enabled: bool = True
+    # open_basedir on the site's PHP-FPM pool (services/php_isolation.py).
+    open_basedir: bool = False
     # Whether this site opted into the OWASP Core Rule Set, and whether that
     # opt-in is actually being enforced (it is not, if CRS is off server-wide).
     #

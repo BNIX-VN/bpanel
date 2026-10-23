@@ -70,7 +70,8 @@ def test_panel_linux_users_are_sftp_chroot_only():
     assert "--shell /bin/bash" not in helper
     assert 'chmod 0711 "$HOME_ROOT"' in helper
     assert 'chown "root:$user" "$home_dir"' in helper
-    assert 'chmod 0751 "$home_dir"' in helper
+    assert 'chmod 0750 "$home_dir"' in helper
+    assert 'allow_panel_traverse "$home_dir"' in helper
     assert 'usermod -aG "$user" www-data' in helper
 
 
@@ -272,8 +273,10 @@ def test_php_has_a_temp_dir_of_its_own_inside_open_basedir():
     nothing else, so every temp file a site made failed (2026-10-02)."""
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     pool = helper.split('cat >"$pool_file" <<POOL', 1)[1].split("\nPOOL\n", 1)[0]
-    basedir = next(line for line in pool.splitlines() if line.startswith("php_admin_value[open_basedir]"))
-    assert "${tmp_dir}" in basedir.split(" = ", 1)[1].split(":")
+    # open_basedir is opt-in per site (test_php_isolation.py); when on, it
+    # names the temp dir.
+    basedir = helper.split('basedir_line="php_admin_value[open_basedir] = ', 1)[1].split('"', 1)[0]
+    assert "${tmp_dir}" in basedir.split(":")
     assert "php_admin_value[sys_temp_dir] = ${tmp_dir}" in pool
     assert "env[TMPDIR] = ${tmp_dir}" in pool
     assert 'local tmp_dir="${PHP_TMP_ROOT}/${user}"' in helper

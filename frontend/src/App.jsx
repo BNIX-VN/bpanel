@@ -1046,6 +1046,7 @@ function App() {
   const [siteTermOpen, setSiteTermOpen] = useState(false);
   // The Cache tab's switch while its change is on its way: where it is going.
   const [siteCacheGoing, setSiteCacheGoing] = useState(null);
+  const [siteBasedirGoing, setSiteBasedirGoing] = useState(null);
   // The firewall's one address form: whether it allows or blocks.
   const [firewallRuleAction, setFirewallRuleAction] = useState('allow');
   // The PHP page's extension filter.
@@ -2174,7 +2175,7 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), ...(limitsOn ? limitValues(newPackage) : {}) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), open_basedir: !!newPackage.open_basedir, ...(limitsOn ? limitValues(newPackage) : {}) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
@@ -2193,6 +2194,7 @@ function App() {
       mail_accounts_limit: item.mail_accounts_limit ?? 10,
       database_limit: item.database_limit ?? 5,
       terminal_enabled: !!item.terminal_enabled,
+      open_basedir: !!item.open_basedir,
       ...limitValues(item),
     });
   }
@@ -2216,10 +2218,11 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), open_basedir: !!editingPackageForm.open_basedir, ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
+      if (data.open_basedir_failed?.length) setError(t('Package updated, but open_basedir could not be changed on: {sites}', { sites: data.open_basedir_failed.join(', ') }));
       cancelEditingPackage();
       await loadPackages();
       await loadUsers();
@@ -8633,7 +8636,37 @@ function App() {
         {dirty && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => setWebsiteSettingsForm(base)}><RotateCcw size={14} aria-hidden="true"/> {t('Undo changes')}</button>}
         <button type="button" disabled={!ready || !dirty || !!loading} onClick={saveWebsiteSettings}><Save size={14} aria-hidden="true"/> {t('Save changes')}</button>
       </div>
+      {['wordpress', 'php'].includes(site.app_type || 'wordpress') && renderSitePhpFence(site)}
     </section>;
+  }
+
+  // open_basedir for the site's PHP-FPM pool (services/php_isolation.py): the
+  // host's to set, off by default, and what the package says when it has it.
+  function renderSitePhpFence(site) {
+    const on = !!site.open_basedir;
+    const shown = siteBasedirGoing ?? on;
+    return <div className="wsd-php-fence">
+      <h3>{t('PHP folder fence (open_basedir)')}</h3>
+      {canManageUsers
+        ? <Switch checked={shown} pending={siteBasedirGoing !== null} disabled={siteBasedirGoing !== null || !!loading}
+            onChange={next => setSiteOpenBasedir(site, next)} label={t('PHP folder fence (open_basedir)')}>
+            <span>{shown ? t("PHP may only open files in this site's folder") : t('Off: faster, customers stay apart by their own home folders')}</span>
+          </Switch>
+        : <p className="hint">{on ? t('On, set by your host.') : t('Off.')}</p>}
+      <p className="hint">{t('open_basedir makes PHP check every path it opens, so pages that are not cached run about a third slower. A package can turn it on for all of its sites.')}</p>
+    </div>;
+  }
+
+  async function setSiteOpenBasedir(site, on) {
+    setSiteBasedirGoing(on);
+    const data = await request(`/websites/${site.id}/open-basedir`, { method: 'PUT', body: JSON.stringify({ on }) },
+      on ? t('Turning open_basedir on...') : t('Turning open_basedir off...'));
+    setSiteBasedirGoing(null);
+    if (!data) return;
+    const merge = list => list.map(item => (item.id === data.id ? { ...item, ...data } : item));
+    setWebsites(merge);
+    setWebsiteList(merge);
+    setNotice(on ? t('open_basedir is on for {domain}.', { domain: site.domain }) : t('open_basedir is off for {domain}.', { domain: site.domain }));
   }
 
   // The website's Nginx page cache (services/page_cache.py), as OPanel's
@@ -12170,6 +12203,7 @@ function App() {
     if (limitsOn && item.cpu_percent) chips.push([Cpu, `CPU ${item.cpu_percent}%`]);
     if (limitsOn && item.memory_mb) chips.push([MemoryStick, `RAM ${formatMegabytes(item.memory_mb)}`]);
     if (item.terminal_enabled) chips.push([TerminalIcon, t('Terminal')]);
+    if (item.open_basedir) chips.push([Lock, 'open_basedir']);
     return <div className="plan-chips">{chips.map(([Icon, text]) => <span className="plan-chip" key={text}><Icon size={13}/>{text}</span>)}</div>;
   }
 
@@ -12188,6 +12222,8 @@ function App() {
         </div>
         {canGrantTerminal && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
         {canGrantTerminal && <p className="hint">{t("A shell as the account's own Linux user: it sees its own home and its own processes only, with no root access. Administrators and resellers open it by logging in as the customer.")}</p>}
+        <label className="check-line"><input type="checkbox" checked={!!form.open_basedir} onChange={e => setForm(prev => ({ ...prev, open_basedir: e.target.checked }))} /> {t("Fence PHP into each site's folder (open_basedir)")}</label>
+        <p className="hint">{t('Off is faster: open_basedir makes PHP check every path it opens, about a third of an uncached page. Customers stay apart either way. Turning it on or off here changes every site of the accounts on this package.')}</p>
       </fieldset>
       {limitsOn && renderLimitInputs(form, setForm)}
     </div>;

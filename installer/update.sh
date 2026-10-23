@@ -641,6 +641,54 @@ map $http_upgrade $connection_upgrade {
 NGINX
 }
 
+# Open-file and TLS-session caches for every site. The FastCGI cache makes a
+# cached page cost almost nothing; what is left is nginx opening the same
+# static files and redoing the same TLS handshakes for every request.
+configure_nginx_performance() {
+  cat >/etc/nginx/conf.d/00-bpanel-performance.conf <<'NGINX'
+# Managed by BPanel.
+open_file_cache max=20000 inactive=60s;
+open_file_cache_valid 60s;
+open_file_cache_min_uses 2;
+open_file_cache_errors on;
+ssl_session_cache shared:BPANEL_SSL:20m;
+ssl_session_timeout 1d;
+keepalive_requests 1000;
+NGINX
+  # Two nginx.conf defaults are far below what one VPS serves.
+  sed -i -E 's/^([[:space:]]*worker_connections)[[:space:]]+[0-9]+;/\1 4096;/' /etc/nginx/nginx.conf
+  grep -qE '^[[:space:]]*worker_rlimit_nofile' /etc/nginx/nginx.conf \
+    || sed -i -E 's/^(worker_processes[^;]*;)/\1\nworker_rlimit_nofile 16384;/' /etc/nginx/nginx.conf
+}
+
+# BBR congestion control and a larger accept queue: a phone on a lossy 4G link
+# gets the page sooner with BBR than with the kernel's default cubic. Kernels
+# without the module keep their default.
+configure_network_tuning() {
+  local conf=/etc/sysctl.d/60-bpanel-network.conf
+  local bbr=0
+  if grep -qw bbr /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null \
+     || modprobe tcp_bbr 2>/dev/null; then
+    bbr=1
+  fi
+  {
+    echo "# Managed by BPanel."
+    if [[ "$bbr" == "1" ]]; then
+      echo "net.core.default_qdisc = fq"
+      echo "net.ipv4.tcp_congestion_control = bbr"
+    fi
+    echo "net.core.somaxconn = 65535"
+    echo "net.core.netdev_max_backlog = 16384"
+    echo "net.ipv4.tcp_max_syn_backlog = 16384"
+    echo "net.ipv4.tcp_fastopen = 3"
+    echo "net.ipv4.tcp_slow_start_after_idle = 0"
+  } >"$conf"
+  if [[ "$bbr" == "1" ]]; then
+    echo tcp_bbr >/etc/modules-load.d/bpanel-bbr.conf
+  fi
+  sysctl -q -p "$conf" >/dev/null 2>&1 || true
+}
+
 migrate_nginx_wordpress_csp_worker_src() {
   python3 - <<'PY'
 from pathlib import Path
@@ -847,11 +895,17 @@ harden_existing_panel_users() {
     usermod --home "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user" 2>/dev/null || true
     mkdir -p "$home_dir"
     chown "root:$user" "$home_dir"
-    chmod 0751 "$home_dir"
+    # 0750: with open_basedir now opt-in, the home is the wall between
+    # customers. The panel keeps its traverse through an ACL, as the helper's
+    # allow_panel_traverse gives it.
+    chmod 0750 "$home_dir"
     chmod a-s "$home_dir" 2>/dev/null || true
     chmod -t "$home_dir" 2>/dev/null || true
     if command -v setfacl >/dev/null 2>&1; then
       setfacl -b -k "$home_dir" 2>/dev/null || true
+      setfacl -m u:bpanel:x "$home_dir" 2>/dev/null || chmod o+x "$home_dir"
+    else
+      chmod o+x "$home_dir"
     fi
     find "$home_dir" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null | while IFS= read -r -d '' site_dir; do
       [[ "$(basename "$site_dir")" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || continue
@@ -1503,6 +1557,8 @@ install_panel_runtime
 log "Configuring Nginx FastCGI cache"
 configure_fastcgi_cache
 configure_proxy_upgrade_map
+configure_nginx_performance
+configure_network_tuning
 ensure_terminal_tools
 venv_needs_recreate=false
 if [[ ! -x "$APP_DIR/backend/.venv/bin/uvicorn" ]]; then
