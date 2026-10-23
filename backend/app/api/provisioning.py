@@ -21,7 +21,7 @@ from app.schemas.schemas import (
     ProvisioningSuspendRequest,
     ProvisioningUsageOut,
 )
-from app.services import mariadb, nginx, site_users, storage_quota, wordpress
+from app.services import mariadb, nginx, php_isolation, site_users, storage_quota, wordpress
 from app.services.audit import log_action
 from app.services.provisioning import (
     account_to_dict,
@@ -255,6 +255,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
             pass
 
     db.commit()
+    php_isolation.sync_user(db, user)
     log_action(db, None, "provisioning_create", payload.external_id, detail=payload.domain or payload.username, request=request)
     if payload.domain:
         # DNS Manager: every domain on the server gets its DNS.
@@ -385,6 +386,7 @@ def change_package(external_id: str, payload: ProvisioningPackageChange, request
         setattr(account.user, field, getattr(package, field) or 0)
     account.last_action = "change_package"
     db.commit()
+    php_isolation.sync_user(db, account.user)
     log_action(db, None, "provisioning_change_package", external_id, detail=str(package.id), request=request)
     return {"ok": True, "package_id": package.id}
 

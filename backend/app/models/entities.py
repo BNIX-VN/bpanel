@@ -26,6 +26,9 @@ class UserPackage(Base):
     terminal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     waf_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     wordpress_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # open_basedir for every site of the accounts on this package
+    # (services/php_isolation.py); off, as each site is by default.
+    open_basedir: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     # 0 keeps app hosting off for every existing package until an admin raises
     # it, the same way terminal_enabled gates the terminal.
     node_apps_limit: Mapped[int] = mapped_column(Integer, default=0)
@@ -169,6 +172,9 @@ class Website(Base):
     # Nginx's FastCGI page cache for a WordPress site (the WordPress Manager's
     # Nginx cache tab): on, as every WordPress vhost had it, until turned off.
     nginx_cache_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
+    # The PHP-FPM pool's open_basedir (services/php_isolation.py): off unless
+    # the site or its package turns it on - it costs a third of PHP's speed.
+    open_basedir: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     # Set when app_type is "application": the installed app this domain serves.
     app_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("site_apps.id", ondelete="SET NULL"), nullable=True, index=True

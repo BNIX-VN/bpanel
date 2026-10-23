@@ -36,7 +36,7 @@ from app.schemas.schemas import (
 )
 from pydantic import BaseModel
 
-from app.services import addons, cloudflare, cron, dns, file_manager, mariadb, nginx, page_cache, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import addons, cloudflare, cron, dns, file_manager, mariadb, nginx, page_cache, php_isolation, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -592,6 +592,10 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     # DNS Manager (operator, 2026-09-29): the new website gets its zone. Quiet
     # when the addon is off, and never the reason a website is not created.
     dns.zone_for_new_website(db, website)
+    # Its package's open_basedir; off when it has none (services/php_isolation.py).
+    if php_isolation.default_for(db, db.get(User, owner_id)):
+        php_isolation.apply(db, [website], True)
+        db.refresh(website)
     website.wordpress_installed = install_wp
     return website
 
@@ -1179,6 +1183,31 @@ def set_website_nginx_cache(website_id: int, payload: WebsiteNginxCache, request
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.refresh(website)
     log_action(db, current_user.id, "website_nginx_cache", website.domain, "on" if payload.enabled else "off", request=request)
+    return website
+
+
+class WebsiteOpenBasedir(BaseModel):
+    on: bool
+
+
+@router.put("/{website_id}/open-basedir", response_model=WebsiteOut)
+def set_website_open_basedir(website_id: int, payload: WebsiteOpenBasedir, request: Request,
+                             db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Fence the site's PHP into its own folder with open_basedir, or not.
+
+    A host's setting, not the customer's: the administrator or the account's
+    reseller (as OPanel). Off by default - it costs a third of PHP's speed -
+    and moved with the package when the package's value changes
+    (services/php_isolation.py).
+    """
+    ensure_role(current_user.role, Role.reseller)
+    website = _get_authorized_website(db, website_id, current_user)
+    if (website.app_type or "wordpress") not in {"wordpress", "php"}:
+        raise HTTPException(status_code=400, detail="open_basedir is for PHP and WordPress sites")
+    if php_isolation.apply(db, [website], payload.on):
+        raise HTTPException(status_code=400, detail="Could not rewrite the site's PHP pool")
+    db.refresh(website)
+    log_action(db, current_user.id, "website_open_basedir", website.domain, "on" if payload.on else "off", request=request)
     return website
 
 

@@ -56,5 +56,9 @@
   .wsd-actions>button,.wsd-actions>.button-link{flex:1 1 calc(50% - 8px)}
   .wsd-savebar>button{flex:1}
 }
+/* The PHP tab's open_basedir switch, below the save bar. */
+.wsd-php-fence{display:grid;gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
+.wsd-php-fence>h3{margin:0;font-size:14px;font-weight:700;color:var(--text)}
+.wsd-php-fence .hint{margin:0}
 /* The Cache tab: its switch and Empty the cache on one row. */
 .wsd-cache-row{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:12px 0 8px}

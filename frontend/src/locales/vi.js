@@ -2671,6 +2671,19 @@ export const vi = {
   "Last service update failed": "Lần cập nhật dịch vụ gần nhất bị lỗi",
   "Service update log": "Nhật ký cập nhật dịch vụ",
   "Creating website...": "Đang tạo website...",
+  "PHP folder fence (open_basedir)": "Khoá thư mục cho PHP (open_basedir)",
+  "Fence PHP into each site's folder (open_basedir)": "Khoá PHP trong thư mục của từng site (open_basedir)",
+  "Off is faster: open_basedir makes PHP check every path it opens, about a third of an uncached page. Customers stay apart either way. Turning it on or off here changes every site of the accounts on this package.": "Tắt thì nhanh hơn: open_basedir bắt PHP kiểm tra mọi đường dẫn nó mở, chậm khoảng 1/3 với trang chưa có cache. Dù bật hay tắt, các khách hàng vẫn tách biệt nhau. Bật hoặc tắt ở đây sẽ áp dụng cho mọi site của các tài khoản dùng gói này.",
+  "PHP may only open files in this site's folder": "PHP chỉ được mở tệp trong thư mục của site này",
+  "Off: faster, customers stay apart by their own home folders": "Tắt: nhanh hơn, các khách hàng vẫn tách biệt nhờ thư mục home riêng",
+  "On, set by your host.": "Bật, do nhà cung cấp hosting đặt.",
+  "Off.": "Tắt.",
+  "open_basedir makes PHP check every path it opens, so pages that are not cached run about a third slower. A package can turn it on for all of its sites.": "open_basedir bắt PHP kiểm tra mọi đường dẫn nó mở nên trang chưa có cache chạy chậm hơn khoảng 1/3. Gói hosting có thể bật nó cho mọi site của gói.",
+  "Turning open_basedir on...": "Đang bật open_basedir...",
+  "Turning open_basedir off...": "Đang tắt open_basedir...",
+  "open_basedir is on for {domain}.": "Đã bật open_basedir cho {domain}.",
+  "open_basedir is off for {domain}.": "Đã tắt open_basedir cho {domain}.",
+  "Package updated, but open_basedir could not be changed on: {sites}": "Đã cập nhật gói, nhưng không đổi được open_basedir trên: {sites}",
 };
 
 /* Said in English by the people who run these servers. Translating them

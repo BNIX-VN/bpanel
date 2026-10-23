@@ -134,8 +134,8 @@ server {
         # and font was fetched again on every page view. WordPress fingerprints
         # its CSS and JS with ?ver=, and writes a new filename rather than
         # overwriting an upload, so a long lifetime here is safe: changing a
-        # file changes its URL.
-        expires 30d;
+        # file changes its URL. A year, which is what PageSpeed asks for.
+        expires 365d;
         access_log off;
     }
 }
