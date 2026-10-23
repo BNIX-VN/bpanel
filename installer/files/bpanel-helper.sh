@@ -26,6 +26,8 @@ NGINX_CONF_DIR="/etc/nginx/conf.d"
 PHP_CONF_DIRS=(/etc/php/{5.6,7.4,8.0,8.1,8.2,8.3,8.4,8.5}/fpm/conf.d)
 # sys_temp_dir of each site user's PHP-FPM pools: ${PHP_TMP_ROOT}/<user>.
 PHP_TMP_ROOT="/var/lib/php/tmp"
+# WP-CLI's OPcache file cache, one folder per site user (wp-site).
+WPCLI_OPCACHE_ROOT="/var/lib/php/wpcli-opcache"
 # One empty file per site whose PHP-FPM pool runs under open_basedir:
 # ${PHP_BASEDIR_ROOT}/<user>-<site hash>. Root's, so every rewrite of the pool
 # (PHP version change, update, cron) keeps what the panel last set.
@@ -379,13 +381,26 @@ run_os_update() {
     return 0
   fi
   if command -v systemd-run >/dev/null 2>&1; then
+    # The Updates page follows it (service-packages prints its state and log):
+    # it used to start and say nothing more, so nobody could tell whether the
+    # packages were updated (operator, 2026-10-24, as OPanel 1.36.2). The
+    # journal outlives the unit, so the result is still there once collected.
+    # shellcheck disable=SC2016 # expanded by the unit's bash, not here
     systemd-run \
       --unit="$unit" \
       --collect \
       --description="Update OS packages for BPanel" \
-      /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update --allow-releaseinfo-change; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y'
+      /bin/bash -c '
+export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_SUSPEND=1
+echo "bpanel-os-update: started $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+status=0
+apt-get -o DPkg::Lock::Timeout=600 update --allow-releaseinfo-change || status=$?
+if [ "$status" -eq 0 ]; then
+  apt-get -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y || status=$?
+fi
+echo "bpanel-os-update: finished (exit $status)"
+exit "$status"'
     echo "OS update started: ${unit}.service"
-    echo "Check progress: journalctl -u ${unit}.service -f"
     return 0
   fi
   nohup /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update --allow-releaseinfo-change; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y' \
@@ -425,11 +440,29 @@ service_packages_status() {
   echo "== installed"
   COLUMNS=250 dpkg-query -l "${SERVICE_PACKAGE_GLOBS[@]}" 2>/dev/null | awk '$1 == "ii" { print $2, $3 }' || true
   echo "== upgradable"
-  apt list --upgradable 2>/dev/null | awk -F'[/ ]' '/upgradable from/ { print $1, $3 }' || true
+  # name, new version, installed version ("[upgradable from: X]").
+  apt list --upgradable 2>/dev/null | awk -F'[/ ]' '/upgradable from/ { from = $NF; sub(/\]$/, "", from); print $1, $3, from }' || true
   echo "== state"
   systemctl is-active bpanel-service-update.service 2>/dev/null || true
   echo "== log"
   journalctl -u bpanel-service-update.service -n 60 --no-pager --output=cat 2>/dev/null \
+    | grep -v "Failed to open /run/systemd/transient" || true
+  # What "Update OS now" (apt-get upgrade) would install, simulated. apt list
+  # --upgradable also names the packages Ubuntu is phasing in or holding back,
+  # which upgrade leaves alone: counted, they stayed "available" after an
+  # update that had done all it could (cloud-init on OPanel's .41, 2026-10-24).
+  echo "== os-plan"
+  apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null | awk '
+    /^Inst / { print "install", $2; next }
+    /deferred due to phasing:/ { mode = "phasing"; next }
+    /have been kept back:/ { mode = "kept-back"; next }
+    /^[^ ]/ { mode = "" }
+    mode != "" && /^ / { for (i = 1; i <= NF; i++) print mode, $i }' || true
+  # "Update OS now": every other package, as its own unit.
+  echo "== os-state"
+  systemctl is-active bpanel-os-update.service 2>/dev/null || true
+  echo "== os-log"
+  journalctl -u bpanel-os-update.service -n 60 --no-pager --output=cat 2>/dev/null \
     | grep -v "Failed to open /run/systemd/transient" || true
 }
 
@@ -7281,6 +7314,7 @@ delete_panel_user_runtime() {
   rm -rf "/var/lib/php/sessions/$user" 2>/dev/null || true
   rm -rf "/var/lib/php/uploads/$user" 2>/dev/null || true
   rm -rf "${PHP_TMP_ROOT:?}/$user" 2>/dev/null || true
+  rm -rf "${WPCLI_OPCACHE_ROOT:?}/$user" 2>/dev/null || true
 }
 
 ensure_sftp_site_group() {
@@ -10214,18 +10248,32 @@ PY
       # The home itself is root's (the SFTP jail): the account cannot make a
       # folder at its top, so the points' folder is made for it, as its own.
       install -d -o "$user" -g "$user" -m 0700 "$HOME_ROOT/$user/.bpanel-wp-points"
-      exec runuser -u "$user" -- bash -c '
+      # zstd on every core when the box has it: 1.9 s and 88 MB for a site
+      # gzip -6 took 27.5 s and 96 MB over (OPanel's .41, 2026-10-23).
+      # Otherwise gzip at its fastest level. Niced: a restore point must not
+      # slow the sites.
+      exec runuser -u "$user" -- nice -n 10 bash -c '
         set -euo pipefail
         umask 077
         mkdir -p "$1"
-        tar -czf "$1/files.tar.gz" -C "$2" --exclude=./wp-content/uploads --exclude=./wp-content/cache \
-          --exclude=./wp-content/upgrade --exclude=./wp-content/updraft --exclude=./wp-content/ai1wm-backups .
+        excludes=(--exclude=./wp-content/uploads --exclude=./wp-content/cache --exclude=./wp-content/upgrade
+                  --exclude=./wp-content/updraft --exclude=./wp-content/ai1wm-backups)
+        if command -v zstd >/dev/null 2>&1; then
+          tar -cf - -C "$2" "${excludes[@]}" . | zstd -3 -T0 -q -o "$1/files.tar.zst"
+        else
+          tar -cf - -C "$2" "${excludes[@]}" . | gzip -1 >"$1/files.tar.gz"
+        fi
         du -sb "$1" | cut -f1
       ' _ "$point" "$target"
     fi
-    [[ -f "$point/files.tar.gz" ]] || deny "restore point has no files: $point"
     # Put back over what is there: a file added since the point stays, every
-    # file the point had comes back as it was.
+    # file the point had comes back as it was. Points made before 2026-10-24
+    # are gzip.
+    if [[ -f "$point/files.tar.zst" ]]; then
+      command -v zstd >/dev/null 2>&1 || deny "zstd is needed to put this restore point back"
+      exec runuser -u "$user" -- tar -I zstd -xf "$point/files.tar.zst" -C "$target"
+    fi
+    [[ -f "$point/files.tar.gz" ]] || deny "restore point has no files: $point"
     exec runuser -u "$user" -- tar -xzf "$point/files.tar.gz" -C "$target"
     ;;
 
@@ -10337,9 +10385,23 @@ PY
     # terminal-exec has always done this (cd "$target"); wp-site never did,
     # and it did not matter until the confinement above made the cwd visible.
     cd "$HOME_ROOT/$user" 2>/dev/null || deny "no home for $user"
+    # Every WP-CLI command is a new PHP process, which compiled WP-CLI and
+    # WordPress from scratch each time. An OPcache file cache of the user's own
+    # (root's parent folder, theirs inside, 0700: compiled code is code run as
+    # them) took `wp eval` from 1.48 s to 1.05 s on .88. Where the panel's
+    # OPcache switch has this PHP's OPcache off, opcache.enable stays off and
+    # this does nothing - it is not turned on behind the switch.
+    wp_php_args=(-d pcre.jit=0 -d "open_basedir=$wp_site_basedir")
+    wp_cache="${WPCLI_OPCACHE_ROOT}/${user}"
+    install -d -o root -g root -m 0751 "$WPCLI_OPCACHE_ROOT"
+    if [[ ! -L "$wp_cache" ]]; then
+      install -d -o "$user" -g "$user" -m 0700 "$wp_cache"
+      wp_php_args+=(-d opcache.enable_cli=1 -d "opcache.file_cache=${wp_cache}" -d opcache.file_cache_only=1
+                    -d opcache.file_cache_consistency_checks=1 -d opcache.validate_timestamps=1)
+    fi
     exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" \
-      WP_CLI_PHP_ARGS="-d pcre.jit=0 -d open_basedir=$wp_site_basedir" \
-      "$wp_php" -d pcre.jit=0 -d open_basedir="$wp_site_basedir" /usr/local/bin/wp "$@"
+      WP_CLI_PHP_ARGS="${wp_php_args[*]}" \
+      "$wp_php" "${wp_php_args[@]}" /usr/local/bin/wp "$@"
     ;;
 
   # ---- crontab managed for www-data ------------------------------------

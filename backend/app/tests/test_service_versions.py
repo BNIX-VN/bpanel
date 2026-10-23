@@ -137,3 +137,53 @@ def test_helper_checks_every_name_before_root_runs_apt():
     assert "--only-upgrade" in body, "never installs a package that is not there"
     assert body.index("deny \"a service update is already running\"") < body.index("systemd-run")
     assert "systemctl start" in body, "a daemon the upgrade left stopped is started again"
+
+
+# --- System packages: what "Update OS now" upgrades (2026-10-24, as OPanel 1.36.2) -------
+# "Update OS now" showed one notice that went away, and nothing said whether
+# the packages were updated; and apt's list names packages Ubuntu is phasing
+# in, which an upgrade leaves alone.
+
+OS_LISTING = LISTING.replace("tmux 3.4-1ubuntu0.2\n", "tmux 3.4-1ubuntu0.2 3.4-1ubuntu0.1\nlibc6 2.39-0ubuntu8.6 2.39-0ubuntu8.5\n") + """== os-plan
+install nginx
+install nginx-common
+install php8.4-fpm
+install php8.4-mysql
+install containerd.io
+install libc6
+phasing tmux
+== os-state
+inactive
+== os-log
+bpanel-os-update: started 2026-10-24T01:00:00Z
+Setting up libc6 (2.39-0ubuntu8.6) ...
+bpanel-os-update: finished (exit 0)
+"""
+
+
+def test_the_system_packages_are_what_an_upgrade_installs(monkeypatch):
+    _fake(monkeypatch, OS_LISTING)
+    system = service_versions.status()["system"]
+    assert system["pending"] == 6
+    assert system["others"] == [{"name": "libc6", "to": "2.39-0ubuntu8.6", "from": "2.39-0ubuntu8.5"}]
+    assert system["deferred"] == [{"name": "tmux", "to": "3.4-1ubuntu0.2", "from": "3.4-1ubuntu0.1", "reason": "phasing"}]
+
+
+def test_the_os_update_is_followed_to_its_end(monkeypatch):
+    _fake(monkeypatch, OS_LISTING)
+    system = service_versions.status()["system"]
+    assert system["running"] is False and system["last_result"] == {"ok": True, "exit_code": 0}
+    assert "Setting up libc6 (2.39-0ubuntu8.6) ..." in system["log"]
+    _fake(monkeypatch, OS_LISTING.replace("== os-state\ninactive", "== os-state\nactive").replace("bpanel-os-update: finished (exit 0)\n", ""))
+    system = service_versions.status()["system"]
+    assert system["running"] is True and system["last_result"] is None
+    _fake(monkeypatch, OS_LISTING.replace("finished (exit 0)", "finished (exit 100)"))
+    assert service_versions.status()["system"]["last_result"] == {"ok": False, "exit_code": 100}
+
+
+def test_the_helper_reports_the_os_update_and_what_an_upgrade_would_do():
+    run = HELPER.split("\nrun_os_update() {\n", 1)[1].split("\n}\n", 1)[0]
+    assert 'echo "bpanel-os-update: finished (exit $status)"' in run
+    status = HELPER.split("\nservice_packages_status() {\n", 1)[1].split("\n}\n", 1)[0]
+    assert "apt-get -s -o Debug::NoLocking=1 upgrade" in status
+    assert "systemctl is-active bpanel-os-update.service" in status and "journalctl -u bpanel-os-update.service" in status

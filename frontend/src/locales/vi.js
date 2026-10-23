@@ -2684,6 +2684,21 @@ export const vi = {
   "open_basedir is on for {domain}.": "Đã bật open_basedir cho {domain}.",
   "open_basedir is off for {domain}.": "Đã tắt open_basedir cho {domain}.",
   "Package updated, but open_basedir could not be changed on: {sites}": "Đã cập nhật gói, nhưng không đổi được open_basedir trên: {sites}",
+  "System packages": "Gói hệ thống",
+  "{0} package(s) can be updated, the services above included.": "Có {0} gói có thể cập nhật, tính cả các dịch vụ ở trên.",
+  "Every system package is up to date.": "Mọi gói hệ thống đều đã mới nhất.",
+  "{0} other package(s)": "{0} gói khác",
+  "Update every system package now (apt-get upgrade)?": "Cập nhật mọi gói hệ thống ngay (apt-get upgrade)?",
+  "Starting the system update...": "Đang bắt đầu cập nhật hệ thống...",
+  "System packages updated.": "Đã cập nhật xong các gói hệ thống.",
+  "The system update failed. See the log below.": "Cập nhật hệ thống bị lỗi. Xem log bên dưới.",
+  "The last system update finished.": "Lần cập nhật hệ thống gần nhất đã xong.",
+  "The last system update failed. See the log.": "Lần cập nhật hệ thống gần nhất bị lỗi. Xem log.",
+  "System update log": "Log cập nhật hệ thống",
+  "{0} package(s) Ubuntu installs later": "{0} gói Ubuntu sẽ cài sau",
+  "Ubuntu rolls some updates out to servers a few at a time (phased updates); they install on their own within days. A kept-back package needs others added or removed: apt full-upgrade over SSH.": "Ubuntu phát hành một số bản cập nhật dần dần cho từng nhóm máy (phased update); chúng tự cài trong vài ngày. Gói bị giữ lại (kept back) cần thêm hoặc gỡ gói khác: chạy apt full-upgrade qua SSH.",
+  "Phased": "Đang phát hành dần",
+  "Kept back": "Bị giữ lại",
 };
 
 /* Said in English by the people who run these servers. Translating them

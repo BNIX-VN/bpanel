@@ -18,6 +18,8 @@ from fnmatch import fnmatch
 from app.services.shell import shell
 
 UNIT_LOG_MARK = "bpanel-service-update: finished (exit "
+OS_LOG_MARK = "bpanel-os-update: finished (exit "
+RUNNING_STATES = {"active", "activating", "deactivating", "reloading"}
 
 # key, label, the package whose version stands for the service, its packages.
 # A service shows only when its main package is installed, so the Email, DNS
@@ -72,16 +74,35 @@ def _parse(stdout: str) -> dict:
         if len(parts) >= 2:
             installed[parts[0].split(":", 1)[0]] = parts[1]
     upgradable: dict[str, str] = {}
+    upgradable_from: dict[str, str] = {}
     for line in sections.get("upgradable", []):
         parts = line.split()
         if len(parts) >= 2:
             upgradable[parts[0].split(":", 1)[0]] = parts[1]
+            if len(parts) >= 3:
+                upgradable_from[parts[0].split(":", 1)[0]] = parts[2]
     state = next((line.strip() for line in sections.get("state", []) if line.strip()), "inactive")
+    os_state = next((line.strip() for line in sections.get("os-state", []) if line.strip()), "inactive")
+    # apt-get upgrade, simulated: what it installs, and what Ubuntu defers.
+    os_install: list[str] = []
+    os_deferred: dict[str, str] = {}
+    for line in sections.get("os-plan", []):
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == "install":
+            os_install.append(parts[1].split(":", 1)[0])
+        elif len(parts) == 2 and parts[0] in {"phasing", "kept-back"}:
+            os_deferred[parts[1].split(":", 1)[0]] = parts[0]
     return {
         "installed": installed,
         "upgradable": upgradable,
-        "running": state in {"active", "activating", "deactivating", "reloading"},
+        "upgradable_from": upgradable_from,
+        "running": state in RUNNING_STATES,
         "log": [line for line in sections.get("log", []) if line.strip()],
+        "os_running": os_state in RUNNING_STATES,
+        "os_plan": "os-plan" in sections,
+        "os_install": os_install,
+        "os_deferred": os_deferred,
+        "os_log": [line for line in sections.get("os-log", []) if line.strip()],
         "check_error": "\n".join(sections.get("warning", [])).strip(),
     }
 
@@ -101,10 +122,10 @@ def _services(installed: dict[str, str]) -> list[tuple[str, str, str, tuple[str,
     return [service for service in found if service[2] in installed]
 
 
-def _last_result(log: list[str]) -> dict | None:
+def _last_result(log: list[str], mark: str = UNIT_LOG_MARK) -> dict | None:
     for line in reversed(log):
-        if UNIT_LOG_MARK in line:
-            code = line.split(UNIT_LOG_MARK, 1)[1].split(")", 1)[0]
+        if mark in line:
+            code = line.split(mark, 1)[1].split(")", 1)[0]
             return {"ok": code == "0", "exit_code": int(code) if code.isdigit() else None}
     return None
 
@@ -147,6 +168,31 @@ def status(refresh: bool = False) -> dict:
         "last_result": _last_result(parsed["log"]),
         "check_error": parsed["check_error"],
         "pending": sum(len(service["updates"]) for service in services),
+        # "Update OS now": what apt-get upgrade installs, the services'
+        # packages too; `others` are the ones no service row shows.
+        "system": _system(parsed, services, installed, upgradable),
+    }
+
+
+def _system(parsed: dict, services: list[dict], installed: dict[str, str], upgradable: dict[str, str]) -> dict:
+    in_services = {item["name"] for service in services for item in service["updates"]}
+    # An older helper with no plan: all of apt's list.
+    will_install = parsed["os_install"] if parsed["os_plan"] else sorted(upgradable)
+
+    def version_from(name: str) -> str:
+        return installed.get(name) or parsed["upgradable_from"].get(name, "")
+
+    return {
+        "pending": len(will_install),
+        "others": [{"name": name, "to": upgradable.get(name, ""), "from": version_from(name)}
+                   for name in sorted(set(will_install)) if name not in in_services],
+        # Left for later by Ubuntu: a phased update reaches every machine over
+        # a few days, a kept-back one needs packages added or removed.
+        "deferred": [{"name": name, "to": upgradable.get(name, ""), "from": version_from(name), "reason": reason}
+                     for name, reason in sorted(parsed["os_deferred"].items())],
+        "running": parsed["os_running"],
+        "log": parsed["os_log"][-40:],
+        "last_result": _last_result(parsed["os_log"], OS_LOG_MARK),
     }
 
 
