@@ -1,8 +1,10 @@
 # BPanel
 
-Bảng điều khiển hosting gọn nhẹ cho **Ubuntu 24.04**. Quản lý website WordPress
-và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện
-web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
+Bảng điều khiển hosting nhanh, gọn cho **Ubuntu 24.04**. Quản lý website WordPress
+và PHP, email, DNS, database, SSL, backup, tường lửa, WAF, khách hàng và đại lý
+trong một giao diện web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
+
+**Trang giới thiệu:** <https://bnix-vn.github.io/bpanel/>
 
 **Demo:** <https://bpanel.bnix.io.vn:2222> — chỉ xem, mọi thay đổi bị từ chối. Trang
 đăng nhập có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng.
@@ -31,7 +33,7 @@ web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
 
 ## Ảnh chụp màn hình
 
-Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kích thước đầy đủ.
+Chụp từ bản demo 1.8 (giao diện tiếng Anh). Bấm vào ảnh để xem kích thước đầy đủ.
 
 **Đăng nhập và tổng quan**
 
@@ -44,11 +46,19 @@ Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kí
 
 | | |
 |---|---|
-| <a href="docs/screenshots/03-websites.png"><img src="docs/screenshots/03-websites.png" alt="Danh sách website"></a><br>Danh sách website | <a href="docs/screenshots/04-website-settings.png"><img src="docs/screenshots/04-website-settings.png" alt="Cấu hình website"></a><br>Cấu hình website |
-| <a href="docs/screenshots/04b-website-terminal.png"><img src="docs/screenshots/04b-website-terminal.png" alt="Terminal của website"></a><br>Terminal của website | <a href="docs/screenshots/09-file-manager.png"><img src="docs/screenshots/09-file-manager.png" alt="Quản lý file"></a><br>Quản lý file |
+| <a href="docs/screenshots/03-websites.png"><img src="docs/screenshots/03-websites.png" alt="Danh sách website"></a><br>Danh sách website | <a href="docs/screenshots/04-website-settings.png"><img src="docs/screenshots/04-website-settings.png" alt="Trang của một website"></a><br>Trang của một website |
+| <a href="docs/screenshots/04c-website-php.png"><img src="docs/screenshots/04c-website-php.png" alt="PHP và open_basedir của website"></a><br>PHP và open_basedir của website | <a href="docs/screenshots/04d-website-cache.png"><img src="docs/screenshots/04d-website-cache.png" alt="Cache Nginx của website"></a><br>Cache Nginx của website |
+| <a href="docs/screenshots/09-file-manager.png"><img src="docs/screenshots/09-file-manager.png" alt="Quản lý file"></a><br>Quản lý file | <a href="docs/screenshots/35-git.png"><img src="docs/screenshots/35-git.png" alt="Git (addon)"></a><br>Git (addon) |
 | <a href="docs/screenshots/05-applications.png"><img src="docs/screenshots/05-applications.png" alt="Ứng dụng Node.js / Docker (addon)"></a><br>Ứng dụng Node.js / Docker (addon) | <a href="docs/screenshots/06-ssl.png"><img src="docs/screenshots/06-ssl.png" alt="SSL"></a><br>SSL |
 | <a href="docs/screenshots/07-databases.png"><img src="docs/screenshots/07-databases.png" alt="Database"></a><br>Database | <a href="docs/screenshots/08-cron.png"><img src="docs/screenshots/08-cron.png" alt="Cron"></a><br>Cron |
-| <a href="docs/screenshots/10-sftp.png"><img src="docs/screenshots/10-sftp.png" alt="Tài khoản SFTP"></a><br>Tài khoản SFTP |  |
+| <a href="docs/screenshots/10-sftp.png"><img src="docs/screenshots/10-sftp.png" alt="Tài khoản SFTP"></a><br>Tài khoản SFTP | |
+
+**WordPress, email và DNS**
+
+| | |
+|---|---|
+| <a href="docs/screenshots/32-wordpress-manager.png"><img src="docs/screenshots/32-wordpress-manager.png" alt="WordPress Manager (addon)"></a><br>WordPress Manager (addon) | <a href="docs/screenshots/33-email.png"><img src="docs/screenshots/33-email.png" alt="Email (addon)"></a><br>Email (addon) |
+| <a href="docs/screenshots/34-dns.png"><img src="docs/screenshots/34-dns.png" alt="Quản lý DNS (addon)"></a><br>Quản lý DNS (addon) | |
 
 **Backup và khôi phục**
 
@@ -62,6 +72,7 @@ Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kí
 | | |
 |---|---|
 | <a href="docs/screenshots/15-panel-users.png"><img src="docs/screenshots/15-panel-users.png" alt="Người dùng panel"></a><br>Người dùng panel | <a href="docs/screenshots/16-packages.png"><img src="docs/screenshots/16-packages.png" alt="Gói dịch vụ"></a><br>Gói dịch vụ |
+| <a href="docs/screenshots/31-resource-usage.png"><img src="docs/screenshots/31-resource-usage.png" alt="Mức dùng tài nguyên của khách (addon)"></a><br>Mức dùng tài nguyên của khách (addon) | |
 
 **Bảo mật**
 
@@ -69,16 +80,16 @@ Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kí
 |---|---|
 | <a href="docs/screenshots/19-firewall.png"><img src="docs/screenshots/19-firewall.png" alt="Tường lửa và Fail2ban"></a><br>Tường lửa và Fail2ban | <a href="docs/screenshots/20-waf.png"><img src="docs/screenshots/20-waf.png" alt="WAF và OWASP CRS"></a><br>WAF và OWASP CRS |
 | <a href="docs/screenshots/21-waf-site.png"><img src="docs/screenshots/21-waf-site.png" alt="WAF của một website"></a><br>WAF của một website | <a href="docs/screenshots/22-access-logs.png"><img src="docs/screenshots/22-access-logs.png" alt="Nhật ký truy cập"></a><br>Nhật ký truy cập |
-| <a href="docs/screenshots/23-security.png"><img src="docs/screenshots/23-security.png" alt="Passkey và đăng nhập hai lớp"></a><br>Passkey và đăng nhập hai lớp |  |
+| <a href="docs/screenshots/36-malware.png"><img src="docs/screenshots/36-malware.png" alt="Quét mã độc (addon)"></a><br>Quét mã độc (addon) | <a href="docs/screenshots/23-security.png"><img src="docs/screenshots/23-security.png" alt="Passkey và đăng nhập hai lớp"></a><br>Passkey và đăng nhập hai lớp |
 
 **Hệ thống**
 
 | | |
 |---|---|
-| <a href="docs/screenshots/18-settings.png"><img src="docs/screenshots/18-settings.png" alt="Cài đặt"></a><br>Cài đặt | <a href="docs/screenshots/26-panel-settings.png"><img src="docs/screenshots/26-panel-settings.png" alt="Cài đặt panel"></a><br>Cài đặt panel |
-| <a href="docs/screenshots/24-services.png"><img src="docs/screenshots/24-services.png" alt="Dịch vụ"></a><br>Dịch vụ | <a href="docs/screenshots/25-php.png"><img src="docs/screenshots/25-php.png" alt="Cấu hình PHP và extension"></a><br>Cấu hình PHP và extension |
-| <a href="docs/screenshots/27-updates.png"><img src="docs/screenshots/27-updates.png" alt="Cập nhật"></a><br>Cập nhật | <a href="docs/screenshots/28-addons.png"><img src="docs/screenshots/28-addons.png" alt="Tiện ích"></a><br>Tiện ích |
-| <a href="docs/screenshots/17-notifications.png"><img src="docs/screenshots/17-notifications.png" alt="Thông báo (addon)"></a><br>Thông báo (addon) | <a href="docs/screenshots/31-resource-usage.png"><img src="docs/screenshots/31-resource-usage.png" alt="Mức dùng tài nguyên (addon)"></a><br>Mức dùng tài nguyên (addon) |
+| <a href="docs/screenshots/38-ram-usage.png"><img src="docs/screenshots/38-ram-usage.png" alt="RAM của server"></a><br>RAM của server | <a href="docs/screenshots/39-traffic.png"><img src="docs/screenshots/39-traffic.png" alt="Lưu lượng mạng"></a><br>Lưu lượng mạng |
+| <a href="docs/screenshots/25-php.png"><img src="docs/screenshots/25-php.png" alt="Cấu hình PHP và extension"></a><br>Cấu hình PHP và extension | <a href="docs/screenshots/27-updates.png"><img src="docs/screenshots/27-updates.png" alt="Cập nhật panel và dịch vụ"></a><br>Cập nhật panel và dịch vụ |
+| <a href="docs/screenshots/26-panel-settings.png"><img src="docs/screenshots/26-panel-settings.png" alt="Cài đặt panel"></a><br>Cài đặt panel | <a href="docs/screenshots/28-addons.png"><img src="docs/screenshots/28-addons.png" alt="Tiện ích"></a><br>Tiện ích |
+| <a href="docs/screenshots/17-notifications.png"><img src="docs/screenshots/17-notifications.png" alt="Thông báo (addon)"></a><br>Thông báo (addon) | <a href="docs/screenshots/37-ai-assistants.png"><img src="docs/screenshots/37-ai-assistants.png" alt="Trợ lý AI (MCP, addon)"></a><br>Trợ lý AI (MCP, addon) |
 
 ## Tính năng
 
@@ -93,7 +104,9 @@ Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kí
 - SSL Let's Encrypt cho website và cho chính panel.
 - Quản lý file: tải lên, sửa, nén, giải nén, đổi quyền; quyền bạn đặt được
   giữ nguyên, panel không tự đặt lại.
-- Cron, tài khoản SFTP giới hạn trong một thư mục, terminal cho từng website.
+- Cron, tài khoản SFTP giới hạn trong một thư mục, terminal trên trình duyệt.
+- Cache trang Nginx cho WordPress, bật tắt theo website; `open_basedir` bật tắt
+  theo website hoặc bật sẵn cho cả gói.
 
 **Backup và khôi phục**
 
@@ -133,6 +146,8 @@ tính năng, không xoá dữ liệu nó đã tạo.
 
 | Tiện ích | Chức năng |
 |---|---|
+| **WordPress Manager** | Mọi WordPress trên server trong một bảng: cập nhật core, plugin, theme hàng loạt, đăng nhập wp-admin một chạm, điểm khôi phục trước khi cập nhật, staging và đẩy lên site thật, kiểm tra bảo mật, cache Nginx theo site. |
+| **Git** | Repo Git trong home của khách: clone từ GitHub, GitLab, Bitbucket, deploy bằng một nút hoặc webhook, chạy lệnh sau khi kéo code. |
 | **Application** | Chạy ứng dụng Node.js, container và Docker Compose sau Nginx. |
 | **Fail2ban** | Chặn địa chỉ dò mật khẩu SSH. |
 | **Quét mã độc** | LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực (Lớp 2), quét file tải lên. |
@@ -381,8 +396,10 @@ bpanel-helper  (root, chỉ chạy các thao tác nằm trong danh sách cho ph�
 
 - Helper kiểm tra tên miền, cổng, IP và đường dẫn trước khi gọi chương trình
   thật; mọi lệnh ngoài danh sách đều bị từ chối.
-- Website được tách nhau bằng user Linux riêng, pool PHP-FPM riêng với
-  `open_basedir`, SFTP chroot và shell `nologin`.
+- Mỗi khách một user Linux; `/home/<user>` là `0750`, khách khác không đi vào
+  được (panel chỉ được đi qua bằng ACL). Mỗi website một pool PHP-FPM riêng;
+  `open_basedir` là tuỳ chọn theo website hoặc theo gói, vì nó làm PHP chậm
+  khoảng 1/3. Thêm SFTP chroot và shell `nologin`.
 - Terminal của website chạy bằng user của website, chỉ cho các lệnh trong danh
   sách (PHP, Composer, WP-CLI, Node, npm, git và các công cụ file thường dùng),
   kiểm tra đường dẫn và giới hạn thời gian.

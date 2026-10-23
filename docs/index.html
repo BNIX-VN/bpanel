@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BPanel — Panel hosting gọn nhẹ cho Nginx và OpenLiteSpeed</title>
-<meta name="description" content="Panel hosting của BNIX cho Ubuntu 24.04, chạy trên Nginx (BPanel) hoặc OpenLiteSpeed (OPanel): website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt. Mã nguồn mở, cài bằng một lệnh.">
-<meta property="og:title" content="BPanel — Panel hosting gọn nhẹ cho Nginx và OpenLiteSpeed">
-<meta property="og:description" content="Website, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt, trên Nginx hoặc OpenLiteSpeed. Cài bằng một lệnh.">
+<title>BPanel — Panel hosting nhanh, gọn cho Nginx và OpenLiteSpeed</title>
+<meta name="description" content="Panel hosting mã nguồn mở của BNIX cho Ubuntu 24.04, trên Nginx (BPanel) hoặc OpenLiteSpeed (OPanel): WordPress, email, DNS, database, SSL, backup, tường lửa, WAF, khách hàng và đại lý trong một giao diện web tiếng Việt. Cài bằng một lệnh.">
+<meta property="og:title" content="BPanel — Panel hosting nhanh, gọn cho Nginx và OpenLiteSpeed">
+<meta property="og:description" content="WordPress, email, DNS, backup, tường lửa, WAF, khách hàng và đại lý trong một giao diện web tiếng Việt, trên Nginx hoặc OpenLiteSpeed. Cài bằng một lệnh.">
 <meta property="og:image" content="screenshots/02-dashboard.png">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme: light)">
@@ -315,6 +315,27 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
   .gallery{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .thumb span{padding:8px 9px;font-size:12.5px}
 }
+
+/* --- speed ---------------------------------------------------------------- */
+.features.three{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
+.eyebrow a{color:inherit;text-decoration:none;border-bottom:1px solid var(--border)}
+.eyebrow a:hover{color:var(--primary-ink);border-color:var(--primary-soft)}
+.speed{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.meter{padding:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.meter h3{margin:0 0 16px;font-size:17px}
+.bar{display:grid;grid-template-columns:70px minmax(0,1fr) auto;align-items:center;gap:12px;margin-top:12px;color:var(--text-2);font-size:14px;font-weight:600}
+.bar-track{height:14px;border-radius:999px;background:var(--surface-alt);overflow:hidden}
+.bar-track i{display:block;height:100%;width:var(--w);border-radius:999px;background:var(--muted)}
+.bar.now .bar-track i{background:var(--primary)}
+.bar b{min-width:64px;text-align:right;color:var(--text);font-size:16px}
+.bar.now b{color:var(--primary-ink)}
+.why{margin-top:28px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.why-item{display:flex;gap:14px;align-items:flex-start}
+.why-item .icon{flex:none;margin:0}
+.why-item h3{margin:2px 0 6px;font-size:16px}
+.why-item p{margin:0;color:var(--text-2);font-size:15px}
+.why-item code{font-size:13.5px;background:var(--surface-alt);padding:1px 6px;border-radius:5px}
+@media (max-width:520px){.bar{grid-template-columns:58px minmax(0,1fr) auto;gap:8px}.meter{padding:18px}}
 </style>
 </head>
 <body>
@@ -345,6 +366,12 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
   <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></symbol>
   <symbol id="i-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"/><rect x="2" y="4" width="20" height="16" rx="2"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.27 21a2 2 0 0 0 3.46 0"/><path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/></symbol>
+  <symbol id="i-gitlab" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 13.29-3.33-10a.42.42 0 0 0-.14-.18.38.38 0 0 0-.22-.11.39.39 0 0 0-.23.07.42.42 0 0 0-.14.18l-2.26 6.67H8.32L6.1 3.26a.42.42 0 0 0-.1-.18.38.38 0 0 0-.26-.08.39.39 0 0 0-.23.07.42.42 0 0 0-.14.18L2 13.29a.74.74 0 0 0 .27.83L12 21l9.69-6.88a.71.71 0 0 0 .31-.83Z"/></symbol>
+  <symbol id="i-wp" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m6.5 8 3 9 2.5-6.5L14.5 17l3-9"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
 </svg>
 
 <header class="site-head">
@@ -352,15 +379,15 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     <a class="brand" href="#top" aria-label="BPanel, về đầu trang"><span class="mark"><span>BP</span></span>BPanel</a>
     <nav class="nav" id="nav" aria-label="Mục lục">
       <a href="#tinh-nang">Tính năng</a>
+      <a href="#toc-do">Tốc độ</a>
       <a href="#tien-ich">Tiện ích</a>
       <a href="#hinh-anh">Hình ảnh</a>
       <a href="#cai-dat">Cài đặt</a>
       <a href="#bao-mat">Bảo mật</a>
       <a href="#hoi-dap">Hỏi đáp</a>
-      <a href="#ho-tro">Hỗ trợ</a>
     </nav>
     <div class="head-actions">
-      <a class="btn btn-ghost btn-sm btn-github" href="https://github.com/BNIX-VN/bpanel" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
+      <a class="btn btn-ghost btn-sm btn-github" href="https://gitlab.sieunhim.com/bnix/bpanel" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-gitlab"/></svg>GitLab</a>
       <button class="btn btn-ghost btn-sm icon-btn theme-toggle" type="button" aria-label="Đổi giao diện sáng/tối" title="Đổi giao diện sáng/tối"><svg class="i-moon" aria-hidden="true"><use href="#i-moon"/></svg><svg class="i-sun" aria-hidden="true"><use href="#i-sun"/></svg></button>
       <a class="btn btn-primary btn-sm btn-demo" href="#demo">Xem demo</a>
       <button class="btn btn-ghost btn-sm menu-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="Mở mục lục"><svg aria-hidden="true"><use href="#i-menu"/></svg></button>
@@ -376,15 +403,15 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
   <div class="wrap">
     <div class="hero-grid">
       <div>
-        <p class="eyebrow"><b>Mã nguồn mở</b><i class="dot"></i>Miễn phí<i class="dot"></i>Ubuntu 24.04</p>
-        <h1 id="hero-title">Quản lý hosting <em>gọn nhẹ</em></h1>
-        <p class="lead">Quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF, khách hàng và đại lý trong một giao diện web — sáng hoặc tối, tiếng Việt hoặc tiếng Anh. Chọn web server khi cài: <b>Nginx</b> hoặc <b>OpenLiteSpeed</b>.</p>
+        <p class="eyebrow"><b>Mã nguồn mở</b><i class="dot"></i>Miễn phí<i class="dot"></i>Ubuntu 24.04<i class="dot"></i><a href="https://gitlab.sieunhim.com/bnix/bpanel/-/releases" rel="noopener" target="_blank">Bản 1.8</a></p>
+        <h1 id="hero-title">Hosting WordPress <em>nhanh, gọn</em>, quản lý trên một trang</h1>
+        <p class="lead">Website WordPress và PHP, email, DNS, database, SSL, backup, tường lửa, WAF, khách hàng và đại lý trong một giao diện web tiếng Việt, sáng hoặc tối, dùng được cả trên điện thoại. Chọn web server khi cài: <b>Nginx</b> (BPanel) hoặc <b>OpenLiteSpeed</b> (OPanel).</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt ngay</a>
           <a class="btn btn-ghost" href="#demo"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
         </div>
         <div class="cmd">
-          <code id="cmd-hero">bash &lt;(curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/panel-setup.sh)</code>
+          <code id="cmd-hero">bash &lt;(curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/panel-setup.sh)</code>
           <button class="copy" type="button" data-copy="cmd-hero"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Sao chép</span></button>
         </div>
       </div>
@@ -393,7 +420,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
           <div class="browser-bar" aria-hidden="true"><i></i><i></i><i></i><span>bpanel.bnix.io.vn:2222</span></div>
           <picture>
             <source id="hero-dark" srcset="screenshots/29-dark-mode.png" media="(prefers-color-scheme: dark)">
-            <img src="screenshots/02-dashboard.png" width="1440" height="900" alt="Trang Tổng quan của BPanel: việc cần xử lý, tài nguyên máy chủ, tài khoản dùng nhiều nhất, công cụ theo nhóm, trạng thái và thông tin máy chủ" fetchpriority="high">
+            <img src="screenshots/02-dashboard.png" width="1440" height="900" alt="Trang Tổng quan của BPanel: công cụ theo nhóm, ô tìm nhanh, trạng thái và thông tin máy chủ" fetchpriority="high">
           </picture>
         </div>
         <img class="phone" src="screenshots/30-mobile.png" width="390" height="844" alt="BPanel trên điện thoại" loading="lazy">
@@ -401,17 +428,17 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     </div>
 
     <div class="facts">
-      <div class="fact"><strong>Nginx · OpenLiteSpeed</strong><span>Chọn web server khi cài</span></div>
+      <div class="fact"><strong>+60% request/giây</strong><span>WordPress chưa cache, bản 1.8 so với trước</span></div>
+      <div class="fact"><strong>4 ms</strong><span>Trang đã có cache Nginx</span></div>
       <div class="fact"><strong>S3 · SFTP · FTP</strong><span>Backup và khôi phục theo từng bước</span></div>
-      <div class="fact"><strong>Giới hạn CPU · RAM</strong><span>Cho từng tài khoản và nhóm đại lý</span></div>
-      <div class="fact"><strong>Mỗi tài khoản một user</strong><span>Các tài khoản không đọc được file của nhau</span></div>
+      <div class="fact"><strong>Mỗi khách một user</strong><span>Các tài khoản không đọc được file của nhau</span></div>
     </div>
 
     <div class="demo-card" id="demo" aria-labelledby="demo-title">
       <div>
         <span class="kicker">Dùng thử</span>
         <h2 id="demo-title">Vào bản demo, không cần cài đặt</h2>
-        <p>Có một bản demo cho mỗi web server. Trang đăng nhập của bản demo có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng, không cần nhớ mật khẩu. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối, nên cứ thoải mái bấm thử.</p>
+        <p>Mỗi web server có một bản demo. Trang đăng nhập có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối, nên cứ thoải mái bấm thử.</p>
       </div>
       <div class="demo-buttons">
         <a class="btn btn-primary" href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-play"/></svg>Nginx (BPanel)</a>
@@ -427,49 +454,69 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     <div class="section-head">
       <span class="kicker">Tính năng</span>
       <h2 id="features-title">Đủ để vận hành một server hosting</h2>
-      <p>Từ tạo website đến backup, bảo mật và phân quyền khách hàng — trong một panel, không cần ghép nhiều công cụ.</p>
+      <p>Từ tạo website đến email, backup, bảo mật và phân quyền khách hàng, trong một panel, không cần ghép nhiều công cụ.</p>
     </div>
-    <div class="features">
+    <div class="features three">
       <article class="card">
         <span class="icon"><svg aria-hidden="true"><use href="#i-globe"/></svg></span>
         <h3>Website và ứng dụng</h3>
         <ul>
-          <li>Cài WordPress một lần bấm (WP-CLI) hoặc website PHP thường</li>
-          <li>PHP của mỗi website chạy bằng user Linux của chủ website</li>
-          <li>Nhiều phiên bản PHP, tên miền phụ cho mỗi website</li>
-          <li>MariaDB với phpMyAdmin đăng nhập một lần</li>
-          <li>SSL Let's Encrypt, quản lý file, cron</li>
+          <li>Cài WordPress một lần bấm, có LiteSpeed Cache hoặc cache Nginx sẵn</li>
+          <li>Website PHP thường; PHP 5.6 đến 8.5 chạy song song</li>
+          <li>Ứng dụng Node.js và Docker sau Nginx (tiện ích Application)</li>
+          <li>MariaDB với phpMyAdmin đăng nhập một lần; SSL Let's Encrypt</li>
+          <li>Quản lý file, cron, SFTP theo thư mục, Git và terminal trên trình duyệt</li>
+        </ul>
+      </article>
+      <article class="card">
+        <span class="icon"><svg aria-hidden="true"><use href="#i-wp"/></svg></span>
+        <h3>WordPress Manager</h3>
+        <ul>
+          <li>Tìm mọi WordPress trên server, cập nhật core, plugin, theme hàng loạt</li>
+          <li>Đăng nhập wp-admin một chạm, không cần mật khẩu</li>
+          <li>Điểm khôi phục trước mỗi lần cập nhật</li>
+          <li>Bản staging, đẩy staging lên site thật</li>
+          <li>Kiểm tra bảo mật, bật tắt cache Nginx theo site</li>
         </ul>
       </article>
       <article class="card">
         <span class="icon"><svg aria-hidden="true"><use href="#i-archive"/></svg></span>
-        <h3>Backup và khôi phục</h3>
+        <h3>Backup và chuyển nhà</h3>
         <ul>
-          <li>Backup website, backup cả tài khoản, lịch tự động</li>
+          <li>Backup website, cả tài khoản, theo lịch tự động</li>
           <li>Đích lưu S3 (Wasabi, B2, R2, MinIO…) hoặc SFTP</li>
-          <li>Khôi phục từ server, đích lưu hoặc máy chủ khác qua SFTP/FTP/FTPS</li>
-          <li>Nhập backup từ DirectAdmin</li>
+          <li>Khôi phục từng bước: từ server này, từ đích lưu, hoặc máy khác qua SFTP/FTP</li>
+          <li>Khôi phục được cả backup DirectAdmin</li>
         </ul>
       </article>
       <article class="card">
         <span class="icon"><svg aria-hidden="true"><use href="#i-shield"/></svg></span>
         <h3>Bảo mật</h3>
         <ul>
-          <li>Tường lửa iptables + ipset, blocklist theo URL</li>
-          <li>WAF ModSecurity bật tắt theo website, chặn bad bot</li>
-          <li>Đăng nhập hai lớp (TOTP) và passkey</li>
-          <li>Nhật ký truy cập và các lần chặn</li>
+          <li>Tường lửa iptables + ipset, blocklist theo URL, Fail2ban</li>
+          <li>WAF ModSecurity theo website, OWASP CRS, chống HTTP flood, chặn bad bot</li>
+          <li>Quét mã độc LMD + ClamAV</li>
+          <li>Đăng nhập hai lớp và passkey; nhật ký truy cập, lý do từng lần chặn</li>
+        </ul>
+      </article>
+      <article class="card">
+        <span class="icon"><svg aria-hidden="true"><use href="#i-users"/></svg></span>
+        <h3>Khách hàng và đại lý</h3>
+        <ul>
+          <li>Gói dịch vụ: số website, dung lượng, database, hộp thư, terminal</li>
+          <li>Giới hạn CPU, RAM, tiến trình, đọc/ghi đĩa cho từng tài khoản</li>
+          <li>Đại lý chia khách và dung lượng, có tuỳ chọn bán vượt</li>
+          <li>API cấp phát và module WHMCS</li>
         </ul>
       </article>
       <article class="card">
         <span class="icon"><svg aria-hidden="true"><use href="#i-server"/></svg></span>
-        <h3>Hệ thống và khách hàng</h3>
+        <h3>Vận hành server</h3>
         <ul>
-          <li>Tổng quan kiểu cPanel: công cụ theo nhóm, tìm nhanh, thống kê đã dùng / giới hạn</li>
-          <li>Giới hạn CPU, RAM, số tiến trình và tốc độ đĩa cho từng tài khoản</li>
-          <li>Đại lý chia khách và dung lượng, có tuỳ chọn bán vượt</li>
-          <li>Người dùng, gói dịch vụ, hạn mức website và dung lượng</li>
-          <li>Tự điều chỉnh PHP và MariaDB theo RAM/CPU; API cấp phát và module WHMCS</li>
+          <li>Tổng quan kiểu cPanel: công cụ theo nhóm, tìm nhanh, trạng thái</li>
+          <li>Tiến trình, RAM, ổ đĩa, lưu lượng mạng của từng tài khoản</li>
+          <li>Cập nhật panel, PHP, Nginx, MariaDB ngay trong giao diện</li>
+          <li>Tự điều chỉnh PHP-FPM và MariaDB theo RAM và CPU</li>
         </ul>
       </article>
     </div>
@@ -483,13 +530,13 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
         <div class="server-top"><strong>Nginx</strong><span>BPanel</span></div>
         <ul>
           <li>Mỗi website một pool PHP-FPM riêng, PHP 5.6 → 8.5 chạy song song</li>
+          <li>Cache trang Nginx cho WordPress, bật tắt theo site</li>
           <li>Sửa vhost Nginx, mẫu rewrite có sẵn</li>
-          <li>WAF có bộ luật OWASP CRS và chống HTTP flood</li>
-          <li>Terminal của website; tiện ích Application (Node.js, Docker)</li>
+          <li>WAF có OWASP CRS và chống HTTP flood; tiện ích Application (Node.js, Docker)</li>
         </ul>
         <div class="server-links">
           <a class="btn btn-ghost btn-sm" href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem demo</a>
-          <a class="btn btn-ghost btn-sm" href="https://github.com/BNIX-VN/bpanel" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-github"/></svg>BPanel trên GitHub</a>
+          <a class="btn btn-ghost btn-sm" href="https://gitlab.sieunhim.com/bnix/bpanel" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-gitlab"/></svg>BPanel trên GitLab</a>
         </div>
       </article>
       <article class="server">
@@ -497,20 +544,48 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
         <ul>
           <li>LSPHP 8.4 và 8.3 cài sẵn, thêm 7.4 → 8.5 ngay trong panel</li>
           <li>Hỗ trợ <code>.htaccess</code> đầy đủ</li>
-          <li>LSCache cho WordPress</li>
+          <li>LiteSpeed Cache cài sẵn cho WordPress mới</li>
           <li>WAF ModSecurity với bộ rule gọn cho WordPress, Laravel và PHP</li>
         </ul>
         <div class="server-links">
           <a class="btn btn-ghost btn-sm" href="https://bpanel-ols.bnix.io.vn:2222/" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem demo</a>
-          <a class="btn btn-ghost btn-sm" href="https://github.com/bnixvn/opanel" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-github"/></svg>OPanel trên GitHub</a>
+          <a class="btn btn-ghost btn-sm" href="https://gitlab.sieunhim.com/bnix/opanel" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-gitlab"/></svg>OPanel trên GitLab</a>
         </div>
       </article>
     </div>
   </div>
 </section>
 
+<!-- ============================ SPEED ============================ -->
+<section id="toc-do" aria-labelledby="speed-title">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Tốc độ</span>
+      <h2 id="speed-title">Đo trên server thật, không đo trên giấy</h2>
+      <p>Cùng một website WordPress chưa cài plugin cache, cùng server, đo xen kẽ trước và sau bản 1.8.</p>
+    </div>
+    <div class="speed">
+      <div class="meter" role="img" aria-label="Trang chưa có cache: 0,23 giây trước, 0,157 giây sau">
+        <h3>Thời gian trả trang chưa có cache</h3>
+        <div class="bar"><span class="bar-label">Trước</span><span class="bar-track"><i style="--w:100%"></i></span><b>0,23 s</b></div>
+        <div class="bar now"><span class="bar-label">Bản 1.8</span><span class="bar-track"><i style="--w:68%"></i></span><b>0,157 s</b></div>
+      </div>
+      <div class="meter" role="img" aria-label="Số request mỗi giây: 12 trước, 20 đến 22 sau">
+        <h3>Số request mỗi giây</h3>
+        <div class="bar"><span class="bar-label">Trước</span><span class="bar-track"><i style="--w:55%"></i></span><b>12</b></div>
+        <div class="bar now"><span class="bar-label">Bản 1.8</span><span class="bar-track"><i style="--w:100%"></i></span><b>20–22</b></div>
+      </div>
+    </div>
+    <div class="why">
+      <div class="why-item"><span class="icon"><svg aria-hidden="true"><use href="#i-zap"/></svg></span><div><h3>Cache trang Nginx</h3><p>Trang khách chưa đăng nhập được trả lại trong khoảng 4 ms, không chạy PHP. wp-admin, giỏ hàng và bình luận không bao giờ bị cache.</p></div></div>
+      <div class="why-item"><span class="icon"><svg aria-hidden="true"><use href="#i-gauge"/></svg></span><div><h3>PHP không bị trói</h3><p><code>open_basedir</code> làm PHP chậm khoảng 1/3, nên giờ là tuỳ chọn theo site hoặc theo gói. Các khách vẫn tách nhau bằng quyền thư mục home.</p></div></div>
+      <div class="why-item"><span class="icon"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><div><h3>Mạng và trình duyệt</h3><p>BBR cho mạng di động chập chờn, cache phiên TLS, file tĩnh của WordPress được trình duyệt giữ một năm.</p></div></div>
+    </div>
+  </div>
+</section>
+
 <!-- ============================ SPOTLIGHTS ============================ -->
-<section aria-labelledby="spot-title">
+<section class="alt" aria-labelledby="spot-title">
   <div class="wrap">
     <div class="section-head">
       <span class="kicker">Làm việc hằng ngày</span>
@@ -519,15 +594,41 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
 
     <div class="spot">
       <div class="spot-text">
-        <h3>Website, từ tạo mới đến cấu hình web server</h3>
-        <p>Tạo website WordPress hoặc PHP, chọn phiên bản PHP, thêm tên miền phụ và chỉnh cấu hình ngay trên một màn hình: vhost và mẫu rewrite trên Nginx, <code>.htaccess</code> trên OpenLiteSpeed.</p>
+        <h3>Mọi WordPress trên server, trong một bảng</h3>
+        <p>WordPress Manager tìm các bản WordPress trong website của mọi khách, cho biết phiên bản, số plugin và theme cần cập nhật, cảnh báo bảo mật. Cập nhật một site hay chọn nhiều site cùng lúc.</p>
+        <ul>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Đăng nhập wp-admin một chạm, kể cả với site của khách</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Tự tạo điểm khôi phục trước khi cập nhật, quay lại khi có lỗi</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Tạo staging, sửa thử, rồi đẩy lên site thật</span></li>
+        </ul>
+      </div>
+      <img class="shot" src="screenshots/32-wordpress-manager.png" width="1440" height="900" alt="WordPress Manager: danh sách WordPress, phiên bản, plugin và theme cần cập nhật, nút đăng nhập và quản lý" loading="lazy">
+    </div>
+
+    <div class="spot flip">
+      <div class="spot-text">
+        <h3>Website, từ tạo mới đến cấu hình PHP</h3>
+        <p>Tạo website WordPress hoặc PHP, chọn phiên bản PHP, thêm tên miền phụ, bật cache và chỉnh rewrite ngay trên trang của website.</p>
         <ul>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Mỗi tài khoản một user Linux; PHP của website chạy bằng chính user đó</span></li>
-          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Terminal chạy bằng user của website, chỉ cho các lệnh an toàn (Nginx)</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span><code>open_basedir</code> bật tắt theo site, hoặc bật sẵn cho cả gói</span></li>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Quản lý file: tải lên, sửa, nén và giải nén, phân quyền</span></li>
         </ul>
       </div>
-      <img class="shot" src="screenshots/04-website-settings.png" width="1440" height="900" alt="Cấu hình một website: chế độ, phiên bản PHP, rewrite Nginx, tên miền" loading="lazy">
+      <img class="shot" src="screenshots/04c-website-php.png" width="1440" height="900" alt="Tab PHP của một website: chế độ, phiên bản PHP, rewrite Nginx và công tắc open_basedir" loading="lazy">
+    </div>
+
+    <div class="spot">
+      <div class="spot-text">
+        <h3>Email và DNS ngay trên VPS</h3>
+        <p>Hộp thư trên tên miền của khách, webmail mở từ panel không cần mật khẩu, lọc thư rác có nhật ký. DNS chạy bằng PowerDNS: website mới tự có zone, bản ghi DKIM và DMARC tự được thêm.</p>
+        <ul>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Exim, Dovecot, Rspamd và BNIX Webmail, ký DKIM</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Gửi thư qua smarthost khi nhà cung cấp chặn cổng 25</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Thư nằm trong home của khách, có trong backup</span></li>
+        </ul>
+      </div>
+      <img class="shot" src="screenshots/33-email.png" width="1440" height="900" alt="Trang Email: tên miền thư, hộp thư, chuyển tiếp và relay" loading="lazy">
     </div>
 
     <div class="spot flip">
@@ -535,44 +636,55 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
         <h3>Khôi phục theo từng bước, như DirectAdmin</h3>
         <p>Chọn nguồn, điền thông tin nếu cần, chọn tài khoản rồi khôi phục. Chạy nền, báo kết quả từng tài khoản; một tài khoản lỗi không làm dừng các tài khoản khác.</p>
         <ul>
-          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Nguồn: server này, đích lưu S3/SFTP, hoặc máy chủ khác qua SFTP, FTP, FTPS</span></li>
-          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Khoá SFTP được kiểm tra trước khi gửi mật khẩu</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Nguồn: server này, đích lưu S3/SFTP, hoặc máy khác qua SFTP, FTP, FTPS</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Khôi phục được cả backup DirectAdmin</span></li>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Backup đã lên đích lưu không chiếm thêm ổ đĩa của server</span></li>
         </ul>
       </div>
-      <img class="shot" src="screenshots/13-restore.png" width="1440" height="1010" alt="Khôi phục: nguồn, thông tin, tài khoản cần khôi phục và nút khôi phục" loading="lazy">
+      <img class="shot" src="screenshots/13-restore.png" width="1440" height="900" alt="Khôi phục: nguồn, thông tin, tài khoản cần khôi phục và nút khôi phục" loading="lazy">
     </div>
 
     <div class="spot">
       <div class="spot-text">
+        <h3>Cập nhật từng dịch vụ, hoặc tất cả</h3>
+        <p>Trang Cập nhật cho thấy phiên bản đang chạy và bản mới của Nginx, PHP, MariaDB, Redis, Node.js. Cập nhật từng cái, hoặc một nút cho tất cả. Bản vá bảo mật của PHP tự cài hằng đêm.</p>
+        <ul>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Cập nhật panel ngay trong giao diện, dữ liệu và website giữ nguyên</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Database của panel được chụp lại trước mỗi lần cập nhật</span></li>
+        </ul>
+      </div>
+      <img class="shot" src="screenshots/27-updates.png" width="1440" height="900" alt="Trang Cập nhật: bản phát hành của panel và bảng phiên bản các dịch vụ" loading="lazy">
+    </div>
+
+    <div class="spot flip">
+      <div class="spot-text">
         <h3>Bảo mật cho từng website</h3>
-        <p>WAF ModSecurity bật tắt theo website, chặn bot theo User-Agent và rule tuỳ chỉnh. Trên Nginx có thêm bộ luật OWASP CRS và giới hạn HTTP flood.</p>
+        <p>WAF ModSecurity bật tắt theo website, chặn bot theo User-Agent và rule tuỳ chỉnh, có bộ luật OWASP CRS và giới hạn HTTP flood.</p>
         <ul>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Tường lửa iptables + ipset: một triệu địa chỉ vẫn nhẹ</span></li>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Nhật ký truy cập cho biết request nào bị chặn và vì sao</span></li>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Fail2ban và quét mã độc là tiện ích, bật khi cần</span></li>
         </ul>
       </div>
-      <img class="shot" src="screenshots/20-waf.png" width="1440" height="900" alt="Trang WAF: trạng thái, OWASP CRS và danh sách website" loading="lazy">
+      <img class="shot" src="screenshots/20-waf.png" width="1440" height="900" alt="Trang WAF: website được bảo vệ, bad bot, OWASP CRS và rule tuỳ chỉnh" loading="lazy">
     </div>
 
-    <div class="spot flip">
+    <div class="spot">
       <div class="spot-text">
         <h3>Giới hạn tài nguyên cho từng tài khoản</h3>
         <p>Mỗi khách một phần CPU, RAM, số tiến trình và tốc độ đọc/ghi đĩa, như CloudLinux LVE nhưng chạy bằng cgroup v2 có sẵn trong Ubuntu. Một website chạy quá tay không kéo chậm cả server.</p>
         <ul>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Đặt theo gói, theo tài khoản, và cho cả nhóm khách của một đại lý</span></li>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Khách xem mức dùng và giới hạn của mình, biểu đồ 24 giờ hoặc 7 ngày</span></li>
-          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Quản trị viên thấy ngay tài khoản dùng nhiều nhất, nhận cảnh báo khi một tài khoản chạm giới hạn RAM</span></li>
         </ul>
       </div>
-      <img class="shot" src="screenshots/31-resource-usage.png" width="1440" height="900" alt="Trang Mức dùng tài nguyên: giới hạn và mức dùng hiện tại, biểu đồ CPU, RAM, tiến trình và đọc/ghi đĩa" loading="lazy">
+      <img class="shot" src="screenshots/31-resource-usage.png" width="1440" height="900" alt="Trang Mức dùng tài nguyên của khách: giới hạn, mức dùng hiện tại và biểu đồ" loading="lazy">
     </div>
   </div>
 </section>
 
 <!-- ============================ ADDONS ============================ -->
-<section id="tien-ich" class="alt" aria-labelledby="addons-title">
+<section id="tien-ich" aria-labelledby="addons-title">
   <div class="wrap">
     <div class="section-head">
       <span class="kicker">Tiện ích</span>
@@ -580,31 +692,35 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <p>Những phần không phải server nào cũng dùng được tách thành tiện ích, bật và tắt trong <b>Cài đặt → Tiện ích</b>.</p>
     </div>
     <div class="addons">
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-wp"/></svg></span><h3>WordPress Manager</h3><p>Mọi WordPress trên server: cập nhật hàng loạt, đăng nhập một chạm, điểm khôi phục, staging, kiểm tra bảo mật, cache Nginx.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-mail"/></svg></span><h3>Email</h3><p>Exim + Dovecot + Rspamd + BNIX Webmail: hộp thư trên tên miền của khách, webmail đăng nhập một chạm, lọc thư rác có nhật ký, smarthost, DKIM.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><h3>Quản lý DNS</h3><p>DNS server ngay trên VPS bằng PowerDNS: zone và bản ghi A, AAAA, CNAME, MX, TXT, NS, SRV, CAA; website mới tự có zone.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-git"/></svg></span><h3>Git</h3><p>Clone repo từ GitHub, GitLab, Bitbucket vào home của khách, deploy bằng một nút hoặc webhook, chạy lệnh build sau khi kéo code.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-scale"/></svg></span><h3>Giới hạn tài nguyên</h3><p>CPU, RAM, số tiến trình và tốc độ đọc/ghi đĩa cho từng tài khoản và nhóm đại lý, bằng cgroup v2.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-boxes"/></svg></span><h3>Application</h3><p>Chạy ứng dụng Node.js, container và Docker Compose sau Nginx.</p></article>
-      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-ban"/></svg></span><h3>Fail2ban</h3><p>Chặn các địa chỉ dò mật khẩu SSH.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bug"/></svg></span><h3>Quét mã độc</h3><p>LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực và quét file tải lên.</p></article>
-      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bot"/></svg></span><h3>Trợ lý AI (MCP)</h3><p>Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân.</p></article>
-      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><h3>Quản lý DNS</h3><p>DNS server ngay trên VPS bằng PowerDNS: zone và bản ghi A, AAAA, CNAME, MX, TXT, NS, SRV, CAA; website mới tự có zone.</p></article>
-      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-mail"/></svg></span><h3>Email</h3><p>Exim + Dovecot + Rspamd + BNIX Webmail: hộp thư trên tên miền của khách, mở webmail từ panel không cần mật khẩu, lọc thư rác có nhật ký, gửi qua smarthost, ký DKIM, thư có trong backup.</p></article>
-      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-eye"/></svg></span><h3>Chế độ demo</h3><p>Tài khoản demo công khai cho quản trị và khách hàng: xem mọi trang, không thay đổi được gì, có nút đăng nhập nhanh.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-ban"/></svg></span><h3>Fail2ban</h3><p>Chặn các địa chỉ dò mật khẩu SSH.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bot"/></svg></span><h3>Trợ lý AI (MCP)</h3><p>Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân, chỉ đọc hoặc có quyền ghi.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bell"/></svg></span><h3>Thông báo</h3><p>Cảnh báo quản trị viên qua email và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, chứng chỉ sắp hết hạn…</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-eye"/></svg></span><h3>Chế độ demo</h3><p>Tài khoản demo công khai cho quản trị và khách hàng: xem mọi trang, không thay đổi được gì, có nút đăng nhập nhanh.</p></article>
     </div>
-    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp. Application hiện chỉ có trên bản Nginx (BPanel); các tiện ích khác có trên cả hai bản.</span></p>
+    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>: chưa bật thì không có gì của nó được cài lên server. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp.</span></p>
   </div>
 </section>
 
 <!-- ============================ GALLERY ============================ -->
-<section id="hinh-anh" aria-labelledby="gallery-title">
+<section id="hinh-anh" class="alt" aria-labelledby="gallery-title">
   <div class="wrap">
     <div class="section-head">
       <span class="kicker">Hình ảnh</span>
       <h2 id="gallery-title">Xem qua từng trang</h2>
-      <p>Chụp từ bản demo BPanel (Nginx); OPanel dùng cùng bố cục giao diện. Bấm vào ảnh để xem kích thước đầy đủ.</p>
+      <p>Chụp từ bản demo BPanel 1.8 (Nginx); OPanel dùng cùng bố cục giao diện. Bấm vào ảnh để xem kích thước đầy đủ.</p>
     </div>
     <div class="tabs" role="tablist" aria-label="Nhóm ảnh">
       <button class="tab" role="tab" type="button" aria-selected="true" data-group="all">Tất cả</button>
       <button class="tab" role="tab" type="button" aria-selected="false" data-group="web">Website</button>
+      <button class="tab" role="tab" type="button" aria-selected="false" data-group="wp">WordPress</button>
+      <button class="tab" role="tab" type="button" aria-selected="false" data-group="mail">Email và DNS</button>
       <button class="tab" role="tab" type="button" aria-selected="false" data-group="backup">Backup</button>
       <button class="tab" role="tab" type="button" aria-selected="false" data-group="security">Bảo mật</button>
       <button class="tab" role="tab" type="button" aria-selected="false" data-group="system">Hệ thống</button>
@@ -623,12 +739,12 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
 </dialog>
 
 <!-- ============================ INSTALL ============================ -->
-<section id="cai-dat" class="alt" aria-labelledby="install-title">
+<section id="cai-dat" aria-labelledby="install-title">
   <div class="wrap">
     <div class="section-head">
       <span class="kicker">Cài đặt</span>
       <h2 id="install-title">Từ VPS trắng đến panel chạy, bằng một lệnh</h2>
-      <p>Lệnh cài hỏi bạn chọn web server: Nginx cài BPanel, OpenLiteSpeed cài OPanel. Trình cài của panel đó dựng web server, MariaDB, Redis, PHP, SFTP, certbot, phpMyAdmin, WP-CLI và tường lửa, rồi tự điều chỉnh PHP và MariaDB theo cấu hình VPS.</p>
+      <p>Lệnh cài hỏi bạn chọn web server: Nginx cài BPanel, OpenLiteSpeed cài OPanel. Trình cài dựng web server, MariaDB, Redis, PHP, SFTP, certbot, phpMyAdmin, WP-CLI và tường lửa, rồi tự điều chỉnh PHP và MariaDB theo cấu hình VPS.</p>
     </div>
     <div class="steps">
       <div class="step"><h3>Chuẩn bị server</h3><p>Ubuntu 24.04 mới cài, quyền root. Tuỳ chọn: một tên miền trỏ về IP để panel có SSL.</p></div>
@@ -636,10 +752,14 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <div class="step"><h3>Đăng nhập</h3><p>Địa chỉ, tên đăng nhập và mật khẩu được in ra cuối và lưu ở <code>/root/login.txt</code>.</p></div>
     </div>
     <div class="cmd" style="max-width:none">
-      <code id="cmd-install">bash &lt;(curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/panel-setup.sh)</code>
+      <code id="cmd-install">bash &lt;(curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/panel-setup.sh)</code>
       <button class="copy" type="button" data-copy="cmd-install"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Sao chép</span></button>
     </div>
-    <p class="cmd-hint">Cài thẳng không cần chọn: thêm <code>nginx</code> hoặc <code>openlitespeed</code> vào cuối lệnh.</p>
+    <p class="cmd-hint">Cài thẳng BPanel, không hỏi chọn web server:</p>
+    <div class="cmd" style="max-width:none;margin-top:8px">
+      <code id="cmd-direct">curl -fsSL https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/install.sh | bash</code>
+      <button class="copy" type="button" data-copy="cmd-direct"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Sao chép</span></button>
+    </div>
     <div class="box req">
       <div>
         <h3>Yêu cầu hệ thống</h3>
@@ -663,7 +783,7 @@ opanel</pre>
 </section>
 
 <!-- ============================ SECURITY MODEL ============================ -->
-<section id="bao-mat" aria-labelledby="security-title">
+<section id="bao-mat" class="alt" aria-labelledby="security-title">
   <div class="wrap">
     <div class="spot" style="padding-top:0">
       <div class="spot-text">
@@ -672,7 +792,8 @@ opanel</pre>
         <p>Tiến trình panel chạy bằng user hệ thống <code>bpanel</code>. Mọi việc cần quyền cao đi qua một script trợ giúp duy nhất thuộc root, chỉ chạy những thao tác nằm trong danh sách cho phép.</p>
         <ul>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Helper kiểm tra tên miền, cổng, IP và đường dẫn trước khi gọi chương trình thật</span></li>
-          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Các tài khoản tách nhau bằng user Linux, SFTP chroot và shell <code>nologin</code>; mỗi website có <code>open_basedir</code> riêng</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Mỗi khách một user Linux, thư mục home đóng với khách khác, SFTP chroot, shell <code>nologin</code></span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Terminal và cron của khách chỉ thấy home của chính khách đó</span></li>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Cookie HttpOnly kèm CSRF, giới hạn đăng nhập, mật khẩu database mã hoá khi lưu</span></li>
         </ul>
       </div>
@@ -687,23 +808,23 @@ opanel</pre>
 </section>
 
 <!-- ============================ FAQ ============================ -->
-<section id="hoi-dap" class="alt" aria-labelledby="faq-title">
+<section id="hoi-dap" aria-labelledby="faq-title">
   <div class="wrap">
     <div class="section-head">
       <span class="kicker">Hỏi đáp</span>
       <h2 id="faq-title">Câu hỏi thường gặp</h2>
     </div>
     <div class="faq">
-      <details><summary>Có mất phí không?</summary><p>Không. BPanel và OPanel là mã nguồn mở theo <a href="https://github.com/BNIX-VN/bpanel/blob/main/LICENSE" rel="noopener" target="_blank">giấy phép AGPL-3.0</a>: bạn được dùng miễn phí, kể cả cho mục đích thương mại. Nếu sửa đổi rồi phân phối, hoặc cho người khác dùng bản đã sửa qua mạng, bạn phải công bố mã nguồn của bản đó theo cùng giấy phép.</p></details>
-      <details><summary>Ai được hỗ trợ?</summary><p>Khách hàng dùng VPS tại <a href="https://bnix.vn" rel="noopener" target="_blank">BNIX</a> được BNIX hỗ trợ panel miễn phí, cả BPanel lẫn OPanel. Dùng VPS ở nơi khác, bạn vẫn dùng panel miễn phí và có thể báo lỗi qua GitHub Issues của <a href="https://github.com/BNIX-VN/bpanel/issues" rel="noopener" target="_blank">BPanel</a> hoặc <a href="https://github.com/bnixvn/opanel/issues" rel="noopener" target="_blank">OPanel</a>.</p></details>
-      <details><summary>Nên chọn Nginx hay OpenLiteSpeed?</summary><p>Chọn <b>Nginx (BPanel)</b> nếu bạn quen cấu hình Nginx, cần bộ luật OWASP CRS, terminal cho website hoặc tiện ích Application (Node.js, Docker). Chọn <b>OpenLiteSpeed (OPanel)</b> nếu website của bạn dùng <code>.htaccess</code> hoặc bạn muốn LSCache cho WordPress. Hai panel cùng giao diện; lệnh cài hỏi bạn chọn một.</p></details>
-      <details><summary>Có bản demo để xem thử không?</summary><p>Có, mỗi web server một bản. OpenLiteSpeed (OPanel): <a href="https://bpanel-ols.bnix.io.vn:2222/" rel="noopener" target="_blank">bpanel-ols.bnix.io.vn:2222</a>. Nginx (BPanel): <a href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank">bpanel.bnix.io.vn:2222</a>. Trang đăng nhập có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối.</p></details>
+      <details><summary>Có mất phí không?</summary><p>Không. BPanel và OPanel là mã nguồn mở theo <a href="https://gitlab.sieunhim.com/bnix/bpanel/-/blob/main/LICENSE" rel="noopener" target="_blank">giấy phép AGPL-3.0</a>: bạn được dùng miễn phí, kể cả cho mục đích thương mại. Nếu sửa đổi rồi phân phối, hoặc cho người khác dùng bản đã sửa qua mạng, bạn phải công bố mã nguồn của bản đó theo cùng giấy phép.</p></details>
+      <details><summary>Ai được hỗ trợ?</summary><p>Khách hàng dùng VPS tại <a href="https://bnix.vn" rel="noopener" target="_blank">BNIX</a> được BNIX hỗ trợ panel miễn phí, cả BPanel lẫn OPanel. Dùng VPS ở nơi khác, bạn vẫn dùng panel miễn phí và có thể báo lỗi qua Issues của <a href="https://gitlab.sieunhim.com/bnix/bpanel/-/issues" rel="noopener" target="_blank">BPanel</a> hoặc <a href="https://gitlab.sieunhim.com/bnix/opanel/-/issues" rel="noopener" target="_blank">OPanel</a> trên GitLab.</p></details>
+      <details><summary>Nên chọn Nginx hay OpenLiteSpeed?</summary><p>Chọn <b>Nginx (BPanel)</b> nếu bạn quen cấu hình Nginx, cần bộ luật OWASP CRS hoặc tiện ích Application (Node.js, Docker). Chọn <b>OpenLiteSpeed (OPanel)</b> nếu website của bạn dùng <code>.htaccess</code> hoặc bạn muốn LiteSpeed Cache cho WordPress. Hai panel cùng giao diện; lệnh cài hỏi bạn chọn một.</p></details>
+      <details><summary>Website có nhanh không?</summary><p>Bản 1.8 tăng số request mỗi giây của một WordPress chưa cache từ khoảng 12 lên 20–22 trên cùng server, và trang đã có cache Nginx trả về trong khoảng 4 ms. Xem phần <a href="#toc-do">Tốc độ</a>.</p></details>
+      <details><summary>Có bản demo để xem thử không?</summary><p>Có, mỗi web server một bản. Nginx (BPanel): <a href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank">bpanel.bnix.io.vn:2222</a>. OpenLiteSpeed (OPanel): <a href="https://bpanel-ols.bnix.io.vn:2222/" rel="noopener" target="_blank">bpanel-ols.bnix.io.vn:2222</a>. Trang đăng nhập có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối.</p></details>
       <details><summary>Chạy được trên hệ điều hành nào?</summary><p>Ubuntu 24.04 LTS. Trình cài dừng lại nếu gặp hệ điều hành khác, để không để lại một server cài dở.</p></details>
-      <details><summary>Tôi đang dùng DirectAdmin, chuyển sang được không?</summary><p>Được. Tab <b>Backup → Nhập DA</b> nhập backup của DirectAdmin; tab <b>Khôi phục</b> lấy được backup từ server này, từ đích lưu S3/SFTP, hoặc từ một máy chủ khác qua SFTP, FTP, FTPS.</p></details>
-      <details><summary>Khách hàng của tôi thấy gì?</summary><p>Người dùng thường chỉ quản lý website của mình: file, database, SSL, WordPress, cron và backup, trong giới hạn số website và dung lượng của gói, cùng mức dùng CPU và RAM của mình nếu bật tiện ích Giới hạn tài nguyên. Phần server chỉ quản trị viên thấy.</p></details>
-      <details><summary>Có giới hạn CPU, RAM cho từng khách không?</summary><p>Có, bằng tiện ích <b>Giới hạn tài nguyên</b>: CPU, RAM, số tiến trình và tốc độ đọc/ghi đĩa, đặt theo gói, theo tài khoản hoặc cho cả nhóm khách của một đại lý. Tiện ích dùng cgroup v2 của Ubuntu, nên không chạy được trong container. Gỡ tiện ích là bỏ mọi giới hạn, các giá trị đã đặt vẫn được giữ.</p></details>
+      <details><summary>Tôi đang dùng DirectAdmin, chuyển sang được không?</summary><p>Được. Tab <b>Backup → Khôi phục</b> nhận cả backup của DirectAdmin, chung một danh sách với backup của panel, lấy từ server này, từ đích lưu S3/SFTP, hoặc thẳng từ máy DirectAdmin cũ qua SFTP, FTP, FTPS.</p></details>
+      <details><summary>Khách hàng của tôi thấy gì?</summary><p>Người dùng thường chỉ quản lý website của mình: file, database, SSL, WordPress, email, cron và backup, trong giới hạn của gói, cùng mức dùng CPU và RAM của mình nếu bật tiện ích Giới hạn tài nguyên. Phần server chỉ quản trị viên thấy.</p></details>
       <details><summary>Có làm đại lý (reseller) được không?</summary><p>Được. Quản trị viên cấp cho đại lý số khách và dung lượng; đại lý tự tạo khách, gói và giới hạn cho khách của mình. Bật <b>bán vượt</b> thì panel kiểm dung lượng khách thực dùng thay vì tổng hạn mức đã chia, như cPanel và DirectAdmin.</p></details>
-      <details><summary>Có kết nối với WHMCS không?</summary><p>Có. BPanel có API cấp phát và một module WHMCS dùng chung cho BPanel và OPanel: tạo, tạm khoá, mở khoá, xoá tài khoản, đổi gói, đổi mật khẩu và đăng nhập một lần từ khu vực khách hàng.</p></details>
+      <details><summary>Có kết nối với WHMCS không?</summary><p>Có. Panel có API cấp phát và một module WHMCS dùng chung cho BPanel và OPanel: tạo, tạm khoá, mở khoá, xoá tài khoản, đổi gói, đổi mật khẩu và đăng nhập một lần từ khu vực khách hàng.</p></details>
       <details><summary>Cập nhật có ảnh hưởng website đang chạy không?</summary><p>Dữ liệu, website và database giữ nguyên. Chạy <code>bpanel-update --release</code> (BPanel) hoặc <code>opanel-update</code> (OPanel), hoặc bấm cập nhật trong trang Cập nhật.</p></details>
       <details><summary>Gỡ một tiện ích có mất dữ liệu không?</summary><p>Không. Gỡ tiện ích chỉ tắt tính năng; dữ liệu nó đã tạo được giữ nguyên để lần cài sau dùng tiếp.</p></details>
     </div>
@@ -711,7 +832,7 @@ opanel</pre>
 </section>
 
 <!-- ============================ SUPPORT ============================ -->
-<section id="ho-tro" class="support" aria-labelledby="support-title">
+<section id="ho-tro" class="support alt" aria-labelledby="support-title">
   <div class="wrap">
     <div class="section-head">
       <span class="kicker">Hỗ trợ</span>
@@ -728,14 +849,14 @@ opanel</pre>
       <article class="card">
         <span class="icon"><svg aria-hidden="true"><use href="#i-bug"/></svg></span>
         <h3>Dùng VPS ở nơi khác</h3>
-        <p>Panel vẫn miễn phí. Gặp lỗi hoặc muốn đề xuất tính năng, hãy mở một issue trên GitHub.</p>
-        <a class="btn btn-ghost btn-sm" href="https://github.com/BNIX-VN/bpanel/issues" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub Issues</a>
+        <p>Panel vẫn miễn phí. Gặp lỗi hoặc muốn đề xuất tính năng, hãy mở một issue trên GitLab.</p>
+        <a class="btn btn-ghost btn-sm" href="https://gitlab.sieunhim.com/bnix/bpanel/-/issues" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-gitlab"/></svg>GitLab Issues</a>
       </article>
       <article class="card">
         <span class="icon"><svg aria-hidden="true"><use href="#i-scale"/></svg></span>
         <h3>Giấy phép AGPL-3.0</h3>
         <p>Được dùng, sửa đổi và phân phối, kể cả cho mục đích thương mại. Bản sửa đổi khi phân phối, hoặc khi cho người khác dùng qua mạng, phải công bố mã nguồn theo cùng giấy phép. Phần mềm được cung cấp nguyên trạng, không kèm bảo đảm.</p>
-        <a class="btn btn-ghost btn-sm" href="https://github.com/BNIX-VN/bpanel/blob/main/LICENSE" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-scale"/></svg>Đọc giấy phép</a>
+        <a class="btn btn-ghost btn-sm" href="https://gitlab.sieunhim.com/bnix/bpanel/-/blob/main/LICENSE" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-scale"/></svg>Đọc giấy phép</a>
       </article>
     </div>
   </div>
@@ -750,7 +871,7 @@ opanel</pre>
       <div class="hero-cta" style="margin-top:0">
         <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt</a>
         <a class="btn btn-ghost" href="#demo"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
-        <a class="btn btn-ghost" href="https://github.com/BNIX-VN/bpanel" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
+        <a class="btn btn-ghost" href="https://gitlab.sieunhim.com/bnix/bpanel" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-gitlab"/></svg>GitLab</a>
       </div>
     </div>
   </div>
@@ -761,36 +882,39 @@ opanel</pre>
   <div class="wrap foot">
     <a class="brand" href="#top"><span class="mark"><span>BP</span></span>BPanel</a>
     <nav aria-label="Liên kết">
-      <a href="https://github.com/BNIX-VN/bpanel" rel="noopener" target="_blank">BPanel</a>
-      <a href="https://github.com/bnixvn/opanel" rel="noopener" target="_blank">OPanel</a>
-      <a href="https://github.com/BNIX-VN/bpanel/releases" rel="noopener" target="_blank">Bản phát hành</a>
-      <a href="https://github.com/BNIX-VN/bpanel#readme" rel="noopener" target="_blank">Tài liệu</a>
+      <a href="https://gitlab.sieunhim.com/bnix/bpanel" rel="noopener" target="_blank">BPanel</a>
+      <a href="https://gitlab.sieunhim.com/bnix/opanel" rel="noopener" target="_blank">OPanel</a>
+      <a href="https://gitlab.sieunhim.com/bnix/bpanel/-/releases" rel="noopener" target="_blank">Bản phát hành</a>
+      <a href="https://gitlab.sieunhim.com/bnix/bpanel#readme" rel="noopener" target="_blank">Tài liệu</a>
+      <a href="https://github.com/BNIX-VN/bpanel" rel="noopener" target="_blank">Bản sao GitHub</a>
       <a href="#demo">Demo</a>
       <a href="#ho-tro">Hỗ trợ</a>
     </nav>
-    <span>© <a href="https://bnix.vn" rel="noopener" target="_blank">BNIX</a> · <a href="https://github.com/BNIX-VN/bpanel/blob/main/LICENSE" rel="noopener" target="_blank">Giấy phép AGPL-3.0</a></span>
+    <span>© <a href="https://bnix.vn" rel="noopener" target="_blank">BNIX</a> · <a href="https://gitlab.sieunhim.com/bnix/bpanel/-/blob/main/LICENSE" rel="noopener" target="_blank">Giấy phép AGPL-3.0</a></span>
   </div>
 </footer>
+
 
 <script>
 (() => {
   // The gallery: one list, filtered by the tabs; a click opens the full image.
   const shots = [
-    ['02-dashboard', 'Tổng quan', 'system'], ['31-resource-usage', 'Mức dùng tài nguyên', 'system'], ['03-websites', 'Danh sách website', 'web'],
-    ['04-website-settings', 'Cấu hình website', 'web'], ['04b-website-terminal', 'Terminal của website', 'web'],
-    ['09-file-manager', 'Quản lý file', 'web'], ['05-applications', 'Ứng dụng Node.js / Docker', 'web'],
-    ['06-ssl', 'SSL', 'web'], ['07-databases', 'Database', 'web'], ['08-cron', 'Cron', 'web'],
-    ['10-sftp', 'Tài khoản SFTP', 'web'], ['11-backups', 'Backup website', 'backup'],
-    ['12-backup-schedule', 'Lịch backup tự động', 'backup'], ['13-restore', 'Khôi phục', 'backup'],
-    ['14-backup-destination', 'Đích lưu backup', 'backup'], ['19-firewall', 'Tường lửa và Fail2ban', 'security'],
-    ['20-waf', 'WAF và OWASP CRS', 'security'], ['21-waf-site', 'WAF của một website', 'security'],
-    ['22-access-logs', 'Nhật ký truy cập', 'security'], ['23-security', 'Passkey và 2FA', 'security'],
+    ['02-dashboard', 'Tổng quan', 'system'], ['03-websites', 'Danh sách website', 'web'],
+    ['04-website-settings', 'Trang của một website', 'web'], ['04c-website-php', 'PHP và open_basedir của website', 'web'],
+    ['04d-website-cache', 'Cache Nginx của website', 'wp'], ['32-wordpress-manager', 'WordPress Manager', 'wp'],
+    ['09-file-manager', 'Quản lý file', 'web'], ['35-git', 'Git', 'web'], ['05-applications', 'Ứng dụng Node.js / Docker', 'web'],
+    ['06-ssl', 'SSL', 'web'], ['07-databases', 'Database', 'web'], ['08-cron', 'Cron', 'web'], ['10-sftp', 'Tài khoản SFTP', 'web'],
+    ['33-email', 'Email', 'mail'], ['34-dns', 'Quản lý DNS', 'mail'],
+    ['11-backups', 'Backup website', 'backup'], ['12-backup-schedule', 'Lịch backup tự động', 'backup'],
+    ['13-restore', 'Khôi phục', 'backup'], ['14-backup-destination', 'Đích lưu backup', 'backup'],
+    ['19-firewall', 'Tường lửa và Fail2ban', 'security'], ['20-waf', 'WAF và OWASP CRS', 'security'],
+    ['21-waf-site', 'WAF của một website', 'security'], ['22-access-logs', 'Nhật ký truy cập', 'security'],
+    ['36-malware', 'Quét mã độc', 'security'], ['23-security', 'Passkey và 2FA', 'security'],
     ['15-panel-users', 'Người dùng panel', 'system'], ['16-packages', 'Gói dịch vụ', 'system'],
-    ['18-settings', 'Cài đặt', 'system'], ['26-panel-settings', 'Cài đặt panel', 'system'],
-    ['24-services', 'Dịch vụ', 'system'], ['25-php', 'Cấu hình PHP', 'system'],
-    ['27-updates', 'Cập nhật', 'system'], ['28-addons', 'Tiện ích', 'system'],
-    ['17-notifications', 'Thông báo', 'system'], ['29-dark-mode', 'Giao diện tối', 'system'],
-    ['01-login', 'Đăng nhập', 'system'],
+    ['31-resource-usage', 'Mức dùng tài nguyên của khách', 'system'], ['38-ram-usage', 'RAM của server', 'system'],
+    ['39-traffic', 'Lưu lượng mạng', 'system'], ['25-php', 'Cấu hình PHP', 'system'], ['27-updates', 'Cập nhật panel và dịch vụ', 'system'],
+    ['28-addons', 'Tiện ích', 'system'], ['26-panel-settings', 'Cài đặt panel', 'system'], ['17-notifications', 'Thông báo', 'system'],
+    ['37-ai-assistants', 'Trợ lý AI (MCP)', 'system'], ['29-dark-mode', 'Giao diện tối', 'system'], ['01-login', 'Đăng nhập', 'system'],
   ];
   const gallery = document.getElementById('gallery');
   let visible = [];
