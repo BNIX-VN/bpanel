@@ -1161,6 +1161,7 @@ function App() {
   const [serviceVersions, setServiceVersions] = useState(null);
   const [serviceChecking, setServiceChecking] = useState(false);
   const serviceWasRunning = useRef(false);
+  const osWasRunning = useRef(false);
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
@@ -5161,7 +5162,7 @@ function App() {
 
   // A service update runs as its own unit; read it again until it is done.
   useEffect(() => {
-    if (!serviceVersions?.running || page !== 'updates') return undefined;
+    if (!(serviceVersions?.running || serviceVersions?.system?.running) || page !== 'updates') return undefined;
     const timer = setTimeout(() => loadServiceVersions(false, true), 3000);
     return () => clearTimeout(timer);
   }, [serviceVersions, page]);
@@ -5175,7 +5176,12 @@ function App() {
     if (serviceWasRunning.current && !data.running && data.last_result) {
       setNotice(data.last_result.ok ? t('Service update finished.') : t('Service update failed. See the log below.'));
     }
+    const system = data.system || {};
+    if (osWasRunning.current && !system.running && system.last_result) {
+      setNotice(system.last_result.ok ? t('System packages updated.') : t('The system update failed. See the log below.'));
+    }
     serviceWasRunning.current = Boolean(data.running);
+    osWasRunning.current = Boolean(system.running);
     setServiceVersions(data);
   }
 
@@ -5197,12 +5203,15 @@ function App() {
     setShowUpdateLog(prev => !prev);
   }
 
+  // apt-get upgrade runs as its own unit: the Service versions section shows
+  // it running, its log, and how it ended (it used to show one notice that
+  // went away, and nothing said whether anything was updated).
   async function runOsUpdate() {
-    if (!(await confirmDialog(t('Run apt-get update && apt-get upgrade now?')))) return;
+    if (!(await confirmDialog(t('Update every system package now (apt-get upgrade)?')))) return;
     setOsUpdating(true);
-    const data = await request('/updates/os/run', { method: 'POST' }, t('Updating OS packages...'));
+    const data = await request('/updates/os/run', { method: 'POST' }, t('Starting the system update...'));
     setOsUpdating(false);
-    if (data) { setNotice((data.stdout || data.stderr || 'OS update completed.').trim()); if (showUpdateLog) await loadUpdates(); }
+    if (data) await loadServiceVersions(false, true);
   }
 
   async function saveOsAutoUpdate() {
@@ -11234,8 +11243,7 @@ function App() {
       </section>
       {renderServiceVersions()}
       <section className="section">
-        <PageHeader title={t('Operating system')} subtitle={t("Package updates for the server itself, separate from the panel's.")}
-          actions={<button type="button" className="secondary-light" disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? t('Updating OS...') : t('Update OS now')}</button>}/>
+        <PageHeader title={t('Operating system')} subtitle={t("Package updates for the server itself, separate from the panel's.")}/>
         <h3 className="updates-os-title">{t('Auto Update OS')}</h3>
         <div className="firewall-form updates-os-form">
           <label><span>{t('Status')}</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">{t('On')}</option><option value="off">{t('Off')}</option></select></label>
@@ -11293,7 +11301,49 @@ function App() {
             <summary>{sv.last_result ? (sv.last_result.ok ? t('Last service update finished') : t('Last service update failed')) : t('Service update log')}</summary>
             <pre className="update-progress-log">{sv.log.join('\n')}</pre>
           </details>)}
+      {sv?.system && renderSystemPackages(sv.system, busy)}
     </section>;
+  }
+
+  // Every other package apt-get upgrade would install, and "Update OS now",
+  // followed until it ends (as OPanel 1.36.2).
+  function renderSystemPackages(system, busy) {
+    const others = system.others || [];
+    const sysRunning = Boolean(system.running);
+    return <div className="system-packages">
+      <div className="system-packages-head">
+        <div>
+          <h3>{t('System packages')}</h3>
+          <p className="hint">{system.pending
+            ? t('{0} package(s) can be updated, the services above included.', system.pending)
+            : t('Every system package is up to date.')}</p>
+        </div>
+        <button type="button" className="secondary" disabled={busy || sysRunning || osUpdating || !system.pending} onClick={runOsUpdate}>
+          <RefreshCw size={14} className={sysRunning || osUpdating ? 'spin' : ''}/> {sysRunning ? t('Updating OS...') : t('Update OS now')}</button>
+      </div>
+      {others.length > 0 && <details className="system-packages-list">
+        <summary>{t('{0} other package(s)', others.length)}</summary>
+        <ul>{others.map(item => <li key={item.name}><code>{item.name}</code> {item.from ? `${item.from} → ` : ''}{item.to}</li>)}</ul>
+      </details>}
+      {/* apt-get upgrade leaves these alone, so they are neither counted nor
+          what the button does: they stayed "available" after every update. */}
+      {(system.deferred || []).length > 0 && <details className="system-packages-list">
+        <summary>{t('{0} package(s) Ubuntu installs later', system.deferred.length)}</summary>
+        <p className="hint">{t('Ubuntu rolls some updates out to servers a few at a time (phased updates); they install on their own within days. A kept-back package needs others added or removed: apt full-upgrade over SSH.')}</p>
+        <ul>{system.deferred.map(item => <li key={item.name}><code>{item.name}</code> {item.from ? `${item.from} → ` : ''}{item.to}
+          {' '}<span className="badge">{item.reason === 'phasing' ? t('Phased') : t('Kept back')}</span></li>)}</ul>
+      </details>}
+      {sysRunning && <p className="hint"><span className="badge warn">{t('Running')}</span> {t('Updating packages. This page reads the progress every few seconds.')}</p>}
+      {!sysRunning && system.last_result && <p className="hint">
+        <span className={system.last_result.ok ? 'badge ok' : 'badge bad'}>{system.last_result.ok ? t('Finished') : t('Failed')}</span>{' '}
+        {system.last_result.ok ? t('The last system update finished.') : t('The last system update failed. See the log.')}</p>}
+      {system.log?.length > 0 && (sysRunning
+        ? <pre className="update-progress-log">{system.log.join('\n')}</pre>
+        : <details className="service-versions-log">
+            <summary>{t('System update log')}</summary>
+            <pre className="update-progress-log">{system.log.join('\n')}</pre>
+          </details>)}
+    </div>;
   }
 
   function renderSecurity() {
