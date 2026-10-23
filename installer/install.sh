@@ -541,6 +541,26 @@ NGINX
 # BBR congestion control and a larger accept queue: a phone on a lossy 4G link
 # gets the page sooner with BBR than with the kernel's default cubic. Kernels
 # without the module keep their default.
+# Ubuntu's "New release '26.04 LTS' available. Run 'do-release-upgrade' to
+# upgrade to it." on every SSH login (operator, 2026-10-24: remove it). The
+# panel is built and tested on 24.04, and a release upgrade underneath it
+# replaces PHP, the web server and the database with versions it has not met.
+# Nothing is uninstalled: whoever means to upgrade sets Prompt=lts again.
+configure_release_upgrade_prompt() {
+  local conf=/etc/update-manager/release-upgrades
+  [[ -f "$conf" ]] || return 0
+  if grep -qE '^[[:space:]]*Prompt[[:space:]]*=' "$conf"; then
+    sed -i -E 's/^[[:space:]]*Prompt[[:space:]]*=.*/Prompt=never/' "$conf"
+  elif grep -q '^\[DEFAULT\]' "$conf"; then
+    sed -i '/^\[DEFAULT\]/a Prompt=never' "$conf"
+  else
+    printf '[DEFAULT]\nPrompt=never\n' >>"$conf"
+  fi
+  # The offer already found is cached for the MOTD; with Prompt=never nothing
+  # writes it again.
+  rm -f /var/lib/ubuntu-release-upgrader/release-upgrade-available
+}
+
 configure_network_tuning() {
   local conf=/etc/sysctl.d/60-bpanel-network.conf
   local bbr=0
@@ -1655,6 +1675,7 @@ main() {
   configure_proxy_upgrade_map
   configure_nginx_performance
   configure_network_tuning
+  configure_release_upgrade_prompt
 
   log "Installing Nginx ModSecurity WAF engine"
   if ! install_waf_engine; then
