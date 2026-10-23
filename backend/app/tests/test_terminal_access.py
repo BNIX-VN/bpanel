@@ -105,9 +105,16 @@ def test_wp_site_runs_under_the_same_confinement_as_the_terminal():
     # scanning - otherwise this reads only the first physical line and passes
     # on a command whose confinement sits on the next one.
     joined = block.replace("\\\n", " ")
+    # The flags may live in wp_php_args (2026-10-24: an OPcache file cache is
+    # added to them); then that array must start with the confinement, and
+    # nothing in the block may set it afresh.
+    array_start = 'wp_php_args=(-d pcre.jit=0 -d "open_basedir=$wp_site_basedir")'
     for line in joined.splitlines():
         if line.strip().startswith("exec runuser"):
-            assert "open_basedir" in line, f"unconfined WP-CLI: {line.strip()[:90]}"
+            uses_array = '"${wp_php_args[@]}"' in line and 'WP_CLI_PHP_ARGS="${wp_php_args[*]}"' in line
+            assert "open_basedir" in line or uses_array, f"unconfined WP-CLI: {line.strip()[:90]}"
+            if uses_array:
+                assert array_start in block and block.count("wp_php_args=(") == 1
 
 
 def test_the_terminal_runs_in_a_mount_namespace_that_hides_other_tenants():
