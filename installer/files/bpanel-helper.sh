@@ -133,7 +133,30 @@ apt-get() {
     sleep 5
     waited=$(( waited + 5 ))
   done
+  # Anything but a list refresh needs dpkg in a sane state first.
+  [[ "${1:-}" == update ]] || dpkg_finish_interrupted
   command apt-get "$@"
+}
+
+# A dpkg run cut short - an upgrade killed halfway, a reboot during one -
+# leaves packages half-configured, and from then on every `apt-get install`
+# stops with "dpkg was interrupted, you must manually run 'dpkg --configure
+# -a'". On 160.236.192.47 an upgrade of 13 October had stopped while building
+# an initrd; eleven days later the malware scanner would not install and the
+# page said "installing" for ever (2026-10-24). Finishing that run is what
+# apt asks for, so it is done here before installing anything.
+dpkg_finish_interrupted() {
+  [[ -n "$(dpkg --audit 2>/dev/null)" ]] || return 0
+  echo "An earlier package install was left half-done; finishing it (dpkg --configure -a)..." >&2
+  local waited=0
+  while command -v fuser >/dev/null 2>&1 \
+      && fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1; do
+    (( waited >= 300 )) && deny "timed out after 5 minutes waiting for the dpkg lock; another package manager is still running"
+    sleep 5
+    waited=$(( waited + 5 ))
+  done
+  DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold >&2 \
+    || deny "an earlier package install was left half-done and 'dpkg --configure -a' could not finish it; run it as root to see why"
 }
 
 

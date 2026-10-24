@@ -702,15 +702,20 @@ def _install_and_enable_flow() -> None:
     """
     from app.services import maldet
 
+    _malware_scan.record_install("running")
     try:
         # maldet-install pulls the clamav package (engine) itself and does NOT
         # enable the resident daemon.
         maldet.install()
+        _malware_scan.record_install("done")
     except Exception as exc:  # noqa: BLE001 - record failure, do not crash thread
         try:
             _malware_scan.install_clamav()  # last resort: at least get clamscan
         except Exception:
             pass
+        # Shown on the page until an install works; once ClamAV is there the
+        # status ignores it.
+        _malware_scan.record_install("failed", str(exc).strip() or "the install failed")
         _malware_scan._write_status(
             {**_malware_scan.refresh_status(), "detail": f"LMD install failed: {exc}"}
         )
