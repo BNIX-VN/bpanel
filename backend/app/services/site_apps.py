@@ -185,8 +185,11 @@ def allocate_port(db: Session, preferred: int | None = None, exclude_app_id: int
 
 
 def app_limit_for(user: User) -> int:
+    """The package's limit; an account on a custom package has its own."""
     package = getattr(user, "package", None)
-    return int(getattr(package, "node_apps_limit", 0) or 0) if package else 0
+    if package:
+        return int(getattr(package, "node_apps_limit", 0) or 0)
+    return int(getattr(user, "node_apps_limit", 0) or 0)
 
 
 def memory_ceiling_for(user: User) -> int:

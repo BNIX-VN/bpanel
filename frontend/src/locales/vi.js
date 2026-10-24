@@ -2700,6 +2700,11 @@ export const vi = {
   "Warning": "Cảnh báo",
   "Install failed": "Cài đặt thất bại",
   "The scanner could not be installed: {error}": "Không cài được trình quét: {error}",
+  "Moving...": "Đang chuyển...",
+  "Moving the website: its files, database and settings go to the new account. This can take a minute for a large site; keep this sheet open.": "Đang chuyển website: file, database và cấu hình sang tài khoản mới. Site lớn có thể mất một phút; đừng đóng khung này.",
+  "CPU: open the process monitor": "CPU: mở trình theo dõi tiến trình",
+  "RAM: where the memory is": "RAM: bộ nhớ đang dùng vào đâu",
+  "Disk: what takes the space": "Ổ đĩa: cái gì chiếm dung lượng",
 };
 
 /* Said in English by the people who run these servers. Translating them

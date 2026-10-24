@@ -143,3 +143,23 @@
 .mail-domain-other{display:flex;gap:8px;min-width:0}
 .mail-domain-other input{flex:1;min-width:0}
 .mail-domain-other button{flex:none}
+
+/* Top bar: CPU, RAM and disk (operator, 2026-10-24). */
+.top-stats{display:flex;align-items:center;gap:6px}
+.top-stat{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;cursor:pointer}
+.top-stat:hover{border-color:var(--border-hover);background:var(--surface-hover)}
+.top-stat.active{border-color:var(--primary)}
+.top-stat .top-stat-label{color:var(--text-muted);font-weight:600}
+.top-stat b{font-variant-numeric:tabular-nums}
+.top-stat.tone-warn b{color:var(--warning-text)}
+.top-stat.tone-bad b{color:var(--danger-text, #b42318)}
+@media (max-width:1100px){.top-stat .top-stat-label{display:none}}
+@media (max-width:640px){.top-stats{display:none}}
+
+/* Sidebar foot: language, theme, version. */
+.sidebar{display:flex;flex-direction:column}
+.sidebar-nav{flex:1 1 auto;overflow-y:auto}
+.sidebar-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--nav-border)}
+.sidebar-version{position:relative;margin-left:auto;background:none;border:0;padding:4px 2px;color:inherit;font-size:12px;cursor:pointer;opacity:1}
+.sidebar-version:hover{text-decoration:underline}
+.sidebar-version-dot{position:absolute;top:2px;right:-6px;width:7px;height:7px;border-radius:50%;background:var(--warning, #f6c431)}

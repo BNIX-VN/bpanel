@@ -188,6 +188,10 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         sftp_accounts_limit=payload.sftp_accounts_limit,
         mail_accounts_limit=payload.mail_accounts_limit,
         database_limit=payload.database_limit,
+        # A custom package's own switches, which only the administrator sets;
+        # _apply_package_limits below replaces them when there is a package.
+        terminal_enabled=bool(payload.terminal_enabled) and package is None and is_admin_role(current_user.role),
+        node_apps_limit=payload.node_apps_limit if package is None and is_admin_role(current_user.role) else 0,
         sftp_password_set_at=datetime.utcnow(),
         # Resource limits: the account's own from whoever creates it; a group
         # cap only on a reseller, and only from the administrator.
@@ -359,6 +363,11 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         user.mail_accounts_limit = payload.mail_accounts_limit
     if payload.database_limit is not None:
         user.database_limit = payload.database_limit
+    if user.package_id is None and is_admin_role(current_user.role):
+        if payload.terminal_enabled is not None:
+            user.terminal_enabled = payload.terminal_enabled
+        if payload.node_apps_limit is not None:
+            user.node_apps_limit = payload.node_apps_limit
     for field in RESOURCE_LIMIT_FIELDS:
         if getattr(payload, field) is not None:
             setattr(user, field, getattr(payload, field))

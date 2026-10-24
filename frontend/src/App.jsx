@@ -357,6 +357,10 @@ const EMPTY_SITE_APP_DRAFT = {
   node_major: '22',
   image: '',
   container_port: '3000',
+  // Compose only: the port of the web service the domain reaches; '' lets the
+  // file decide. Not container_port, whose 3000 is a Container default and
+  // made every compose import fail on "does not expose port 3000".
+  web_port: '',
   cpu_limit: '1',
   env: '',
 };
@@ -838,6 +842,7 @@ function App() {
   const [expandedResellers, setExpandedResellers] = useState([]);
   const [packageSheet, setPackageSheet] = useState(false);
   const [moveDomainOpen, setMoveDomainOpen] = useState(false);
+  const [movingDomain, setMovingDomain] = useState(false);
   const [userSearch, setUserSearch] = useState('');
   const [resourceUsage, setResourceUsage] = useState(null);
   // The last 30 readings of loadResourceUsage, for the Dashboard's sparklines.
@@ -2014,6 +2019,10 @@ function App() {
       mail_accounts_limit: Number(newUser.mail_accounts_limit || 0),
       database_limit: Number(newUser.database_limit || 0),
     };
+    if (isAdmin && !newUser.package_id) {
+      payload.terminal_enabled = !!newUser.terminal_enabled;
+      payload.node_apps_limit = Number(newUser.node_apps_limit) || 0;
+    }
     if (isAdmin && newUser.role === 'end_user' && newUser.reseller_id) payload.reseller_id = Number(newUser.reseller_id);
     if (isAdmin && newUser.role === 'reseller') {
       POOL_FIELDS.forEach(field => { payload[field] = Number(newUser[field]) || 0; });
@@ -2074,6 +2083,8 @@ function App() {
       ...Object.fromEntries(RL_FIELDS.flatMap(field => [[field, user[field] ?? 0], [`group_${field}`, user[`group_${field}`] ?? 0]])),
       pool_oversell: !!user.pool_oversell,
       database_limit: user.database_limit ?? 0,
+      terminal_enabled: !!user.terminal_enabled,
+      node_apps_limit: user.node_apps_limit ?? 0,
       new_password: '',
       confirm_password: '',
     });
@@ -2113,6 +2124,10 @@ function App() {
       mail_accounts_limit: Number(editingUserForm.mail_accounts_limit || 0),
       database_limit: Number(editingUserForm.database_limit || 0),
     };
+    if (isAdmin && !editingUserForm.package_id) {
+      payload.terminal_enabled = !!editingUserForm.terminal_enabled;
+      payload.node_apps_limit = Number(editingUserForm.node_apps_limit) || 0;
+    }
     if (isAdmin) {
       if (editingUser.id !== currentUser?.id) payload.role = editingUserForm.role;
       if (editingUserForm.role === 'end_user') payload.reseller_id = Number(editingUserForm.reseller_id) || 0;
@@ -2176,7 +2191,7 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), open_basedir: !!newPackage.open_basedir, ...(limitsOn ? limitValues(newPackage) : {}) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(newPackage.node_apps_limit) || 0 } : {}), open_basedir: !!newPackage.open_basedir, ...(limitsOn ? limitValues(newPackage) : {}) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
@@ -2196,6 +2211,7 @@ function App() {
       database_limit: item.database_limit ?? 5,
       terminal_enabled: !!item.terminal_enabled,
       open_basedir: !!item.open_basedir,
+      node_apps_limit: item.node_apps_limit ?? 0,
       ...limitValues(item),
     });
   }
@@ -2219,7 +2235,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), open_basedir: !!editingPackageForm.open_basedir, ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(editingPackageForm.node_apps_limit) || 0 } : {}), open_basedir: !!editingPackageForm.open_basedir, ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -2571,9 +2587,16 @@ function App() {
 
   async function assignDomainToUser() {
     if (!assignWebsiteId || !assignUserId) return;
-    const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, t('Assigning domain to user...'));
-    if (data) { setNotice(`Assigned domain ${data.domain} to user ID ${assignUserId}`); await refreshAll(); }
-    return !!data;
+    // Moving copies the files and rewrites the site's users, which takes a
+    // while; the sheet says so instead of sitting still (operator, 2026-10-24).
+    setMovingDomain(true);
+    try {
+      const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, t('Assigning domain to user...'));
+      if (data) { setNotice(`Assigned domain ${data.domain} to user ID ${assignUserId}`); await refreshAll(); }
+      return !!data;
+    } finally {
+      setMovingDomain(false);
+    }
   }
 
   async function assignDatabaseToUser() {
@@ -3352,7 +3375,7 @@ function App() {
   }
 
   async function checkComposeFile() {
-    const data = await validateCompose(siteAppDraft.compose_source, siteAppDraft.web_service, siteAppDraft.env, siteAppDraft.container_port);
+    const data = await validateCompose(siteAppDraft.compose_source, siteAppDraft.web_service, siteAppDraft.env, siteAppDraft.web_port);
     if (data) {
       setComposePlan(data);
       if (data.web_service && !siteAppDraft.web_service) {
@@ -3488,7 +3511,7 @@ function App() {
       body.compose_source = siteAppDraft.compose_source;
       body.cpu_limit = siteAppDraft.cpu_limit;
       if (siteAppDraft.web_service) body.web_service = siteAppDraft.web_service;
-      if (siteAppDraft.container_port) body.container_port = Number(siteAppDraft.container_port);
+      if (siteAppDraft.web_port) body.container_port = Number(siteAppDraft.web_port);
     }
     const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, t('Creating application...'));
     if (data) {
@@ -6269,6 +6292,31 @@ function App() {
     if (data) setArHistory(data);
   }
 
+  // CPU, RAM and disk in the top bar, each opening its page (operator,
+  // 2026-10-24: wanted back after living without them). Administrators only.
+  function statTone(percent) {
+    const value = Number(percent) || 0;
+    return value >= 90 ? 'bad' : value >= 75 ? 'warn' : 'ok';
+  }
+
+  function renderTopStats() {
+    const known = !!resourceUsage;
+    const chips = [
+      ['processes', Cpu, 'CPU', resourceUsage?.cpu?.percent, 'CPU: open the process monitor'],
+      ['ram-usage', MemoryStick, 'RAM', resourceUsage?.memory?.percent, 'RAM: where the memory is'],
+      ['disk-usage', HardDrive, 'Disk', resourceUsage?.disk?.percent, 'Disk: what takes the space'],
+    ];
+    return <nav className="top-stats" aria-label={t('Server status')}>
+      {chips.map(([key, Icon, label, percent, title]) => {
+        const value = known ? formatPercent(percent) : '--';
+        return <button key={key} type="button" className={`top-stat tone-${known ? statTone(percent) : 'ok'}${page === key ? ' active' : ''}`}
+          onClick={() => navigateToPage(key)} title={t(title)} aria-label={`${t(label)} ${value}`}>
+          <Icon size={14} aria-hidden="true"/><span className="top-stat-label">{t(label)}</span><b>{value}</b>
+        </button>;
+      })}
+    </nav>;
+  }
+
   function renderDashboard() {
     const cpu = resourceUsage?.cpu || {};
     const memory = resourceUsage?.memory || {};
@@ -7889,13 +7937,14 @@ function App() {
                 />
               </label>
               {composePlan?.services?.length > 0 && <label className="field"><span className="field-label">{t('Service behind the domain')}</span>
-                <select value={siteAppDraft.web_service} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, web_service: e.target.value }))}>
+                <select value={siteAppDraft.web_service} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, web_service: e.target.value, web_port: '' }))}>
                   <option value="">{t('Choose for me')}</option>
                   {composePlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
                 </select>
               </label>}
               {composeWebPorts(composePlan, siteAppDraft.web_service).length > 1 && <label className="field"><span className="field-label">{t('Port behind the domain')}</span>
-                <select value={siteAppDraft.container_port} disabled={!!loading} onChange={e => { setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value })); setComposePlan(null); }}>
+                <select value={siteAppDraft.web_port} disabled={!!loading} onChange={e => { setSiteAppDraft(prev => ({ ...prev, web_port: e.target.value })); setComposePlan(null); }}>
+                  <option value="">{t('Choose for me')}</option>
                   {composeWebPorts(composePlan, siteAppDraft.web_service).map(port => <option key={port} value={port}>{port}</option>)}
                 </select>
               </label>}
@@ -11972,7 +12021,10 @@ function App() {
           <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={form.storage_limit_mb} onChange={set('storage_limit_mb')} /></label>
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" disabled={packaged} value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" disabled={packaged} value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
+          {applicationAddonInstalled && <label><span>{t('Applications')}</span><input type="number" min="0" max="100" disabled={packaged || !isAdmin} value={packaged ? (packages.find(item => String(item.id) === String(form.package_id))?.node_apps_limit ?? 0) : (form.node_apps_limit ?? 0)} onChange={set('node_apps_limit')} /></label>}
         </div>
+        {/* A custom account's own terminal (a package brings its own). */}
+        {isAdmin && !packaged && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
       </fieldset>}
       {isAdmin && form.role === 'reseller' && renderPoolInputs(form, setForm)}
       {limitsOn && form.role !== 'admin' && renderLimitInputs(form, setForm, '', packaged)}
@@ -12183,12 +12235,13 @@ function App() {
         {editingPackage && renderPackageFields(editingPackageForm, setEditingPackageForm)}
       </Drawer>
 
-      {isAdmin && <Drawer open={moveDomainOpen} onClose={() => setMoveDomainOpen(false)} title={t('Move a domain')}
+      {isAdmin && <Drawer open={moveDomainOpen} onClose={() => { if (!movingDomain) setMoveDomainOpen(false); }} title={t('Move a domain')}
         subtitle={t('Give a website to another account.')}
         footer={<>
-          <button type="button" className="secondary-light" onClick={() => setMoveDomainOpen(false)}>{t('Cancel')}</button>
-          <button type="button" disabled={!assignWebsiteId || !assignUserId || sameOwner || !!loading}
-            onClick={async () => { if (await assignDomainToUser()) setMoveDomainOpen(false); }}><ArrowRightLeft size={14} aria-hidden="true"/> {t('Move domain')}</button>
+          <button type="button" className="secondary-light" disabled={movingDomain} onClick={() => setMoveDomainOpen(false)}>{t('Cancel')}</button>
+          <button type="button" disabled={!assignWebsiteId || !assignUserId || sameOwner || !!loading || movingDomain}
+            onClick={async () => { if (await assignDomainToUser()) setMoveDomainOpen(false); }}>
+            {movingDomain ? <RefreshCw size={14} className="spin" aria-hidden="true"/> : <ArrowRightLeft size={14} aria-hidden="true"/>} {movingDomain ? t('Moving...') : t('Move domain')}</button>
         </>}>
         <div className="form-sections">
           <Field label={t('Domain')} required>
@@ -12205,6 +12258,8 @@ function App() {
           </Field>
           {movingWith.length > 0 && <p className="hint">{t('Moves with this website:')} <strong>{movingWith.join(', ')}</strong>.
             {assignPreview?.application ? ` ${t('The application restarts once.')}` : ''}</p>}
+          {movingDomain && <div className="info-box"><span className="job-progress"><span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span></span>
+            <p className="hint">{t('Moving the website: its files, database and settings go to the new account. This can take a minute for a large site; keep this sheet open.')}</p></div>}
         </div>
       </Drawer>}
     </>;
@@ -12273,6 +12328,7 @@ function App() {
           <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={form.storage_limit_mb} onChange={set('storage_limit_mb')} /></label>
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
+          {isAdmin && applicationAddonInstalled && <label><span>{t('Applications')}</span><input type="number" min="0" max="100" value={form.node_apps_limit ?? 0} onChange={set('node_apps_limit')} /></label>}
         </div>
         {canGrantTerminal && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
         {canGrantTerminal && <p className="hint">{t("A shell as the account's own Linux user: it sees its own home and its own processes only, with no root access. Administrators and resellers open it by logging in as the customer.")}</p>}
@@ -12622,6 +12678,18 @@ function App() {
             })}
           </div>
         </nav>
+        {/* The language, the theme and - for an administrator - the version,
+            opening Updates with a dot while a release waits. An end user sees
+            no version: the panel's own version is not its concern. */}
+        <div className="sidebar-foot">
+          <LanguageToggle language={language} onChange={changeLanguage} className="top-tool"/>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} className="top-tool" size={15}/>
+          {appVersion && isAdmin && <button type="button" className={`sidebar-version${panelWaiting ? ' has-update' : ''}`}
+            onClick={() => { setMobileMenuOpen(false); navigateToPage('updates'); }}
+            title={panelWaiting ? t('Panel update {version} is available.', { version: resourceUsage?.panel_update?.latest_version }) : t('Updates')}>
+            {panelSettings.app_name || 'BPanel'} v{appVersion}{panelWaiting && <i className="sidebar-version-dot" aria-hidden="true"/>}
+          </button>}
+        </div>
       </aside>
       <div className="content">
         <section className="topbar">
@@ -12638,17 +12706,16 @@ function App() {
               </h1>
               : <h1>{pageTitle}</h1>}
           </div>
-          {/* The language, the theme and the account's menu, as SNPanel has
-              them; the server's figures are the Dashboard's, and the version
-              is in the account's menu, opening Updates. */}
+          {/* The server's CPU, RAM and disk, the bell and the account's menu;
+              the language, the theme and the version are at the foot of the
+              sidebar (operator, 2026-10-24). */}
           <div className="top-actions">
+            {isAdmin && renderTopStats()}
             {currentUser && <NotificationBell summary={dashSummary} checking={dashSummaryChecking} isAdmin={isAdmin}
               currentUser={currentUser} navigateToPage={navigateToPage} onRefresh={loadDashboardSummary}/>}
-            <LanguageToggle language={language} onChange={changeLanguage} className="top-tool"/>
-            <ThemeToggle theme={theme} onToggle={toggleTheme} className="top-tool" size={15}/>
             <div className="user-menu top-user" ref={userMenuRef}>
               <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
-                <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}{panelWaiting && <i className="user-menu-dot"/>}</span>
+                <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}</span>
                 <span className="user-menu-name">{currentUser?.username || username}</span>
                 <ChevronDown size={14} className="user-menu-chevron"/>
               </button>
@@ -12660,12 +12727,6 @@ function App() {
                 <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
                 <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
                 {currentUser?.impersonator && <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); returnToImpersonator(); }}><ArrowLeft size={15}/>{t('Back to {name}', { name: currentUser.impersonator })}</button>}
-                {/* The panel's own version, and whether an update is waiting,
-                    is an administrator's concern - an end user sees neither. */}
-                {appVersion && isAdmin && <button type="button" role="menuitem" className={`user-menu-version-item${panelWaiting ? ' has-update' : ''}`} onClick={() => { setUserMenuOpen(false); navigateToPage('updates'); }}>
-                  <RefreshCw size={15}/><span>{panelSettings.app_name || 'BPanel'} v{appVersion}</span>
-                  <small>{panelWaiting ? t('Panel update {version} is available.', { version: resourceUsage?.panel_update?.latest_version }) : t('Updates')}</small>
-                </button>}
                 <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
               </div>}
             </div>
