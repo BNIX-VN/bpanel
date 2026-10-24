@@ -79,7 +79,7 @@ REVIEWED_READS = {
     "/api/git/repos/{repo_id}/operations/{operation_id}",
     "/api/sftp-accounts/limits", "/api/site-apps", "/api/site-apps/suggest-port",
     "/api/site-apps/{app_id}/logs", "/api/site-apps/{app_id}/status", "/api/site-runtimes/status",
-    "/api/terminal/info", "/api/updates/status", "/api/users", "/api/users/audit/log",
+    "/api/terminal/info", "/api/updates/changelog", "/api/updates/status", "/api/users", "/api/users/audit/log",
     # Service versions (2026-10-22): package names and versions, admin only;
     # ?refresh=true runs apt-get update, the same as the nightly apt timer.
     "/api/updates/services",
