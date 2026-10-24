@@ -29,6 +29,8 @@ logger = logging.getLogger("bpanel.backup")
 
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 BACKUP_MANIFEST = "manifest.json"
+# What a user backup could not read: one member at the end of the archive.
+BACKUP_SKIPPED = "skipped.json"
 PANEL_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
 
 # Full-user archives BPanel will restore. BPanel writes "bpanel_user"; "opanel_user"
@@ -138,7 +140,9 @@ def _ensure_user_dir(path: Path) -> Path:
     return path
 
 
-def create_user_backup(user: User, db) -> str:
+def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
+    if skipped is None:
+        skipped = []
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     backup_dir = _ensure_user_dir(_user_backup_dir(user.username))
     archive = backup_dir / f"user-{user.username}-{stamp}.tar.gz"
@@ -229,7 +233,7 @@ def create_user_backup(user: User, db) -> str:
             for website in websites:
                 root = Path(website.root_path)
                 if root.exists():
-                    tar.add(root, arcname=f"sites/{website.domain}/site")
+                    _add_tree(tar, root, f"sites/{website.domain}/site", skipped)
                 sql_path = sql_files.get(website.domain)
                 if sql_path and sql_path.exists():
                     tar.add(sql_path, arcname=f"databases/{website.domain}.sql")
@@ -238,7 +242,58 @@ def create_user_backup(user: User, db) -> str:
                     tar.add(payload, arcname=f"applications/{name}.tar")
             for arcname, box in mail_boxes:
                 _add_readable_tree(tar, box, arcname)
+            # Only known once the walk is done, so it goes last; the gap
+            # travels with the archive.
+            if skipped:
+                gaps = tmp_dir / BACKUP_SKIPPED
+                gaps.write_text(json.dumps(skipped, ensure_ascii=True, indent=2), encoding="utf-8")
+                tar.add(gaps, arcname=BACKUP_SKIPPED)
+    if skipped:
+        logger.warning("Backup of user %s skipped %d unreadable path(s): %s",
+                       user.username, len(skipped), describe_skipped(skipped))
     return str(archive)
+
+
+def _add_tree(tar: tarfile.TarFile, source, arcname: str, skipped: list) -> None:
+    """Add a site tree, recording what could not be read instead of dying.
+
+    ``tarfile.add()`` walks the tree itself and aborts the whole archive on the
+    first entry it cannot open. Site PHP runs as the site's own user and can
+    make a directory the panel cannot read at any moment: a plugin's 0700
+    backups/rapls-m16-callback-profiler cost the operator the whole backup of
+    "admin" (160.236.192.167, 2026-10-24). OPanel has done this since
+    2026-10; a silent gap would be worse, so every skipped path is listed.
+    """
+    stack = [(Path(source), arcname)]
+    while stack:
+        path, name = stack.pop()
+        try:
+            tar.add(path, arcname=name, recursive=False)
+        except (OSError, ValueError) as exc:
+            skipped.append({"path": str(path), "reason": str(exc)})
+            continue
+        # is_dir() follows symlinks; a link was stored as a link and must not
+        # be walked, or a link pointing up the tree would loop.
+        if path.is_symlink() or not path.is_dir():
+            continue
+        try:
+            children = sorted(path.iterdir())
+        except OSError as exc:
+            skipped.append({"path": str(path), "reason": str(exc)})
+            continue
+        for child in reversed(children):
+            stack.append((child, f"{name}/{child.name}"))
+
+
+def describe_skipped(skipped: list) -> str:
+    """One line naming what was left out, for the panel's run message."""
+    if not skipped:
+        return ""
+    names = ", ".join(item["path"] for item in skipped[:3])
+    if len(skipped) > 3:
+        names += f", and {len(skipped) - 3} more"
+    return (f"{len(skipped)} unreadable file(s) were skipped ({names}). "
+            "Run Fix permissions on the affected site to include them.")
 
 
 def _add_readable_tree(tar: tarfile.TarFile, root: Path, arcname: str) -> None:
