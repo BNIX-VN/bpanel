@@ -56,15 +56,18 @@ server {
 
     # BPANEL PROXY BEGIN
     location / {
-        proxy_pass http://127.0.0.1:{{ app_port }};
-        proxy_http_version 1.1;
+{% if proxy_url %}        proxy_pass {{ proxy_url }};
+{% if proxy_https %}        # The upstream's certificate is for its own name.
+        proxy_ssl_server_name on;
+{% endif %}{% else %}        proxy_pass http://127.0.0.1:{{ app_port }};
+{% endif %}        proxy_http_version 1.1;
 
         # WebSocket upgrade. $connection_upgrade comes from the map in
         # /etc/nginx/conf.d/00-bpanel-upgrade-map.conf.
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
 
-        proxy_set_header Host $host;
+        proxy_set_header Host {{ proxy_host_header }};
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;

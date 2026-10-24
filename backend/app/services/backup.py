@@ -193,6 +193,8 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
                 "domain": website.domain,
                 "php_version": website.php_version,
                 "app_type": website.app_type or "wordpress",
+                "proxy_url": getattr(website, "proxy_url", "") or "",
+                "proxy_preserve_host": getattr(website, "proxy_preserve_host", True) is not False,
                 "status": website.status or "active",
                 "document_root": getattr(website, "document_root", "public_html") or "public_html",
                 "nginx_custom": website.nginx_custom or "",
@@ -679,7 +681,14 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 raise ValueError(f"Invalid domain in backup: {domain}")
             php_version = site_info.get("php_version") or settings.default_php_version
             app_type = site_info.get("app_type") or "wordpress"
-            if app_type not in {"wordpress", "php", "static"}:
+            proxy_url = ""
+            if app_type == "proxy":
+                # Restored by the administrator, who may name any address.
+                try:
+                    proxy_url = nginx.validate_proxy_url(site_info.get("proxy_url"))
+                except ValueError:
+                    app_type = "static"
+            if app_type not in {"wordpress", "php", "static", "proxy"}:
                 app_type = "wordpress"
             nginx_rewrite_mode = site_info.get("nginx_rewrite_mode")
             if nginx_rewrite_mode not in {"none", "front_controller", "laravel", "codeigniter", "seohburl"}:
@@ -714,6 +723,8 @@ def restore_user_backup(backup_file: str, db) -> dict:
                     linux_user=linux_user,
                     php_version=php_version,
                     app_type=app_type,
+                    proxy_url=proxy_url,
+                    proxy_preserve_host=site_info.get("proxy_preserve_host", True) is not False,
                     ssl_enabled=False,
                     status=site_info.get("status") or "active",
                     nginx_custom=site_info.get("nginx_custom") or "",
@@ -741,6 +752,8 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 website.linux_user = linux_user
                 website.php_version = php_version
                 website.app_type = app_type
+                website.proxy_url = proxy_url
+                website.proxy_preserve_host = site_info.get("proxy_preserve_host", True) is not False
                 website.status = site_info.get("status") or "active"
                 website.nginx_custom = site_info.get("nginx_custom") or ""
                 website.nginx_config_mode = "managed"
@@ -819,6 +832,8 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 document_root=document_root,
                 rewrite_mode=nginx_rewrite_mode,
                 aliases=backup_aliases,
+                proxy_url=proxy_url,
+                proxy_preserve_host=site_info.get("proxy_preserve_host", True) is not False,
             )
             if not website.http_flood_enabled:
                 result = nginx.sync_http_flood_zones(db.query(Website).all())

@@ -2705,6 +2705,13 @@ export const vi = {
   "CPU: open the process monitor": "CPU: mở trình theo dõi tiến trình",
   "RAM: where the memory is": "RAM: bộ nhớ đang dùng vào đâu",
   "Disk: what takes the space": "Ổ đĩa: cái gì chiếm dung lượng",
+  "Proxy to": "Chuyển tiếp tới",
+  "Enter the address to proxy to, for example http://127.0.0.1:3000": "Nhập địa chỉ cần chuyển tiếp tới, ví dụ http://127.0.0.1:3000",
+  "Send the visitor's Host header (off: the address's own)": "Gửi Host của người truy cập (tắt: dùng Host của địa chỉ đích)",
+  "Any http:// or https:// address, this server included (http://127.0.0.1:3000).": "Bất kỳ địa chỉ http:// hoặc https:// nào, kể cả trên server này (http://127.0.0.1:3000).",
+  "A public http:// or https:// address.": "Một địa chỉ http:// hoặc https:// công khai.",
+  "Created {domain}, proxying to {target}.": "Đã tạo {domain}, chuyển tiếp tới {target}.",
+  "Nginx will forward this domain to the address above, with WebSocket upgrades and the visitor's address in X-Forwarded-For. SSL, the WAF and the access log stay on this server.": "Nginx sẽ chuyển tiếp domain này tới địa chỉ ở trên, hỗ trợ WebSocket và gửi IP người truy cập trong X-Forwarded-For. SSL, WAF và log truy cập vẫn nằm trên server này.",
 };
 
 /* Said in English by the people who run these servers. Translating them

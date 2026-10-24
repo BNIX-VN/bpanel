@@ -271,3 +271,11 @@ def test_older_accounts_take_their_packages_setting():
     db.commit()
     got = {name: db.get(User, user.id).terminal_enabled for name, user in people.items()}
     assert got == {"on_shell": True, "on_plain": False, "no_package": False}
+
+
+def test_global_npm_and_composer_installs_land_in_the_account_home():
+    # /usr is read-only in the sandbox: `npm install -g` failed with EACCES
+    # (operator, 2026-10-24). The prefix is ~/.local and its bin is on PATH.
+    assert '-E "npm_config_prefix=$home/.local"' in SESSION_FN
+    assert 'path_value="$home/.local/bin:$home/.composer/vendor/bin:$path_value"' in SESSION_FN
+    assert SESSION_FN.index("$home/.local/bin") < SESSION_FN.index('props+=(-E "PATH=$path_value")')

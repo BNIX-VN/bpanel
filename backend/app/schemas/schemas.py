@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
-SUPPORTED_APP_TYPES = {"wordpress", "php", "static", "application"}
+SUPPORTED_APP_TYPES = {"wordpress", "php", "static", "application", "proxy"}
 SUPPORTED_NGINX_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 SUPPORTED_ROLES = {"admin", "end_user"}
 SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
@@ -487,6 +487,9 @@ class WebsiteCreate(BaseModel):
     app_type: str = "wordpress"
     # Required when app_type is "application": which installed app to serve.
     app_id: Optional[int] = None
+    # Required when app_type is "proxy": the http(s) address to forward to.
+    proxy_url: Optional[str] = Field(default=None, max_length=500)
+    proxy_preserve_host: bool = True
     install_wordpress: bool = True
     title: str = "My WordPress Site"
     admin_user: str = "admin"
@@ -545,6 +548,8 @@ class WebsiteUpdate(BaseModel):
     php_version: Optional[str] = None
     app_type: Optional[str] = None
     app_id: Optional[int] = None
+    proxy_url: Optional[str] = Field(default=None, max_length=500)
+    proxy_preserve_host: Optional[bool] = None
     document_root: Optional[str] = None
     status: Optional[str] = None
     owner_id: Optional[int] = None
@@ -915,6 +920,8 @@ class WebsiteOut(BaseModel):
     crs_active: bool = False
     wordpress_installed: bool = False
     app_id: Optional[int] = None
+    proxy_url: str = ""
+    proxy_preserve_host: bool = True
     aliases: list[WebsiteAliasOut] = Field(default_factory=list)
 
     class Config:

@@ -78,7 +78,7 @@ const CRON_PRESETS = [
 ];
 const normalizeCron = value => String(value || '').trim().split(/\s+/).join(' ');
 // How a site's app_type is written wherever a person reads it.
-const APP_TYPE_LABELS = { wordpress: 'WordPress', php: 'PHP', static: 'Static', application: 'App' };
+const APP_TYPE_LABELS = { wordpress: 'WordPress', php: 'PHP', static: 'Static', application: 'App', proxy: 'Nginx proxy' };
 const DEFAULT_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
 const HTTP_FLOOD_DEFAULTS = {
   access_limit_requests: 100,
@@ -389,7 +389,14 @@ const WEBSITE_MODES = [
   ['php', 'PHP'],
   ['static', 'Static'],
   ['application', 'Application'],
+  // Nginx in front of any http(s) address (operator, 2026-10-24).
+  ['proxy', 'Nginx proxy'],
 ];
+
+// A mode with no PHP of its own: static files, or a reverse proxy.
+function isPhplessMode(appType) {
+  return appType === 'static' || appType === 'proxy' || isProxiedAppType(appType);
+}
 
 function isProxiedAppType(appType) {
   return PROXIED_APP_TYPES.includes(appType);
@@ -401,9 +408,11 @@ function websiteConfigForm(site = {}) {
     app_type: appType,
     php_version: site.php_version || '8.4',
     app_id: site.app_id ? String(site.app_id) : '',
+    proxy_url: site.proxy_url || '',
+    proxy_preserve_host: site.proxy_preserve_host !== false,
     nginx_rewrite_mode: appType === 'wordpress'
       ? 'front_controller'
-      : appType === 'static' || isProxiedAppType(appType)
+      : isPhplessMode(appType)
         ? 'none'
         : site.nginx_rewrite_mode || 'none',
   };
@@ -800,6 +809,8 @@ function App() {
   const [wpAdminPassword, setWpAdminPassword] = useState('');
   const [phpVersion, setPhpVersion] = useState('8.4');
   const [siteType, setSiteType] = useState('wordpress');
+  const [createProxyUrl, setCreateProxyUrl] = useState('');
+  const [createProxyPreserve, setCreateProxyPreserve] = useState(true);
   const [createSslMode, setCreateSslMode] = useState('none'); // none|letsencrypt|wildcard|shared|manual
   const [createSslToken, setCreateSslToken] = useState(''); // Cloudflare token for the wildcard mode
   const [createSslManual, setCreateSslManual] = useState({ certificate: '', private_key: '', ca_bundle: '' }); // the Manual tab's paste-in
@@ -2621,6 +2632,10 @@ function App() {
       setError(t('Pick which application this website should serve.'));
       return;
     }
+    if (siteType === 'proxy' && !createProxyUrl.trim()) {
+      setError(t('Enter the address to proxy to, for example http://127.0.0.1:3000'));
+      return;
+    }
     const body = {
       domain: cleanDomain,
       php_version: phpVersion,
@@ -2630,6 +2645,7 @@ function App() {
     };
     if (siteOwnerId) body.owner_id = Number(siteOwnerId);
     if (siteType === 'application') body.app_id = Number(createSiteAppId);
+    if (siteType === 'proxy') { body.proxy_url = createProxyUrl.trim(); body.proxy_preserve_host = !!createProxyPreserve; }
     // Blank means a random one, as the form says; it was a fixed
     // 'StrongPass123!', the same on every site made without one.
     const wpPassword = installWp ? (wpAdminPassword || generatePassword()) : '';
@@ -2646,6 +2662,9 @@ function App() {
       } else if (siteType === 'application') {
         setNotice(`Created ${cleanDomain}, serving the selected application.`);
         setCreateSiteAppId('');
+      } else if (siteType === 'proxy') {
+        setNotice(t('Created {domain}, proxying to {target}.', { domain: cleanDomain, target: createProxyUrl.trim() }));
+        setCreateProxyUrl('');
       } else {
         setNotice(`Created site ${cleanDomain}. Upload your files to public_html/ folder.`);
       }
@@ -3567,9 +3586,16 @@ function App() {
     const nextPhp = websiteSettingsForm.php_version || original.php_version || '8.4';
     const nextRewrite = nextAppType === 'wordpress'
       ? 'front_controller'
-      : nextAppType === 'static' || isProxiedAppType(nextAppType)
+      : isPhplessMode(nextAppType)
         ? 'none'
         : websiteSettingsForm.nginx_rewrite_mode || 'none';
+    if (nextAppType === 'proxy') {
+      const target = (websiteSettingsForm.proxy_url || '').trim();
+      if (!target) { setError(t('Enter the address to proxy to, for example http://127.0.0.1:3000')); return; }
+      if (target !== (original.proxy_url || '') || nextAppType !== original.app_type) body.proxy_url = target;
+      const keep = websiteSettingsForm.proxy_preserve_host !== false;
+      if (keep !== (original.proxy_preserve_host !== false)) body.proxy_preserve_host = keep;
+    }
 
     if (isProxiedAppType(nextAppType)) {
       if (siteApps.items.length === 0) {
@@ -3585,7 +3611,7 @@ function App() {
       }
     }
     if (nextAppType !== (original.app_type || 'wordpress')) body.app_type = nextAppType;
-    if (nextAppType !== 'static' && !isProxiedAppType(nextAppType) && nextPhp !== original.php_version) body.php_version = nextPhp;
+    if (!isPhplessMode(nextAppType) && nextPhp !== original.php_version) body.php_version = nextPhp;
     if (nextRewrite !== (original.nginx_rewrite_mode || (original.app_type === 'wordpress' ? 'front_controller' : 'none'))) {
       body.nginx_rewrite_mode = nextRewrite;
     }
@@ -8149,7 +8175,12 @@ function App() {
           <option value="">{t('Select an application')}</option>
           {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
         </select></label>}
-        {selectedAppType !== 'static' && !proxied && <label><span>{t('PHP version')}</span><select
+{selectedAppType === 'proxy' && <label className="span-all"><span>{t('Proxy to')}</span><input
+          value={websiteSettingsForm.proxy_url || ''} placeholder="http://127.0.0.1:3000" spellCheck={false} autoCapitalize="none"
+          onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, proxy_url: e.target.value }))} disabled={!!loading}/></label>}
+        {selectedAppType === 'proxy' && <label className="check-line span-all"><input type="checkbox" checked={websiteSettingsForm.proxy_preserve_host !== false}
+          onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, proxy_preserve_host: e.target.checked }))} disabled={!!loading}/> {t("Send the visitor's Host header (off: the address's own)")}</label>}
+        {!isPhplessMode(selectedAppType) && <label><span>{t('PHP version')}</span><select
           value={websiteSettingsForm.php_version}
           onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, php_version: e.target.value }))}
           disabled={!!loading}
@@ -8348,7 +8379,11 @@ function App() {
               >{t(label)}</option>)}
             </select>
           </Field>
-          {siteType === 'application'
+          {siteType === 'proxy'
+            ? <Field className="is-wide" label={t('Proxy to')} hint={isAdmin ? t('Any http:// or https:// address, this server included (http://127.0.0.1:3000).') : t('A public http:// or https:// address.')}>
+              <input value={createProxyUrl} onChange={e => setCreateProxyUrl(e.target.value)} placeholder="http://127.0.0.1:3000" spellCheck={false} autoCapitalize="none"/>
+            </Field>
+            : siteType === 'application'
             ? <Field label={t('Application')}>
               <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
                 <option value="">{t('Select an application')}</option>
@@ -8363,6 +8398,8 @@ function App() {
         </div>
         {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">{t('No applications installed yet. Install one on the')}<button type="button" className="link-button" onClick={() => navigateToPage('applications')}>{t('Applications')}</button> page first.
         </p>}
+        {siteType === 'proxy' && <Checkbox checked={createProxyPreserve} onChange={setCreateProxyPreserve}
+          label={t("Send the visitor's Host header (off: the address's own)")}/>}
         {siteType === 'wordpress' && <Checkbox checked={installWordPress} onChange={setInstallWordPress}
           label={t('Install WordPress (creates database, downloads WP, configures vhost)')}/>}
         {wpFieldsEnabled && <div className="sn-drawer-section">
@@ -8401,6 +8438,8 @@ function App() {
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
           : siteType === 'application'
             ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
+          : siteType === 'proxy'
+            ? 'Nginx will forward this domain to the address above, with WebSocket upgrades and the visitor\'s address in X-Forwarded-For. SSL, the WAF and the access log stay on this server.'
             : 'A virtual host will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
         </form>
       </Drawer>
@@ -8520,7 +8559,8 @@ function App() {
     const owner = users.find(user => String(user.id) === String(site.owner_id));
     const typeLabel = t(APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type);
     const facts = [typeLabel];
-    if (site.app_type !== 'static' && !isProxiedAppType(site.app_type)) facts.push(`PHP ${site.php_version}`);
+    if (!isPhplessMode(site.app_type)) facts.push(`PHP ${site.php_version}`);
+    if (site.app_type === 'proxy' && site.proxy_url) facts.push(`→ ${site.proxy_url}`);
     if (canManageUsers && owner) facts.push(t('Owner: {name}', { name: owner.username }));
     const menuItems = [
       { label: t('File manager'), icon: FolderOpen, onClick: () => openWebsiteFileManager(site) },
@@ -8554,7 +8594,7 @@ function App() {
   function renderSiteOverview(site, owner, typeLabel, goTab) {
     const rewrite = NGINX_REWRITE_MODES.find(mode => mode.value === site.nginx_rewrite_mode);
     const sslModes = { manual: t('Manual SSL'), cloudflare: t('Wildcard SSL'), shared: t('Existing certificate') };
-    const php = site.app_type === 'static' || isProxiedAppType(site.app_type) ? '' : site.php_version;
+    const php = isPhplessMode(site.app_type) ? '' : site.php_version;
     const servingApp = isProxiedAppType(site.app_type) ? siteApps.items.find(app => String(app.id) === String(site.app_id)) : null;
     const locale = language === 'vi' ? 'vi-VN' : 'en-GB';
     return <div className="wsd-overview">
@@ -8595,7 +8635,7 @@ function App() {
               <button type="button" className="secondary-light" disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={14} aria-hidden="true"/> {t('Update WordPress (core + plugins + themes)')}</button>
             </div>
           </>
-          : isProxiedAppType(site.app_type) || site.app_type === 'static'
+          : isPhplessMode(site.app_type)
             ? <p className="hint">{t('This website does not run PHP, so WordPress cannot be installed on it.')}</p>
             : <>
               <p className="hint">{t('Creates a database, downloads WordPress, configures vhost.')}</p>
@@ -8658,7 +8698,7 @@ function App() {
     const appType = form.app_type || 'wordpress';
     const proxied = isProxiedAppType(appType);
     const rewriteFixed = appType !== 'php';
-    const dirty = ready && ['app_type', 'php_version', 'app_id', 'nginx_rewrite_mode'].some(key => String(form[key] ?? '') !== String(base[key] ?? ''));
+    const dirty = ready && ['app_type', 'php_version', 'app_id', 'nginx_rewrite_mode', 'proxy_url', 'proxy_preserve_host'].some(key => String(form[key] ?? '') !== String(base[key] ?? ''));
     const set = patch => setWebsiteSettingsForm(prev => ({ ...prev, ...patch }));
     return <section className="section">
       <PageHeader title={t('How the website runs')} subtitle={t('Managed settings rewrite the main vhost safely. Custom Nginx is still stored as a separate include.')}/>
@@ -8677,7 +8717,13 @@ function App() {
             {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
           </select>
         </Field>}
-        {appType !== 'static' && !proxied && <Field label={t('PHP version')}>
+{appType === 'proxy' && <Field className="is-wide" label={t('Proxy to')} hint={isAdmin ? t('Any http:// or https:// address, this server included (http://127.0.0.1:3000).') : t('A public http:// or https:// address.')}>
+          <input value={form.proxy_url || ''} placeholder="http://127.0.0.1:3000" spellCheck={false} autoCapitalize="none"
+            disabled={!ready || !!loading} onChange={e => set({ proxy_url: e.target.value })}/>
+        </Field>}
+        {appType === 'proxy' && <Checkbox checked={form.proxy_preserve_host !== false} onChange={v => set({ proxy_preserve_host: v })}
+          label={t("Send the visitor's Host header (off: the address's own)")}/>}
+        {!isPhplessMode(appType) && <Field label={t('PHP version')}>
           <select value={form.php_version} disabled={!ready || !!loading} onChange={e => set({ php_version: e.target.value })}>
             {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
           </select>
@@ -12682,8 +12728,8 @@ function App() {
             opening Updates with a dot while a release waits. An end user sees
             no version: the panel's own version is not its concern. */}
         <div className="sidebar-foot">
-          <LanguageToggle language={language} onChange={changeLanguage} className="top-tool"/>
-          <ThemeToggle theme={theme} onToggle={toggleTheme} className="top-tool" size={15}/>
+          <LanguageToggle language={language} onChange={changeLanguage} className="sidebar-tool"/>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} className="sidebar-tool" size={15}/>
           {appVersion && isAdmin && <button type="button" className={`sidebar-version${panelWaiting ? ' has-update' : ''}`}
             onClick={() => { setMobileMenuOpen(false); navigateToPage('updates'); }}
             title={panelWaiting ? t('Panel update {version} is available.', { version: resourceUsage?.panel_update?.latest_version }) : t('Updates')}>

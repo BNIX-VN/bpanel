@@ -184,6 +184,10 @@ class Website(Base):
     app_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("site_apps.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Set when app_type is "proxy": the http(s) address nginx forwards to, and
+    # whether the visitor's Host header goes with it (nginx.validate_proxy_url).
+    proxy_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    proxy_preserve_host: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     owner: Mapped[User] = relationship(back_populates="websites")
