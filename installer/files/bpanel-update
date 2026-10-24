@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bpanel-update: fetch the updater from GitHub, then run it.
+# bpanel-update: fetch the updater from git (GitLab, or a GitHub mirror), then run it.
 #
 # This command deliberately does nothing else. It works out which release (or
 # branch) is being installed, downloads that ref's installer/update.sh, checks
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 main() {
-  local repo_url="${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}"
+  local repo_url="${REPO_URL:-https://gitlab.sieunhim.com/bnix/bpanel.git}"
   local channel="${UPDATE_CHANNEL:-release}" branch="${BRANCH:-main}" tag="${RELEASE_TAG:-}"
   local pattern="${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}"
   local state_file="${UPDATE_STATE_FILE:-/var/lib/bpanel/update-status.json}"
@@ -85,11 +85,24 @@ PY
     url="${BPANEL_UPDATER_URL//\{ref\}/$ref}"
   else
     case "$repo_url" in
-      https://github.com/*) url="${repo_url%.git}" ;;
-      git@github.com:*) url="https://github.com/${repo_url#git@github.com:}"; url="${url%.git}" ;;
+      https://github.com/*|git@github.com:*)
+        url="https://github.com/${repo_url#*github.com[:/]}"; url="${url%.git}"
+        url="https://raw.githubusercontent.com/${url#https://github.com/}/${url_ref}/installer/update.sh"
+        ;;
+      # Any other host is taken as GitLab (gitlab.sieunhim.com, since v1.7.2).
+      # v1.7.2 moved the panel there and the helper passes that REPO_URL, but
+      # this case was left knowing GitHub only: every Update click failed
+      # with "Cannot tell where the updater ... is" (160.236.192.167,
+      # 2026-10-24).
+      https://*)
+        url="${repo_url%.git}/-/raw/${ref}/installer/update.sh"
+        ;;
+      git@*:*)
+        url="${repo_url#git@}"; url="https://${url%%:*}/${url#*:}"
+        url="${url%.git}/-/raw/${ref}/installer/update.sh"
+        ;;
       *) fail "Cannot tell where the updater of ${repo_url} is; set BPANEL_UPDATER_URL." ;;
     esac
-    url="https://raw.githubusercontent.com/${url#https://github.com/}/${url_ref}/installer/update.sh"
   fi
 
   work="$(mktemp -d /tmp/bpanel-updater.XXXXXX)"
