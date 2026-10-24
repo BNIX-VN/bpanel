@@ -70,10 +70,22 @@ def test_render_site_rules_includes_laravel_and_php_rules():
 
 
 def test_default_rules_do_not_scan_request_body_or_headers():
-    content = waf.render_site_rules("example.com", [rule["id"] for rule in waf.DEFAULT_RULES])
+    content = waf.render_site_rules("example.com", [rule["id"] for rule in waf.DEFAULT_RULES if rule["id"] != "php2shell"])
 
     assert "REQUEST_BODY" not in content
     assert "REQUEST_HEADERS" not in content
+
+def test_php2shell_reads_only_form_fields_and_the_content_type():
+    """The one group that reads bodies (2026-10-24): parsed form field names,
+    counts and upload file names - never the raw body - and of the headers
+    only Content-Type, to pick the form POSTs."""
+    import re
+
+    content = waf.render_site_rules("example.com", ["php2shell"])
+    assert "REQUEST_BODY" not in content
+    assert set(re.findall(r"REQUEST_HEADERS:[\w-]+", content)) == {"REQUEST_HEADERS:Content-Type"}
+    assert "ctl:requestBodyAccess=On" in content
+
 
 
 def test_waf_rules_are_phase_1():
@@ -94,6 +106,15 @@ def test_waf_rules_are_phase_1():
         rule["id"] for rule in waf.DEFAULT_RULES if "phase:1," not in rule["rules"]
     ]
     assert offenders == [], f"these rules would never fire: {offenders}"
+    # A group may read bodies (php2shell, 2026-10-24) only by turning them on
+    # itself, in phase 1, before its phase 2 rules: libmodsecurity skips phase
+    # 2 while the transaction has body access off.
+    for rule in waf.DEFAULT_RULES:
+        if "phase:2" not in rule["rules"]:
+            continue
+        first = rule["rules"].strip().splitlines()[0]
+        assert "phase:1" in first and "ctl:requestBodyAccess=On" in first, (
+            f"{rule['id']}: phase:2 rules without turning request bodies on first")
 
 
 def test_removing_site_rules_goes_through_the_helper(monkeypatch):

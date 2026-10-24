@@ -555,13 +555,20 @@ write_modsec_base_conf() {
     # off the nginx connector never runs phase 2 at all, so a phase:2 rule is
     # silently dead - it loads, it shows as enabled, and it never matches.
     # Every rule BPanel ships is therefore phase:1, which sees the URI and the
-    # query string. test_waf_rules_are_phase_1 enforces that.
+    # query string, except a group that turns bodies on for its own requests
+    # first (php2shell). test_waf_rules_are_phase_1 enforces that.
     #
     # Turning this on is what a payload-inspecting rule set (OWASP CRS) needs,
     # and it must arrive together with CRS's exclusion tuning: on its own it
     # would make the traversal rule match "../" inside any post body a customer
     # saves.
     echo "SecRequestBodyAccess Off"
+    # The php2shell group turns bodies on for form POSTs (ctl:requestBodyAccess
+    # in its first rule), and these limits are what then apply. ProcessPartial:
+    # a large upload is inspected as far as the limit and passed, never refused.
+    echo "SecRequestBodyLimit 16777216"
+    echo "SecRequestBodyNoFilesLimit 1048576"
+    echo "SecRequestBodyLimitAction ProcessPartial"
   } >/etc/nginx/modsec/bpanel-base.conf
 }
 
@@ -587,6 +594,16 @@ SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/artisan(?:$|[?])|/server\.php(?:
 SecRule REQUEST_URI "@rx (?i)(?:/_ignition/execute-solution(?:$|[?]))" "id:1001202,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel Ignition RCE probe'"
 SecRule REQUEST_URI "@rx (?i)(?:/wp-config\.php(?:\.|$|[?])|/wp-content/(?:uploads|cache|upgrade)/[^?]*\.php(?:$|[?])|/wp-admin/includes/[^?]*\.php(?:$|[?])|/wp-includes/[^?]*\.php(?:$|[?]))" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'"
 SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'"
+# php2shell (CVE-2026-109618/109619/115560): see waf.py's php2shell group.
+SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*(?:multipart/form-data|application/x-www-form-urlencoded)" "id:1003001,phase:1,pass,nolog,ctl:requestBodyAccess=On"
+SecRule ARGS_POST_NAMES "@rx (?i)^php_session_upload_progress$" "id:1003002,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell upload progress field'"
+SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*multipart/form-data" "id:1003003,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell multipart field flood',chain"
+  SecRule &ARGS_POST "@gt 400" "t:none"
+SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*multipart/form-data" "id:1003004,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell multipart file flood',chain"
+  SecRule &FILES "@gt 100" "t:none"
+SecRule ARGS_NAMES "@rx (?:\[[^\]]*\]){16}" "id:1003005,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell nested field name'"
+SecRule ARGS_NAMES "@gt 1024" "id:1003006,phase:2,t:none,t:length,deny,status:403,log,msg:'BPanel blocked php2shell oversized field name'"
+SecRule FILES "@rx (?i)<\?php|\|O:\d+:|[\x00-\x08\x0b\x0c\x0e-\x1f]" "id:1003007,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell upload file name'"
 RULES
 }
 
@@ -4487,6 +4504,51 @@ install_php_extension() {
   echo "$pkg is ready; php${version}-fpm reloaded."
 }
 
+# php2shell (CVE-2026-109619, and CVE-2026-115560): PHP's own mitigation is
+# session upload progress off - it runs while PHP parses a request, before any
+# script and without session_start() - and on 8.5 fatal error backtraces off
+# too. Patched branches (8.2.35, 8.3.36, 8.4.27, 8.5.12) do not need it; Sury's
+# 8.1 (8.1.34-9) and everything older get no fix (operator, 2026-10-24: "các
+# bản php cũ không được cập nhật bản vá"). Every PHP gets it in conf.d; each
+# site's pool also sets it as php_admin_value (ensure_php_pool), so a site's
+# .user.ini cannot turn it back on. No WordPress uses upload progress.
+php2shell_ini_lines() {
+  local version="$1"
+  echo "; Managed by BPanel: php2shell mitigation (CVE-2026-109619, CVE-2026-115560)."
+  echo "session.upload_progress.enabled = 0"
+  [[ "$version" == 8.5 || "$version" > 8.5 ]] && echo "fatal_error_backtraces = 0"
+  return 0
+}
+
+ensure_php2shell_ini() {
+  local dir version sapi ini tmp changed_versions=()
+  for dir in /etc/php/*/; do
+    version="$(basename "$dir")"
+    [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]] || continue
+    local changed=0
+    for sapi in fpm cli; do
+      [[ -d "/etc/php/${version}/${sapi}/conf.d" ]] || continue
+      ini="/etc/php/${version}/${sapi}/conf.d/97-bpanel-php2shell.ini"
+      tmp="$(mktemp)"
+      php2shell_ini_lines "$version" >"$tmp"
+      if ! cmp -s "$tmp" "$ini"; then
+        install -m 0644 -o root -g root "$tmp" "$ini"
+        changed=1
+      fi
+      rm -f "$tmp"
+    done
+    (( changed )) && changed_versions+=("$version")
+  done
+  for version in "${changed_versions[@]}"; do
+    # New workers read it; reload starts them.
+    systemctl reload "php${version}-fpm" 2>/dev/null || true
+  done
+  if (( ${#changed_versions[@]} )); then
+    echo "PHP: session upload progress off for php2shell (${changed_versions[*]})"
+  fi
+  return 0
+}
+
 install_php_version() {
   local version="$1"
   export DEBIAN_FRONTEND=noninteractive
@@ -4536,6 +4598,7 @@ install_php_version() {
   apt-get install -y "${available_packages[@]}" || { echo "Failed to install PHP $version"; return 1; }
   install_ioncube_loader "$version"
   # Enable and start PHP-FPM
+  ensure_php2shell_ini >/dev/null || true
   systemctl enable "php${version}-fpm" 2>/dev/null || true
   systemctl start "php${version}-fpm" 2>/dev/null || true
   echo "PHP $version installed successfully"
@@ -7990,6 +8053,11 @@ ensure_php_pool() {
   if [[ -f "${PHP_BASEDIR_ROOT}/${user}-${site_hash}" ]]; then
     basedir_line="php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:${tmp_dir}:/usr/share/php"
   fi
+  # php2shell (see ensure_php2shell_ini); 8.5 also needs backtraces off.
+  local php2shell_pool_extra="; php2shell: fatal_error_backtraces exists from PHP 8.5"
+  if [[ "$php_version" == 8.5 || "$php_version" > 8.5 ]]; then
+    php2shell_pool_extra="php_admin_value[fatal_error_backtraces] = 0"
+  fi
   ensure_php_runtime_dirs "$user"
   calculate_php_fpm_pool_tuning "$pool_file"
   cat >"$pool_file" <<POOL
@@ -8012,6 +8080,8 @@ request_terminate_timeout = ${PHP_FPM_REQUEST_TERMINATE_TIMEOUT}s
 chdir = /
 ${basedir_line}
 php_admin_value[upload_tmp_dir] = ${upload_dir}
+php_admin_value[session.upload_progress.enabled] = 0
+${php2shell_pool_extra}
 php_admin_value[session.save_path] = ${sess_dir}
 php_admin_value[sys_temp_dir] = ${tmp_dir}
 env[TMPDIR] = ${tmp_dir}
@@ -9201,6 +9271,11 @@ case "$cmd" in
   php-fpm-retune)
     [[ $# -eq 0 ]] || deny "usage: php-fpm-retune"
     retune_php_fpm_pools
+    ;;
+
+  php2shell-ini)
+    [[ $# -eq 0 ]] || deny "usage: php2shell-ini"
+    ensure_php2shell_ini
     ;;
 
   mariadb-retune)
