@@ -1258,6 +1258,8 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
         way_in = {"application": "applications: { label: msg('Applications'), icon: 'applications', page: 'applications', when: (c) => c.appsFeatureEnabled },",
                   # No page of its own: its ban list is a section of the Firewall page.
                   "fail2ban": "firewall: { label: msg('Firewall'), icon: 'firewall', page: 'firewall', roles: ['admin'] },",
+                  # Also a section of the Firewall page: its status on the collector.
+                  "sharedblocklist": "firewall: { label: msg('Firewall'), icon: 'firewall', page: 'firewall', roles: ['admin'] },",
                   "malware": "page: 'malware', addon: 'malware'",
                   "mcp": "page: 'mcp', addon: 'mcp'",
                   # No page of its own: its accounts are set on its card in Addons.

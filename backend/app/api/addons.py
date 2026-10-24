@@ -39,6 +39,25 @@ def _install_failure(exc: Exception) -> str:
     return message[:500] or "The install failed and said nothing about why."
 
 
+@router.get("/sharedblocklist/status")
+def get_shared_blocklist(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    addons.require(addons.SHARED_BLOCKLIST)
+    from app.services import shared_blocklist
+
+    return shared_blocklist.status()
+
+
+@router.post("/sharedblocklist/check")
+def check_shared_blocklist(current_user: User = Depends(get_current_user)):
+    """Ask the collector whether this server was approved, now."""
+    ensure_role(current_user.role, Role.admin)
+    addons.require(addons.SHARED_BLOCKLIST)
+    from app.services import shared_blocklist
+
+    return shared_blocklist.check_now()
+
+
 @router.get("")
 def list_addons(current_user: User = Depends(get_current_user)):
     """What the panel can do, and what it is currently doing.
@@ -127,6 +146,11 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
     if slug == addons.LIMITS:
         # Every account into its slice now, with the limits already set.
         resource_limits.sync_quietly(db)
+    if slug == addons.SHARED_BLOCKLIST:
+        # Registered and subscribed now rather than at the next minute tick.
+        from app.services import shared_blocklist
+
+        shared_blocklist.reconcile_in_background()
     log_action(db, current_user.id, "install_addon", slug, record.get("version", ""))
     return {
         "slug": slug,
@@ -149,7 +173,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
                             "Every domain on the server now has its DNS zone. Open DNS to check the nameservers, then point your domains at them."
                             if slug == addons.DNS else (
                                 "Open Email to make the first mailbox. The webmail is on port 2096 of the panel's address."
-                                if slug == addons.MAIL else ""
+                                if slug == addons.MAIL else (
+                                    "This server is registering with the collector; its status is on the Firewall page."
+                                    if slug == addons.SHARED_BLOCKLIST else ""
+                                )
                             )
                         )
                     )
@@ -226,6 +253,11 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         # their passwords are on the sign-in page and in every screenshot.
         retired = demo_mode.switch_off(db)
     addons.uninstall(slug)
+    if slug == addons.SHARED_BLOCKLIST:
+        # The list off the firewall and the key forgotten, now.
+        from app.services import shared_blocklist
+
+        shared_blocklist.reconcile_in_background()
     log_action(db, current_user.id, "uninstall_addon", slug, f"stopped {len(stopped)} revoked {revoked}")
     return {
         "slug": slug,

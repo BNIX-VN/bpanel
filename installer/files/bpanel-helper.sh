@@ -5725,17 +5725,80 @@ firewall_blocklist_status() {
   systemctl list-timers bpanel-blocklist.timer --no-pager 2>/dev/null || true
 }
 
+# --- Shared blocklist addon (backend: services/shared_blocklist.py) ------------
+# What this server saw after <since> (unix time), one "time<TAB>source<TAB>ip"
+# a line: Fail2ban bans from its database, and the WAF denials nginx logs, on
+# the rules only an attack trips (php2shell, wp2shell, .env/.git/key/webshell
+# probes, Ignition RCE) - never SQL/XSS heuristics or bad bots, which a real
+# visitor can trip.
+shared_blocklist_events() {
+  local since="${1:-}"
+  [[ "$since" =~ ^[0-9]{1,12}$ ]] || deny "usage: shared-blocklist-events <unix-time>"
+  python3 - "$since" /var/lib/fail2ban/fail2ban.sqlite3 /var/log/nginx <<'PY'
+import glob, ipaddress, os, re, sqlite3, sys, time
+
+since, db, logs = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+WAF_IDS = {"1000001", "1000002", "1001202", "1001301", "1001303", "1001401",
+           "1003002", "1003003", "1003004", "1003005", "1003006", "1003007"}
+rows = []
+
+if os.path.exists(db):
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        for jail, ip, at in conn.execute(
+                "SELECT jail, ip, timeofban FROM bans WHERE timeofban > ? ORDER BY timeofban LIMIT 5000", (since,)):
+            rows.append((int(at), f"fail2ban:{jail}", ip))
+    except sqlite3.Error as exc:
+        print(f"fail2ban: {exc}", file=sys.stderr)
+
+line_re = re.compile(r'^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \[error\] .*?\[client ([0-9A-Fa-f:.]+)\] ModSecurity: Access denied.*?\[id "(\d+)"\]')
+for path in sorted(glob.glob(os.path.join(logs, "*.error.log")))[:500]:
+    try:
+        if os.path.getmtime(path) <= since:
+            continue
+        with open(path, "rb") as handle:
+            size = os.path.getsize(path)
+            handle.seek(max(0, size - 4 * 1024 * 1024))
+            text = handle.read().decode("utf-8", "replace")
+    except OSError:
+        continue
+    for line in text.splitlines():
+        if "ModSecurity: Access denied" not in line:
+            continue
+        match = line_re.match(line)
+        if not match or match.group(3) not in WAF_IDS:
+            continue
+        try:
+            at = int(time.mktime(time.strptime(match.group(1), "%Y/%m/%d %H:%M:%S")))
+        except ValueError:
+            continue
+        if at > since:
+            rows.append((at, f"waf:{match.group(3)}", match.group(2)))
+
+for at, source, ip in sorted(rows)[-5000:]:
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        continue
+    if address.is_global:
+        print(f"{at}\t{source}\t{address}")
+PY
+}
+
 firewall_blocklist_run() {
   ensure_bpanel_data_dir
   ensure_firewall_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
-  local tmp fetched count url
+  local tmp fetched count url failed=0 previous=0
   tmp="$(mktemp)"
   fetched="$(mktemp)"
   while IFS= read -r url; do
     [[ -n "$url" ]] || continue
     require_url "$url"
-    curl -fsSL --connect-timeout 10 --max-time 60 "$url" >>"$fetched" || echo "WARNING: could not fetch $url" >&2
+    if ! curl -fsSL --connect-timeout 10 --max-time 60 "$url" >>"$fetched"; then
+      echo "WARNING: could not fetch $url" >&2
+      failed=1
+    fi
     printf '\n' >>"$fetched"
   done < <(firewall_blocklist_urls)
   python3 - "$fetched" "$tmp" <<'PY'
@@ -5750,9 +5813,17 @@ for raw in open(sys.argv[1], encoding="utf-8", errors="ignore"):
     if not line:
         continue
     try:
-        value = str(ipaddress.ip_network(line, strict=False))
+        network = ipaddress.ip_network(line, strict=False)
     except ValueError:
         continue
+    # Never this server's own loopback, a private or reserved range, or a
+    # network so wide it is a list's mistake (127.0.0.1 was found among
+    # 186k entries on a live box): as OPanel's floor.
+    if (network.is_loopback or network.is_private or network.is_link_local or network.is_multicast
+            or network.is_reserved or network.is_unspecified
+            or network.prefixlen < (8 if network.version == 4 else 16)):
+        continue
+    value = str(network)
     if value not in seen:
         seen.add(value)
         networks.append(value)
@@ -5761,8 +5832,17 @@ with open(sys.argv[2], "w", encoding="utf-8") as handle:
     for value in networks:
         handle.write(value + "\n")
 PY
+  count="$(sed '/^[[:space:]]*$/d' "$tmp" | wc -l | tr -d '[:space:]')"
+  [[ -f "$FIREWALL_BLOCKLIST_WORK" ]] && previous="$(sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | wc -l | tr -d '[:space:]')"
+  # A source that did not answer must not empty the firewall: the Shared
+  # blocklist addon reads its list hourly, and one collector outage would
+  # otherwise unblock everything until the next good run.
+  if (( failed == 1 && previous > 0 && count * 2 < previous )); then
+    rm -f "$tmp" "$fetched"
+    echo "IP blocklist kept: a source failed and only ${count} of ${previous} network(s) came back"
+    return 0
+  fi
   install -m 0640 -o root -g root "$tmp" "$FIREWALL_BLOCKLIST_WORK"
-  count="$(sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | wc -l | tr -d '[:space:]')"
   rm -f "$tmp" "$fetched"
   firewall_apply >/dev/null
   firewall_blocklist_write_timer
@@ -9769,6 +9849,10 @@ PY
   firewall-blocklist-delete|nginx-blocklist-delete|ufw-blocklist-delete)
     [[ $# -eq 1 ]] || deny "usage: firewall-blocklist-delete <url>"
     firewall_blocklist_delete_url "$1"
+    ;;
+  shared-blocklist-events)
+    [[ $# -eq 1 ]] || deny "usage: shared-blocklist-events <unix-time>"
+    shared_blocklist_events "$1"
     ;;
   firewall-blocklist-run|nginx-blocklist-run|ufw-blocklist-run)
     [[ $# -eq 0 ]] || deny "usage: firewall-blocklist-run"

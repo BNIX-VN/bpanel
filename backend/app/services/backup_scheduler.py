@@ -233,3 +233,11 @@ if __name__ == "__main__":
         wp_extras.daily_tick()
     except Exception as exc:  # noqa: BLE001 - never fail the backup run for it
         print(f"BPanel WordPress daily check failed: {exc}")
+    # Shared blocklist: report, read the list, or take it all down once the
+    # addon is off (a file read and nothing else while it never was on).
+    try:
+        from app.services import shared_blocklist
+
+        shared_blocklist.tick()
+    except Exception as exc:  # noqa: BLE001 - never fail the backup run for it
+        print(f"BPanel shared blocklist tick failed: {exc}")

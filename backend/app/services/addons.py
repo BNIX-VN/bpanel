@@ -30,6 +30,7 @@ MAIL = "mail"
 MALWARE = "malware"
 MCP = "mcp"
 NOTIFICATIONS = "notifications"
+SHARED_BLOCKLIST = "sharedblocklist"
 WORDPRESS = "wordpress"
 
 # What an administrator sees in the Addons page. The version is the addon's own:
@@ -50,6 +51,21 @@ CATALOGUE: dict[str, dict] = {
             "Turning the addon off only stops the service: the package, the jail file and the ban history all stay.",
         ],
         "keeps_data_on_uninstall": True,
+    },
+    SHARED_BLOCKLIST: {
+        "name": "Shared blocklist",
+        "version": "1.0.0",
+        "summary": "Reports attackers to the BNIX shared list and blocks the addresses other servers reported.",
+        "details": [
+            "This server sends the addresses its Fail2ban jails banned and its WAF denied on rules only an attack trips (php2shell, wp2shell, probes for .env, .git, keys and webshells) to blocklist.bnix.io.vn.",
+            "It blocks at its firewall every address that at least two other approved servers reported within a week, read again every hour.",
+            "A server's reports count once the operator approves it on the collector. Cloudflare, the Google and Bing crawlers, private ranges and the reporting servers themselves are never listed.",
+        ],
+        "notes": [
+            "Sent: an address, the jail or WAF rule id, nothing else - no URL, no request, no site name.",
+            "Removing the addon takes the list off the firewall and forgets this server's key.",
+        ],
+        "keeps_data_on_uninstall": False,
     },
     MCP: {
         "name": "AI assistants (MCP)",
