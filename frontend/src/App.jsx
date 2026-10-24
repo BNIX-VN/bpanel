@@ -10159,6 +10159,7 @@ function App() {
                         <span className="job-progress"><span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span></span></>
                       : <small>
                         {item.last_status === 'ok' && <span className="badge ok">{t('OK')}</span>}
+                        {item.last_status === 'warning' && <span className="badge warn">{t('Warning')}</span>}
                         {item.last_status === 'error' && <span className="badge bad">{t('Failed')}</span>}
                         {' '}{item.last_message || t('Not run yet')}
                       </small>}

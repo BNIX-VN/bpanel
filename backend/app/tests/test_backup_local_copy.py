@@ -34,7 +34,7 @@ def run(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_scheduler, "_schedule_users", lambda db, s: [SimpleNamespace(username="acme")])
     monkeypatch.setattr(backup_scheduler, "_notify_failure", lambda *a, **k: None)
 
-    def create(user, db):
+    def create(user, db, skipped=None):
         path = root / "users" / user.username / f"user-{user.username}-20260927020000.tar.gz"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"archive")

@@ -142,9 +142,11 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
 
     messages = []
     errors = []
+    warnings = []
     for user in users:
         try:
-            archive = backup.create_user_backup(user, db)
+            skipped: list = []
+            archive = backup.create_user_backup(user, db, skipped=skipped)
             target = _upload_if_configured(db, schedule, archive)
             if schedule.target_id:
                 # The copies live on the destination now; keeping them here
@@ -153,14 +155,20 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
                 backup.discard_local_copy(archive)
             backup.prune_user_backups(user.username, schedule.retention)
             messages.append(f"{user.username}: {target}")
+            # An archive with a hole in it still ran, so it is not an error,
+            # but the operator has to be told before a restore needs the file.
+            if skipped:
+                warnings.append(f"{user.username}: {backup.describe_skipped(skipped)}")
         except Exception as exc:  # pragma: no cover - operational path
             errors.append(f"{user.username}: {exc}")
 
     ok = not errors
-    schedule.last_status = "ok" if ok else "error"
-    schedule.last_message = _short_message(
-        [f"ok {len(messages)} user(s)"] + (messages if ok else errors)
-    )
+    if ok:
+        schedule.last_status = "warning" if warnings else "ok"
+        schedule.last_message = _short_message([f"ok {len(messages)} user(s)"] + warnings + messages)
+    else:
+        schedule.last_status = "error"
+        schedule.last_message = _short_message([f"ok {len(messages)} user(s)"] + errors + warnings)
     schedule.last_run_at = now
     db.commit()
     if not ok:
