@@ -17,6 +17,7 @@ import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
+import { ChangelogHistory, ChangelogPreview } from './components/Changelog.jsx';
 import Tabs from './components/Tabs.jsx';
 import NotificationBell from './components/NotificationBell.jsx';
 import Drawer from './components/Drawer.jsx';
@@ -1169,6 +1170,8 @@ function App() {
   const [panelSettingsTab, setPanelSettingsTab] = useState(() => (/^\/api-tokens?\/?$/i.test(window.location.pathname) ? 'api' : 'general'));
   const [updatesStatus, setUpdatesStatus] = useState(null);
   const [showUpdateLog, setShowUpdateLog] = useState(false);
+  // '' = the Updates page, 'changelog' = every release's notes.
+  const [updatesView, setUpdatesView] = useState('');
   const [osUpdating, setOsUpdating] = useState(false);
   const [panelUpdating, setPanelUpdating] = useState(false);
   const [panelUpdateLog, setPanelUpdateLog] = useState([]);
@@ -5613,6 +5616,8 @@ function App() {
       loadWafAccessLogs(wafAccessLogFilters, true);
     }
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') { loadUpdates(); loadServiceVersions(); }
+    // Coming back to Updates opens the page, not the changelog left open.
+    if (page !== 'updates') setUpdatesView('');
     if (isAuthenticated && page === 'security') {
       loadTwoFactorStatus();
       if (isAdmin) { loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); }
@@ -11287,6 +11292,7 @@ function App() {
   // updated now (a secondary action) or by themselves on a schedule.
   function renderUpdates() {
     if (!isAdmin) return <section className="section"><p className="hint">{t('No permission.')}</p></section>;
+    if (updatesView === 'changelog') return <ChangelogHistory request={request} t={t} onBack={() => setUpdatesView('')}/>;
     const statusText = updatesStatus?.stdout || updatesStatus?.stderr || t('Click View logs to load update logs.');
     const panelUpdate = updatesStatus?.panel || {};
     // Three states, not two. `update_available` is null when the release check
@@ -11337,6 +11343,8 @@ function App() {
           </div>
         )}
       </section>
+      <ChangelogPreview request={request} t={t} onOpenHistory={() => setUpdatesView('changelog')}
+                        reloadKey={currentPanelVersion}/>
       {renderServiceVersions()}
       <section className="section">
         <PageHeader title={t('Operating system')} subtitle={t("Package updates for the server itself, separate from the panel's.")}/>

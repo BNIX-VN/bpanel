@@ -2712,6 +2712,15 @@ export const vi = {
   "A public http:// or https:// address.": "Một địa chỉ http:// hoặc https:// công khai.",
   "Created {domain}, proxying to {target}.": "Đã tạo {domain}, chuyển tiếp tới {target}.",
   "Nginx will forward this domain to the address above, with WebSocket upgrades and the visitor's address in X-Forwarded-For. SSL, the WAF and the access log stay on this server.": "Nginx sẽ chuyển tiếp domain này tới địa chỉ ở trên, hỗ trợ WebSocket và gửi IP người truy cập trong X-Forwarded-For. SSL, WAF và log truy cập vẫn nằm trên server này.",
+  "What's new in the update": "Có gì mới trong bản cập nhật",
+  "What's new": "Có gì mới",
+  "Read what the update changes before you run it.": "Đọc bản cập nhật thay đổi những gì trước khi chạy.",
+  "This server runs the newest release. Its notes:": "Server đang chạy bản mới nhất. Nội dung của bản này:",
+  "Changelog": "Lịch sử thay đổi",
+  "Every release of the panel, newest first.": "Tất cả các bản phát hành của panel, mới nhất trước.",
+  "Open the release page": "Mở trang bản phát hành",
+  "Newer releases": "Các bản mới hơn",
+  "Older releases": "Các bản cũ hơn",
 };
 
 /* Said in English by the people who run these servers. Translating them
