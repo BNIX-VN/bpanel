@@ -17,6 +17,7 @@ import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
+import { SharedBlocklistSection } from './components/SharedBlocklist.jsx';
 import { ChangelogHistory, ChangelogPreview } from './components/Changelog.jsx';
 import Tabs from './components/Tabs.jsx';
 import NotificationBell from './components/NotificationBell.jsx';
@@ -1222,6 +1223,7 @@ function App() {
   const [mcpNewToken, setMcpNewToken] = useState('');
   const applicationAddon = addons.items.find(item => item.slug === 'application');
   const applicationAddonInstalled = !!applicationAddon?.installed;
+  const sharedBlocklistInstalled = !!addons.items.find(item => item.slug === 'sharedblocklist')?.installed;
   // Two locks, and both have to be open: the server has to have the addon
   // installed at all, and the customer's package has to include it. Admins skip
   // the second one, never the first.
@@ -10862,6 +10864,7 @@ function App() {
       </section>
 
       {renderFirewallFail2ban()}
+      {sharedBlocklistInstalled && <SharedBlocklistSection request={request} t={t}/>}
 
       <section className="section fw-blocklists">
         <div className="fw-section-head fw-section-head-row">

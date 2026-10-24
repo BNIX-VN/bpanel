@@ -2721,6 +2721,25 @@ export const vi = {
   "Open the release page": "Mở trang bản phát hành",
   "Newer releases": "Các bản mới hơn",
   "Older releases": "Các bản cũ hơn",
+  "Registering": "Đang đăng ký",
+  "Approved": "Đã duyệt",
+  "Waiting for approval": "Chờ duyệt",
+  "Shared blocklist": "Danh sách chặn chung",
+  "Blocks the addresses other BNIX servers reported, and reports what this server blocked.": "Chặn các IP mà những server BNIX khác đã báo, và báo những IP server này đã chặn.",
+  "Check now": "Kiểm tra ngay",
+  "Server ID": "Mã server",
+  "Sent in total": "Đã gửi",
+  "Last report": "Lần báo gần nhất",
+  "List read": "Đọc danh sách",
+  "Reports from this server count once the operator approves it on the collector. The shared list is blocked already.": "Báo cáo của server này chỉ được tính khi quản trị viên duyệt nó trên collector. Danh sách chung thì đã được chặn ngay.",
+  "Reports attackers to the BNIX shared list and blocks the addresses other servers reported.": "Báo IP tấn công lên danh sách chung của BNIX và chặn các IP mà server khác đã báo.",
+  "This server sends the addresses its Fail2ban jails banned and its WAF denied on rules only an attack trips (php2shell, wp2shell, probes for .env, .git, keys and webshells) to blocklist.bnix.io.vn.": "Server này gửi lên blocklist.bnix.io.vn các IP mà Fail2ban đã ban và WAF đã chặn bằng những luật chỉ đòn tấn công mới chạm phải (php2shell, wp2shell, dò .env, .git, khoá và webshell).",
+  "It blocks at its firewall every address that at least two other approved servers reported within a week, read again every hour.": "Nó chặn ở tường lửa mọi IP mà ít nhất hai server đã duyệt khác cùng báo trong một tuần; danh sách được đọc lại mỗi giờ.",
+  "A server's reports count once the operator approves it on the collector. Cloudflare, the Google and Bing crawlers, private ranges and the reporting servers themselves are never listed.": "Báo cáo của một server chỉ được tính khi quản trị viên duyệt nó trên collector. Cloudflare, bot của Google và Bing, dải mạng nội bộ và chính các server báo cáo không bao giờ bị đưa vào danh sách.",
+  "Sent: an address, the jail or WAF rule id, nothing else - no URL, no request, no site name.": "Chỉ gửi: địa chỉ IP, tên jail hoặc mã luật WAF - không gửi URL, nội dung request hay tên site.",
+  "Removing the addon takes the list off the firewall and forgets this server's key.": "Gỡ addon sẽ bỏ danh sách khỏi tường lửa và xoá khoá của server này.",
+  "This server is registering with the collector; its status is on the Firewall page.": "Server này đang đăng ký với collector; trạng thái xem ở trang Tường lửa.",
+
 };
 
 /* Said in English by the people who run these servers. Translating them

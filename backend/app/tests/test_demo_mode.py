@@ -29,7 +29,7 @@ APP = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8"
 # fails test_every_get_route_has_been_looked_at until it is added here or to
 # demo_mode.BLOCKED_READS.
 REVIEWED_READS = {
-    "/api/addons", "/api/auth/2fa/status", "/api/auth/csrf", "/api/auth/passkey/status",
+    "/api/addons", "/api/addons/sharedblocklist/status", "/api/auth/2fa/status", "/api/auth/csrf", "/api/auth/passkey/status",
     "/api/auth/session", "/api/auth/sso/{token}", "/api/dashboard/summary", "/api/databases",
     "/api/demo-mode", "/api/demo-mode/public",
     # DNS Manager (2026-09-29): zones, records and settings; no key or secret.
