@@ -281,9 +281,11 @@ def test_proxy_vhost_forwards_to_the_loopback_app_port():
     assert "fastcgi_pass" not in rendered
 
 
-def test_the_application_mode_is_the_only_proxied_one():
+def test_the_application_mode_is_the_only_app_backed_one():
+    # "application" proxies to an installed app's port; "proxy" (operator,
+    # 2026-10-24) to an address its owner names - see test_proxy_mode.py.
     assert nginx.PROXIED_APP_TYPES == {"application"}
-    assert "proxy" not in nginx.ALLOWED_APP_TYPES
+    assert nginx.REVERSE_PROXY_TYPES == {"application", "proxy"}
     assert "nodejs" not in nginx.ALLOWED_APP_TYPES
 
 

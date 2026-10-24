@@ -19,9 +19,12 @@ TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
 CUSTOM_INCLUDE_DIR = Path("/etc/nginx/bpanel/custom")
 
 ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
-ALLOWED_APP_TYPES = {"wordpress", "php", "static", "application"}
+ALLOWED_APP_TYPES = {"wordpress", "php", "static", "application", "proxy"}
 # Served by proxying to an installed application's port instead of PHP-FPM.
 PROXIED_APP_TYPES = {"application"}
+# Every mode whose vhost is a reverse proxy: an installed application on its
+# local port, or "proxy", any http(s) address the site's owner names.
+REVERSE_PROXY_TYPES = PROXIED_APP_TYPES | {"proxy"}
 PROXY_TIMEOUT_SECONDS = 300
 ALLOWED_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 ALLOWED_LOG_KINDS = {"access", "error"}
@@ -438,6 +441,58 @@ def _check_app_port(app_type: str, app_port: int | None) -> int | None:
         raise ValueError("Pick an installed application for this website first") from exc
     if not 1 <= value <= 65535:
         raise ValueError("Application port is out of range")
+    return value
+
+
+# What an upstream may look like: scheme, host (a name, IPv4 or [IPv6]), an
+# optional port and path. Nothing nginx would read as syntax or a variable -
+# no spaces, quotes, ;, {}, $ - since the address lands in proxy_pass as is.
+PROXY_URL_RE = re.compile(
+    r"^https?://(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
+    r"|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~%!*'()+,=:@/-]*)?$"
+)
+
+
+def validate_proxy_url(url: str | None, allow_private: bool = True) -> str:
+    """The address a "proxy" website forwards to.
+
+    allow_private=False is a customer's: only an address that resolves to the
+    public internet. A customer pointing a domain at 127.0.0.1 or the LAN
+    would publish what the server keeps to itself - the panel's API, Rspamd,
+    another customer's application on its local port.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+
+    value = (url or "").strip()
+    if not value:
+        raise ValueError("Enter the address to proxy to, for example http://127.0.0.1:3000")
+    if len(value) > 500 or not PROXY_URL_RE.fullmatch(value):
+        raise ValueError("Not a proxy address: use http:// or https://, a host, an optional :port and path")
+    parts = urlsplit(value)
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError("The port must be between 1 and 65535") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("The port must be between 1 and 65535")
+    host = (parts.hostname or "").strip("[]").lower()
+    if not host:
+        raise ValueError("The proxy address has no host")
+    if not allow_private:
+        if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".lan")):
+            raise ValueError("Only an administrator can proxy to this server or a private network")
+        try:
+            addresses = {ipaddress.ip_address(host)}
+        except ValueError:
+            try:
+                infos = socket.getaddrinfo(host, port or (443 if parts.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+            except OSError as exc:
+                raise ValueError(f"{host} does not resolve") from exc
+            addresses = {ipaddress.ip_address(info[4][0]) for info in infos}
+        if not addresses or any(not address.is_global for address in addresses):
+            raise ValueError("Only an administrator can proxy to this server or a private network")
     return value
 
 
@@ -1310,11 +1365,16 @@ def render_vhost(
     app_port: int | None = None,
     blocked_bots=None,
     fastcgi_cache: bool = True,
+    proxy_url: str | None = None,
+    proxy_preserve_host: bool = True,
 ) -> str:
     server_names = _server_names(domain, aliases)
     safe_domain = server_names[0]
     _check_app_type(app_type)
     safe_app_port = _check_app_port(app_type, app_port)
+    # Who may name a private address is the caller's to check; here only that
+    # it is an address nginx can take.
+    safe_proxy_url = validate_proxy_url(proxy_url) if app_type == "proxy" else ""
     safe_rewrite_mode = _check_rewrite_mode(rewrite_mode)
     _check_php_version(php_version)
     resolved_root = Path(root_path).resolve()
@@ -1331,6 +1391,7 @@ def render_vhost(
         "php": "php.conf.j2",
         "static": "static.conf.j2",
         "application": "proxy.conf.j2",
+        "proxy": "proxy.conf.j2",
     }[app_type]
     template = env.get_template(template_name)
     php_fpm_socket = php_fpm_socket_override or _php_fpm_socket(php_version)
@@ -1353,6 +1414,12 @@ def render_vhost(
         http_flood_challenge_block=_http_flood_challenge_block(),
         rewrite_mode=safe_rewrite_mode,
         app_port=safe_app_port,
+        proxy_url=safe_proxy_url,
+        proxy_https=safe_proxy_url.startswith("https://"),
+        # The visitor's Host by default (an app that serves several names
+        # needs it); the upstream's own for a site elsewhere that only answers
+        # to its name.
+        proxy_host_header="$host" if (proxy_preserve_host or app_type != "proxy") else "$proxy_host",
         proxy_timeout=PROXY_TIMEOUT_SECONDS,
     )
     # Applied to the rendered output rather than through the templates: it is
@@ -1393,6 +1460,8 @@ def write_vhost(
     redirects: list[str] | tuple[str, ...] | None = None,
     app_port: int | None = None,
     blocked_bots=None,
+    proxy_url: str | None = None,
+    proxy_preserve_host: bool = True,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -1413,6 +1482,8 @@ def write_vhost(
         aliases=aliases,
         redirects=redirects,
         app_port=app_port,
+        proxy_url=proxy_url,
+        proxy_preserve_host=proxy_preserve_host,
     )
 
 
@@ -1441,9 +1512,11 @@ def rewrite_vhost(
     app_port: int | None = None,
     blocked_bots=None,
     fastcgi_cache: bool | None = None,
+    proxy_url: str | None = None,
+    proxy_preserve_host: bool = True,
 ) -> str:
     target = _vhost_path(domain)
-    if app_type in PROXIED_APP_TYPES:
+    if app_type in REVERSE_PROXY_TYPES:
         ensure_proxy_upgrade_map()
     # blocked_bots=None means "keep whatever this vhost already blocks", the
     # same contract preserve_existing_ssl has. Without it every full rewrite -
@@ -1479,6 +1552,8 @@ def rewrite_vhost(
         app_port=app_port,
         blocked_bots=blocked_bots,
         fastcgi_cache=fastcgi_cache,
+        proxy_url=proxy_url,
+        proxy_preserve_host=proxy_preserve_host,
     )
     if settings.command_dry_run:
         return _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)

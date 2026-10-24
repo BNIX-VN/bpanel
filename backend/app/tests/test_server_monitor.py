@@ -119,11 +119,23 @@ def test_the_shell_has_the_chips_on_top_and_the_account_below():
 
 
 def test_the_version_opens_updates_and_marks_a_waiting_release():
-    """The version is the account menu's, an administrator's, and opens
-    Updates; a waiting release marks it."""
+    """The version sits at the foot of the sidebar (operator, 2026-10-24),
+    an administrator's, and opens Updates; a waiting release marks it."""
     assert "const panelWaiting = isAdmin && resourceUsage?.panel_update?.update_available === true;" in APP
-    menu = APP.split("{appVersion && isAdmin && <button type=\"button\" role=\"menuitem\"", 1)[1].split("</button>", 1)[0]
-    assert "navigateToPage('updates')" in menu and "panelWaiting ? ' has-update' : ''" in menu
+    foot = APP.split('<div className="sidebar-foot">', 1)[1].split("</div>", 1)[0]
+    assert "<LanguageToggle" in foot and "<ThemeToggle" in foot
+    version = foot.split("{appVersion && isAdmin && <button", 1)[1].split("</button>", 1)[0]
+    assert "navigateToPage('updates')" in version and "panelWaiting ? ' has-update' : ''" in version
+    # Not in the account menu any more.
+    assert "user-menu-version-item" not in APP
+
+
+def test_cpu_ram_and_disk_sit_in_the_top_bar_for_an_administrator():
+    top = APP.split('<div className="top-actions">', 1)[1].split("<NotificationBell", 1)[0]
+    assert "{isAdmin && renderTopStats()}" in top
+    stats = APP.split("function renderTopStats() {", 1)[1].split("\n  }\n", 1)[0]
+    for page in ("'processes'", "'ram-usage'", "'disk-usage'"):
+        assert page in stats
     source = inspect.getsource(services.get_resource_usage)
     assert "ensure_role(current_user.role, Role.admin)" in source and "updates.cached_release_summary()" in source
 

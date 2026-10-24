@@ -233,6 +233,14 @@ def _hostname_conflicts(db: Session, domain: str, *, exclude_website_id: int | N
     return bool({safe_domain, f"www.{safe_domain}"} & _reserved_hostnames(db, exclude_website_id=exclude_website_id, exclude_alias_id=exclude_alias_id))
 
 
+def _checked_proxy_url(url: str | None, current_user: User) -> str:
+    """A proxy website's address; a private one is the administrator's to name."""
+    try:
+        return nginx.validate_proxy_url(url, allow_private=is_admin_role(current_user.role))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _resolve_app_for_owner(db: Session, owner_id: int, app_id: int | None, current_user: User) -> SiteApp:
     """The app a website may serve: one its owner owns.
 
@@ -370,6 +378,8 @@ def _rewrite_website_vhost(website: Website, **overrides) -> str:
         "aliases": overrides.pop("aliases", _alias_domains(website)),
         "redirects": overrides.pop("redirects", _redirect_domains(website)),
         "app_port": overrides.pop("app_port", site_apps.app_port_for_website(website)),
+        "proxy_url": overrides.pop("proxy_url", getattr(website, "proxy_url", "") or ""),
+        "proxy_preserve_host": overrides.pop("proxy_preserve_host", getattr(website, "proxy_preserve_host", True) is not False),
         "fastcgi_cache": overrides.pop("fastcgi_cache", bool(getattr(website, "nginx_cache_enabled", True))),
     }
     if overrides.pop("include_ssl", True):
@@ -533,6 +543,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             if app_type_value in nginx.PROXIED_APP_TYPES
             else None
         )
+        proxy_url = _checked_proxy_url(payload.proxy_url, current_user) if app_type_value == "proxy" else ""
         try:
             linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php_version, linux_user)
             # Just create the public_html/ folder skeleton and write a vhost.
@@ -550,6 +561,8 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 document_root="public_html",
                 rewrite_mode="front_controller" if app_type_value == "wordpress" else "none",
                 app_port=selected_app.port if selected_app else None,
+                proxy_url=proxy_url,
+                proxy_preserve_host=payload.proxy_preserve_host,
             )
         except (RuntimeError, ValueError, OSError) as exc:
             _cleanup_failed_site(root_path, linux_user)
@@ -566,6 +579,8 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         app_type=app_type_value,
         nginx_rewrite_mode="front_controller" if app_type_value == "wordpress" else "none",
         app_id=selected_app.id if (not install_wp and selected_app) else None,
+        proxy_url=proxy_url if (not install_wp) else "",
+        proxy_preserve_host=bool(payload.proxy_preserve_host),
         status="active",
     )
     db.add(website)
@@ -840,6 +855,11 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 if next_app_type in nginx.PROXIED_APP_TYPES
                 else None
             )
+            next_proxy_url = (
+                _checked_proxy_url(payload.proxy_url if payload.proxy_url is not None else website.proxy_url, current_user)
+                if next_app_type == "proxy" else ""
+            )
+            next_preserve = payload.proxy_preserve_host if payload.proxy_preserve_host is not None else website.proxy_preserve_host is not False
             runtime_php_version = website.php_version if next_app_type in {"wordpress", "php"} else None
             if website.linux_user and runtime_php_version:
                 site_users.ensure_site_runtime(
@@ -864,12 +884,26 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 php_version=website.php_version,
                 rewrite_mode=next_rewrite_mode,
                 app_port=next_app.port if next_app else None,
+                proxy_url=next_proxy_url,
+                proxy_preserve_host=next_preserve,
             )
         except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot change website mode: {exc}") from exc
         website.app_type = next_app_type
         website.nginx_rewrite_mode = next_rewrite_mode
         website.app_id = next_app.id if next_app else None
+        website.proxy_url = next_proxy_url
+        website.proxy_preserve_host = next_preserve
+    elif (website.app_type or "") == "proxy" and (payload.proxy_url is not None or payload.proxy_preserve_host is not None):
+        # Same mode, another address (or Host header) behind it.
+        next_proxy_url = _checked_proxy_url(payload.proxy_url if payload.proxy_url is not None else website.proxy_url, current_user)
+        next_preserve = payload.proxy_preserve_host if payload.proxy_preserve_host is not None else website.proxy_preserve_host is not False
+        try:
+            _rewrite_website_vhost(website, proxy_url=next_proxy_url, proxy_preserve_host=next_preserve)
+        except (RuntimeError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=f"Cannot point this website at {next_proxy_url}: {exc}") from exc
+        website.proxy_url = next_proxy_url
+        website.proxy_preserve_host = next_preserve
     elif payload.app_id is not None and (website.app_type or "") in nginx.PROXIED_APP_TYPES:
         # Same mode, different application behind it.
         next_app = _resolve_app_for_owner(db, website.owner_id, payload.app_id, current_user)

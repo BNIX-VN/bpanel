@@ -77,6 +77,11 @@ class User(Base):
     # nothing. New accounts default to off: a shell on the server is not
     # something to hand out implicitly.
     terminal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Applications an account on a custom package (no package) may run; with a
+    # package, the package's node_apps_limit is what counts
+    # (site_apps.app_limit_for). Without it a custom account could never have
+    # one, and the Applications page was hidden from it.
+    node_apps_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     # Copied from the package like the limits above. See UserPackage for why
     # this is not 0: it delegates access the customer already has rather than
     # granting new access, so an admin narrows it rather than opening it.
@@ -179,6 +184,10 @@ class Website(Base):
     app_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("site_apps.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Set when app_type is "proxy": the http(s) address nginx forwards to, and
+    # whether the visitor's Host header goes with it (nginx.validate_proxy_url).
+    proxy_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    proxy_preserve_host: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     owner: Mapped[User] = relationship(back_populates="websites")
