@@ -20,6 +20,7 @@ INSTALL = (PROJECT_ROOT / "installer" / "install.sh").read_text(encoding="utf-8"
 
 def test_the_launcher_fetches_the_updater_of_the_ref_being_installed():
     assert "raw.githubusercontent.com/${url#https://github.com/}/${url_ref}/installer/update.sh" in LAUNCHER
+    assert "${repo_url%.git}/-/raw/${ref}/installer/update.sh" in LAUNCHER
     assert 'url_ref="refs/tags/${ref}"' in LAUNCHER and 'url_ref="refs/tags/${tag}"' in LAUNCHER
     assert 'url_ref="refs/heads/${branch}"' in LAUNCHER
     # The newest release, found as update.sh finds it.
@@ -60,3 +61,36 @@ def test_install_and_update_leave_the_launcher_as_the_command():
     assert '"$SOURCE_DIR/installer/files/bpanel-update" /usr/local/sbin/bpanel-update' in body
     # Twice: once the source is readable, and again with the other commands.
     assert UPDATE.count("\ninstall_update_command\n") == 2
+
+
+def _updater_url(repo_url, ref="v1.8.1", url_ref="refs/tags/v1.8.1"):
+    """Runs the launcher's own lines that pick the updater's URL."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("no bash here")
+    start = LAUNCHER.index('  if [[ -n "${BPANEL_UPDATER_URL:-}" ]]; then')
+    end = LAUNCHER.index("\n  fi\n", start) + len("\n  fi\n")
+    script = ('fail() { echo "FAIL: $1"; exit 1; }\n'
+              f'repo_url={repo_url!r} ref={ref!r} url_ref={url_ref!r}\n'
+              + LAUNCHER[start:end] + 'echo "$url"\n')
+    return subprocess.run([bash, "-c", script], capture_output=True, text=True, env={}).stdout.strip()
+
+
+def test_the_launcher_finds_the_updater_on_gitlab_and_on_github():
+    # 160.236.192.167, 2026-10-24: v1.7.2 moved the panel to GitLab, the
+    # helper passes that REPO_URL, and the launcher knew GitHub only.
+    assert 'repo_url="${REPO_URL:-https://gitlab.sieunhim.com/bnix/bpanel.git}"' in LAUNCHER
+    assert _updater_url("https://gitlab.sieunhim.com/bnix/bpanel.git") == \
+        "https://gitlab.sieunhim.com/bnix/bpanel/-/raw/v1.8.1/installer/update.sh"
+    assert _updater_url("git@gitlab.sieunhim.com:bnix/bpanel.git", "main", "refs/heads/main") == \
+        "https://gitlab.sieunhim.com/bnix/bpanel/-/raw/main/installer/update.sh"
+    assert _updater_url("https://github.com/BNIX-VN/bpanel.git") == \
+        "https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/tags/v1.8.1/installer/update.sh"
+    assert _updater_url("git@github.com:BNIX-VN/bpanel.git") == \
+        "https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/tags/v1.8.1/installer/update.sh"
+    assert _updater_url("file:///srv/bpanel").startswith("FAIL: Cannot tell where the updater")
