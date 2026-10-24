@@ -592,6 +592,12 @@ write_modsec_base_conf() {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
     echo "SecRequestBodyAccess Off"
+    # The php2shell group turns bodies on for form POSTs (ctl:requestBodyAccess
+    # in its first rule), and these limits are what then apply. ProcessPartial:
+    # a large upload is inspected as far as the limit and passed, never refused.
+    echo "SecRequestBodyLimit 16777216"
+    echo "SecRequestBodyNoFilesLimit 1048576"
+    echo "SecRequestBodyLimitAction ProcessPartial"
   } >/etc/nginx/modsec/bpanel-base.conf
 }
 
@@ -1705,6 +1711,8 @@ main() {
 
   log "Validating privileged helper"
   validate_privileged_helper
+  # php2shell: every PHP's conf.d (see the helper's ensure_php2shell_ini).
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper php2shell-ini >/dev/null || true
 
   log "Configuring backend"
   setup_backend

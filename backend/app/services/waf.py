@@ -151,6 +151,37 @@ DEFAULT_RULES = [
         "description": "Blocks direct access to WordPress installation scripts after deployment. Off by default: a site that is not installed yet needs wp-admin/install.php.",
         "rules": """SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\\.php(?:$|[?])|/wp-admin/setup-config\\.php(?:$|[?]))" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'""",
     },
+    {
+        # php2shell (CVE-2026-109618, CVE-2026-109619, CVE-2026-115560): bugs
+        # in PHP's request parsing, reached before any script runs. Fixed in
+        # 8.2.35, 8.3.36, 8.4.27 and 8.5.12; 8.1 and older get no release
+        # (operator, 2026-10-24). These match the shapes the public tools send
+        # (Datadog Security Labs, 2026-10-22): a multipart POST of hundreds of
+        # parts, machine-nested or very long field names, the session upload
+        # progress field, and code in an upload's file name - which PHP keeps
+        # in the session record. The thresholds sit far above any form
+        # WordPress, WooCommerce or ACF sends; a site that needs more turns
+        # the group off. PHP's own setting (session.upload_progress.enabled=0)
+        # is applied as well; this is the WAF half.
+        #
+        # bpanel-base.conf keeps request bodies off, and libmodsecurity skips phase 2
+        # while they are: 1003001 turns them on for form POSTs only, which is what
+        # lets the phase:2 rules below run (test_waf_rules_are_phase_1).
+        "id": "php2shell",
+        "category": "PHP",
+        "title": "php2shell (PHP request parsing RCE)",
+        "description": "Blocks the request shapes of the php2shell exploits (CVE-2026-109618/109619/115560): the session upload progress field, multipart floods of hundreds of fields or files, field names nested 16 deep or over 1 KB, and code in upload file names. Reads the body of form POSTs only.",
+        "rules": r"""SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*(?:multipart/form-data|application/x-www-form-urlencoded)" "id:1003001,phase:1,pass,nolog,ctl:requestBodyAccess=On"
+SecRule ARGS_POST_NAMES "@rx (?i)^php_session_upload_progress$" "id:1003002,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell upload progress field'"
+SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*multipart/form-data" "id:1003003,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell multipart field flood',chain"
+  SecRule &ARGS_POST "@gt 400" "t:none"
+SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*multipart/form-data" "id:1003004,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell multipart file flood',chain"
+  SecRule &FILES "@gt 100" "t:none"
+SecRule ARGS_NAMES "@rx (?:\[[^\]]*\]){16}" "id:1003005,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell nested field name'"
+SecRule ARGS_NAMES "@gt 1024" "id:1003006,phase:2,t:none,t:length,deny,status:403,log,msg:'BPanel blocked php2shell oversized field name'"
+SecRule FILES "@rx (?i)<\?php|\|O:\d|[\x00-\x08\x0b\x0c\x0e-\x1f]" "id:1003007,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell upload file name'"
+""",
+    },
 ]
 
 LEGACY_RULE_ID_MAP = {

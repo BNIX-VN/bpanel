@@ -1616,6 +1616,9 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     else
       echo "  (PHP-FPM and MariaDB tuning unchanged for this release; skipping the retune)"
     fi
+    # php2shell: every PHP's conf.d (the pools carry it too, rewritten below).
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper php2shell-ini || \
+      echo "  (warning: could not apply the php2shell PHP settings)"
     systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
     # clamd is only wanted by scan-on-upload, and that is off unless someone
     # turned it on. maldet - which runs every scheduled, on-demand and
