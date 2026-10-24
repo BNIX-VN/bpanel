@@ -2698,6 +2698,8 @@ export const vi = {
   "Kept back": "Bị giữ lại",
   "The theme is installed, not activated: the site keeps its current theme. A theme of the same name is replaced.": "Theme chỉ được cài, không kích hoạt: site vẫn giữ theme đang dùng. Theme trùng tên sẽ bị ghi đè.",
   "Warning": "Cảnh báo",
+  "Install failed": "Cài đặt thất bại",
+  "The scanner could not be installed: {error}": "Không cài được trình quét: {error}",
 };
 
 /* Said in English by the people who run these servers. Translating them

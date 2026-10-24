@@ -11573,7 +11573,8 @@ function App() {
           <div>
             <p className="hint badge-row">
               {mwActive ? <span className="badge ok">{t('Active')}</span>
-                : mwEnabled && !mwInstalled ? <span className="badge warn">{t('Installing...')}</span>
+                : !mwInstalled && mw.install_state === 'failed' ? <span className="badge bad">{t('Install failed')}</span>
+                : !mwInstalled && mw.install_state === 'running' ? <span className="badge warn">{t('Installing...')}</span>
                 : mwInstalled && !mwEnabled ? <span className="badge">{t('Installed — scanning disabled')}</span>
                 : <span className="badge">{t('Not installed')}</span>}
               {mwInstalled && <span className="badge">{t('Engine:')} {mw.engine === 'lmd+clamav' ? 'LMD + ClamAV' : mw.engine === 'clamav' ? 'ClamAV' : mw.engine}</span>}
@@ -11607,7 +11608,9 @@ function App() {
           <div className="malware-scan-head">
             <div>
               <strong>{t('Linux Malware Detect')} <span className="badge">{t('Not installed')}</span></strong>
-              <p className="hint">{mwEnabled && !mwInstalled
+              <p className="hint">{mw.install_state === 'failed'
+                ? t('The scanner could not be installed: {error}', { error: mw.install_error })
+                : mw.install_state === 'running'
                 ? t('LMD and ClamAV are installing (1-3 minutes). Press Refresh to see when they are ready.')
                 : t('This server has no Linux Malware Detect yet. Install it for its web-focused signatures (PHP shells, injected malware ClamAV misses) and the incremental /home scan.')}</p>
             </div>
