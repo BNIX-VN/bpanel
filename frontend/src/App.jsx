@@ -18,6 +18,7 @@ import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
 import { SharedBlocklistSection } from './components/SharedBlocklist.jsx';
+import { FolderTree } from './components/FolderTree.jsx';
 import { ChangelogHistory, ChangelogPreview } from './components/Changelog.jsx';
 import Tabs from './components/Tabs.jsx';
 import NotificationBell from './components/NotificationBell.jsx';
@@ -6431,7 +6432,6 @@ function App() {
       const accounts = sum.accounts || {};
       const history = usageHistory || [];
       const figureTone = (percent) => (percent === null ? 'ok' : percent >= 90 ? 'bad' : percent >= 75 ? 'warn' : 'ok');
-      const pct = value => (resourceUsage ? formatPercent(value) : '—');
       const figure = (page, label, value, percent, values, max) => <button type="button" key={page}
         className={`dash-figure tone-${figureTone(percent)}`} onClick={() => navigateToPage(page)}>
         <span className="dash-figure-label">{label}</span>
@@ -6446,10 +6446,9 @@ function App() {
           {statusCard}
           <section className="section side-card">
             <h3 className="side-card-title">{t('Server information')}</h3>
+            {/* CPU, RAM and disk are in the top bar (operator, 2026-10-25: not
+                twice); the network, which is not, stays here. */}
             <div className="dash-figures">
-              {figure('processes', 'CPU', pct(cpu.percent), resourceUsage ? Number(cpu.percent) || 0 : null, history.map(h => h.cpu))}
-              {figure('ram-usage', 'RAM', pct(memory.percent), resourceUsage ? Number(memory.percent) || 0 : null, history.map(h => h.memory))}
-              {figure('disk-usage', t('Disk'), pct(disk.percent), resourceUsage ? Number(disk.percent) || 0 : null, history.map(h => h.disk))}
               {figure('traffic', t('Network'), resourceUsage ? `${formatBytes(networkTotal)}/s` : '—', null, history.map(h => h.network), 0)}
             </div>
             <InfoRow label={t('Hostname')} value={server.hostname} />
@@ -9796,6 +9795,10 @@ function App() {
                 </div>)}
               </div>}
             </div>
+            <div className="fm-body">
+            <FolderTree request={request} base={hasTarget ? fileTargetBase() : ''} targetKey={targetKey}
+              current={fileListPath} currentItems={files} onOpen={path => listFiles(path)} t={t}
+              rootLabel={activeFileApp ? activeFileApp.name : (currentSite?.domain || t('root'))}/>
             <div className="file-list">
               <div className="file-list-header">
                 <input type="checkbox" checked={allSelected} ref={el => { if (el) el.indeterminate = selectedFilePaths.length > 0 && !allSelected; }}
@@ -9839,6 +9842,7 @@ function App() {
                   ]}/>
                 </div>
               </div>)}
+            </div>
             </div>
           </div>
         </div>

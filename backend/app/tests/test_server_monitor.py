@@ -109,8 +109,11 @@ def test_the_shell_has_the_chips_on_top_and_the_account_below():
     assert 'className="secondary compact-btn top-lang"' not in APP
     assert '<div className="user-menu' in APP
     dashboard = APP.split("  function renderDashboard() {", 1)[1].split("\n  function ", 1)[0]
-    for page in ("processes", "ram-usage", "disk-usage", "traffic"):
-        assert f"figure('{page}'," in dashboard, page
+    # CPU, RAM and disk open their pages from the top bar (operator,
+    # 2026-10-25: not twice); the network from the Dashboard.
+    assert "figure('traffic'," in dashboard
+    for page in ("processes", "ram-usage", "disk-usage"):
+        assert f"figure('{page}'," not in dashboard, page
     for route in ("processes: '/processes'", "'ram-usage': '/ram-usage'", "'disk-usage': '/disk-usage'", "traffic: '/traffic'"):
         assert route in APP, route
     for page, render in (("processes", "renderProcessMonitor"), ("ram-usage", "renderRamUsage"),

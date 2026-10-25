@@ -2739,7 +2739,7 @@ export const vi = {
   "Sent: an address, the jail or WAF rule id, nothing else - no URL, no request, no site name.": "Chỉ gửi: địa chỉ IP, tên jail hoặc mã luật WAF - không gửi URL, nội dung request hay tên site.",
   "Removing the addon takes the list off the firewall and forgets this server's key.": "Gỡ addon sẽ bỏ danh sách khỏi tường lửa và xoá khoá của server này.",
   "This server is registering with the collector; its status is on the Firewall page.": "Server này đang đăng ký với collector; trạng thái xem ở trang Tường lửa.",
-
+  "Folders": "Thư mục",
 };
 
 /* Said in English by the people who run these servers. Translating them
