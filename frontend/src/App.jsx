@@ -19,6 +19,7 @@ import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
 import { SharedBlocklistSection } from './components/SharedBlocklist.jsx';
 import { FolderTree } from './components/FolderTree.jsx';
+import { FileTypeIcon } from './components/FileTypeIcon.jsx';
 import { ChangelogHistory, ChangelogPreview } from './components/Changelog.jsx';
 import Tabs from './components/Tabs.jsx';
 import NotificationBell from './components/NotificationBell.jsx';
@@ -9816,7 +9817,7 @@ function App() {
               {shownFiles.map(item => <div className={`file-item ${selectedFilePaths.includes(item.path) ? 'selected' : ''}`} key={item.path}>
                 <input type="checkbox" checked={selectedFilePaths.includes(item.path)} onChange={() => toggleFileSelection(item.path)} aria-label={t('Select {name}', { name: item.name })}/>
                 <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
-                  {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
+                  <FileTypeIcon name={item.name} isDir={item.is_dir} size={17}/> <strong>{item.name}</strong>
                 </button>
                 <button type="button" className="file-mode" disabled={!!loading}
                   title={t('Permissions {value} - click to change', { value: item.mode || '---' })}
