@@ -66,7 +66,7 @@ export const TILES = {
 
 // The Dashboard's sections, in order, for each role - SNPanel's own
 // (lib/features.jsx there): Accounts, Websites and domains, Email,
-// Databases, Files and backups, Security, Server, Advanced, Extensions.
+// Databases, Files and backups, Security, Server, Advanced (with Addons).
 // Addons are reached from here, not from the sidebar.
 const ADMIN = [
   ['accounts', msg('Accounts'), ['users', 'user-add', 'packages']],
@@ -76,8 +76,9 @@ const ADMIN = [
   ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
   ['security', msg('Security'), ['firewall', 'waf', 'access-logs', 'malware', 'account-security']],
   ['server', msg('Server'), ['php', 'services', 'processes', 'ram', 'disk', 'traffic', 'account-resources', 'updates']],
-  ['advanced', msg('Advanced'), ['cron', 'mcp', 'api-tokens', 'notifications', 'panel-settings']],
-  ['extensions', msg('Extensions'), ['addons']],
+  // Addons with the rest of Advanced, not a section of one tile of their own
+  // (operator, 2026-10-25).
+  ['advanced', msg('Advanced'), ['cron', 'mcp', 'api-tokens', 'notifications', 'panel-settings', 'addons']],
 ];
 const CUSTOMER = [
   ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'wordpress', 'applications']],

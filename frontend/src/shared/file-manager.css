@@ -729,3 +729,67 @@
     justify-content: flex-start;
   }
 }
+
+/* The folder tree beside the file list, as cPanel and DirectAdmin have it,
+   and one white card instead of grey boxes inside boxes (operator,
+   2026-10-25). Every label keeps the body text's contrast. */
+.file-manager .file-panel{padding:0;border:0;gap:10px}
+.file-controls .file-meta{background:transparent;border:0;padding:0 2px;min-height:34px;color:var(--text-secondary)}
+.path-pill.breadcrumb-line{background:transparent;border:0;padding:0}
+.file-manager .crumb{background:var(--surface);color:var(--text-secondary)}
+.file-manager .crumb:disabled{background:var(--primary-light);color:var(--primary-ink)}
+.fm-body{display:grid;grid-template-columns:minmax(200px,250px) minmax(0,1fr);border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden;background:var(--surface);min-height:360px}
+.fm-body .file-list-header{margin:0;border:0;border-bottom:1px solid var(--border);border-radius:0;background:var(--surface-alt);color:var(--text-secondary)}
+.fm-body .file-list{border:0;border-radius:0;max-height:min(70vh,780px)}
+.fm-body .file-list .empty-box{grid-column:1/-1;color:var(--text-secondary)}
+.fm-body .file-item:hover{background:var(--surface-hover)}
+.fm-body .file-item.selected{background:var(--primary-light)}
+.fm-tree{border-right:1px solid var(--border);background:var(--surface-alt);overflow:auto;max-height:min(70vh,820px);padding:6px 0}
+.fm-tree ul{list-style:none;margin:0;padding:0}
+.fm-tree-row{display:flex;align-items:center;gap:2px;padding-right:8px;min-height:30px}
+.fm-tree-row:hover{background:var(--surface-hover)}
+.fm-tree-row.active{background:var(--primary-light)}
+.fm-tree-row.active .fm-tree-name{color:var(--primary-ink);font-weight:700}
+.fm-tree-toggle{flex:none;width:20px;height:22px;min-height:22px;padding:0;display:inline-grid;place-items:center;background:none;border:0;box-shadow:none;color:var(--text-secondary);cursor:pointer}
+.fm-tree-name{flex:1 1 auto;min-width:0;display:flex;align-items:center;justify-content:flex-start;gap:6px;height:28px;min-height:28px;padding:0 4px;background:none;border:0;box-shadow:none;color:var(--text);font-size:13px;font-weight:500;text-align:left;cursor:pointer}
+.fm-tree-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-tree-name svg{flex:none;color:var(--primary-ink)}
+.fm-tree-loading{padding:4px 0;font-size:12px;color:var(--text-secondary)}
+@media (max-width:900px){.fm-body{grid-template-columns:1fr}.fm-tree{display:none}}
+
+/* Each kind of file in its own colour (operator, 2026-10-25, from a
+   reference): folders solid yellow, PHP purple, HTML orange, styles blue,
+   scripts amber, configuration slate, text violet, images green, archives
+   brown. Strong enough to read in both themes. */
+.file-list button.file-name svg.fti{flex:none;width:22px;height:22px}
+.fm-tree-name svg.fti{flex:none;width:18px;height:18px}
+.file-list button.file-name svg.fti-folder,.fm-tree-name svg.fti-folder{color:#f2ad2c}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-folder,:root[data-theme="dark"] .fm-tree-name svg.fti-folder{color:#f5bd4f}
+.file-list button.file-name svg.fti-php{color:#5f63b8}
+.file-list button.file-name svg.fti-html{color:#e0461f}
+.file-list button.file-name svg.fti-css{color:#2563d9}
+.file-list button.file-name svg.fti-js{color:#b7860b}
+.file-list button.file-name svg.fti-code{color:#0f8a7a}
+.file-list button.file-name svg.fti-json{color:#a35c0a}
+.file-list button.file-name svg.fti-config{color:#56657a}
+.file-list button.file-name svg.fti-text{color:#7a4fb0}
+.file-list button.file-name svg.fti-sql{color:#0b7fae}
+.file-list button.file-name svg.fti-image{color:#1f9257}
+.file-list button.file-name svg.fti-media{color:#c2337a}
+.file-list button.file-name svg.fti-archive{color:#9a5b1e}
+.file-list button.file-name svg.fti-pdf{color:#d0302b}
+.file-list button.file-name svg.fti-file{color:#647185}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-php{color:#9ea2f0}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-html{color:#ff7a52}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-css{color:#6c9ef8}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-js{color:#e8b931}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-code{color:#3cc5b1}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-json{color:#e09a4a}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-config{color:#9aa8bb}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-text{color:#b893ea}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-sql{color:#4cb8e4}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-image{color:#4fca8a}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-media{color:#ee6fae}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-archive{color:#d49450}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-pdf{color:#ff6b66}
+:root[data-theme="dark"] .file-list button.file-name svg.fti-file{color:#a3afc0}
