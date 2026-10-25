@@ -5,6 +5,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Folder, FolderOpen, HardDrive } from 'lucide-react';
 
+const dirsOf = items => (items || []).filter(item => item.is_dir)
+  .map(item => ({ name: item.name, path: item.path }))
+  .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
 const ancestors = path => {
   const parts = String(path || '').split('/').filter(Boolean);
   return parts.map((_, n) => parts.slice(0, n + 1).join('/'));
@@ -22,35 +26,32 @@ export function FolderTree({ request, base, targetKey, current, currentItems, ro
     setChildren(prev => (prev[path] ? prev : { ...prev, [path]: 'loading' }));
     const data = await request(`${base}?path=${encodeURIComponent(path)}`, { silent: true });
     pending.current.delete(path);
-    const dirs = (data?.items || []).filter(item => item.is_dir)
-      .map(item => ({ name: item.name, path: item.path }))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-    setChildren(prev => ({ ...prev, [path]: dirs }));
+    setChildren(prev => ({ ...prev, [path]: dirsOf(data?.items) }));
   };
 
-  // Another website or application: start again from its root.
+  // Another website or application: start again from its root. `base` too:
+  // opened straight at /filemanager, the website is chosen after the first
+  // render, and the root was never read (operator, 2026-10-25).
   useEffect(() => {
-    setChildren({});
-    setOpen(new Set(['']));
+    // What the list already shows for its folder is kept, not read again.
+    setChildren(Array.isArray(currentItems) ? { [current || '']: dirsOf(currentItems) } : {});
+    setOpen(new Set(['', ...ancestors(current)]));
     pending.current = new Set();
-    if (base) load('');
-  }, [targetKey]);
+    if (base) ['', ...ancestors(current)].filter(path => path !== (current || '')).forEach(load);
+  }, [targetKey, base]);
 
   // The folder in the list, and every folder above it, open.
   useEffect(() => {
     const chain = ['', ...ancestors(current)];
     setOpen(prev => new Set([...prev, ...chain]));
     chain.forEach(path => { if (!children[path] && path !== current) load(path); });
-  }, [current, targetKey]);
+  }, [current, targetKey, base]);
 
   // What the list shows is the truth for that folder: a folder just made or
   // deleted there shows here at once.
   useEffect(() => {
     if (!Array.isArray(currentItems)) return;
-    const dirs = currentItems.filter(item => item.is_dir)
-      .map(item => ({ name: item.name, path: item.path }))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-    setChildren(prev => ({ ...prev, [current || '']: dirs }));
+    setChildren(prev => ({ ...prev, [current || '']: dirsOf(currentItems) }));
   }, [currentItems]);
 
   const toggle = path => {
