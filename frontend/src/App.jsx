@@ -266,20 +266,6 @@ function LanguageToggle({ language, onChange, className = '' }) {
   </button>;
 }
 
-// A line of the last readings, scaled to 0-100 (or to its own peak). The
-// Dashboard's Server card draws CPU/RAM/Disk/Network this way.
-function Sparkline({ values: readings, max = 100 }) {
-  if (!readings || readings.length === 0) return <svg className="dash-spark" viewBox="0 0 80 22" aria-hidden="true"/>;
-  const values = readings.length === 1 ? [readings[0], readings[0]] : readings;
-  const top = Math.max(max || 0, ...values, 1);
-  const step = 80 / (values.length - 1);
-  const points = values.map((value, i) => `${(i * step).toFixed(1)},${(20 - (Math.max(0, value) / top) * 18).toFixed(1)}`);
-  return <svg className="dash-spark" viewBox="0 0 80 22" aria-hidden="true" preserveAspectRatio="none">
-    <polyline className="dash-spark-area" points={`0,22 ${points.join(' ')} 80,22`}/>
-    <polyline className="dash-spark-line" points={points.join(' ')}/>
-  </svg>;
-}
-
 const EDITOR_FONT_FAMILY = "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace";
 const WAF_ACCESS_LOG_DEFAULTS = {
   websiteId: '',
@@ -861,7 +847,6 @@ function App() {
   const [userSearch, setUserSearch] = useState('');
   const [resourceUsage, setResourceUsage] = useState(null);
   // The last 30 readings of loadResourceUsage, for the Dashboard's sparklines.
-  const [usageHistory, setUsageHistory] = useState([]);
   // The server pages behind the top bar's status chips (admin only).
   const [processTop, setProcessTop] = useState(null);
   const [processPaused, setProcessPaused] = useState(false);
@@ -1984,14 +1969,7 @@ function App() {
 
   async function loadResourceUsage() {
     const data = await request('/services/resource-usage', { silent: true });
-    if (data) {
-      setResourceUsage(data);
-      const network = data.network || {};
-      setUsageHistory(prev => [...prev, {
-        cpu: Number(data.cpu?.percent) || 0, memory: Number(data.memory?.percent) || 0, disk: Number(data.disk?.percent) || 0,
-        network: (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0),
-      }].slice(-30));
-    }
+    if (data) setResourceUsage(data);
   }
 
   async function loadProcessTop() {
@@ -5397,8 +5375,8 @@ function App() {
     return () => clearInterval(timer);
   }, [isAuthenticated, page, gitRepo?.repo?.id, gitRepo?.repo?.busy, gitRepo?.operations?.[0]?.status, gitOpLog?.id]);
 
-  // CPU, RAM, disk and network: the Dashboard's figures and their
-  // sparklines, kept warm on every page an administrator is on.
+  // CPU, RAM, disk and network: the top bar's figures, read on every page
+  // an administrator is on.
   useEffect(() => {
     if (!isAuthenticated || !isAdmin) return undefined;
     loadResourceUsage();
@@ -6327,23 +6305,29 @@ function App() {
     if (data) setArHistory(data);
   }
 
-  // CPU, RAM and disk in the top bar, each opening its page (operator,
-  // 2026-10-24: wanted back after living without them). Administrators only.
+  // CPU, RAM, disk and the network in the top bar, each opening its page
+  // (operator, 2026-10-24: wanted back after living without them; the
+  // network up from the Dashboard, 2026-10-26). Administrators only. The
+  // network has no percent, so no tone.
   function statTone(percent) {
+    if (percent === null) return 'ok';
     const value = Number(percent) || 0;
     return value >= 90 ? 'bad' : value >= 75 ? 'warn' : 'ok';
   }
 
   function renderTopStats() {
     const known = !!resourceUsage;
+    const network = resourceUsage?.network || {};
+    const throughput = `${formatBytes((Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0))}/s`;
     const chips = [
       ['processes', Cpu, 'CPU', resourceUsage?.cpu?.percent, 'CPU: open the process monitor'],
       ['ram-usage', MemoryStick, 'RAM', resourceUsage?.memory?.percent, 'RAM: where the memory is'],
       ['disk-usage', HardDrive, 'Disk', resourceUsage?.disk?.percent, 'Disk: what takes the space'],
+      ['traffic', Activity, 'Network', null, 'Network: traffic of each interface', throughput],
     ];
     return <nav className="top-stats" aria-label={t('Server status')}>
-      {chips.map(([key, Icon, label, percent, title]) => {
-        const value = known ? formatPercent(percent) : '--';
+      {chips.map(([key, Icon, label, percent, title, text]) => {
+        const value = known ? (text ?? formatPercent(percent)) : '--';
         return <button key={key} type="button" className={`top-stat tone-${known ? statTone(percent) : 'ok'}${page === key ? ' active' : ''}`}
           onClick={() => navigateToPage(key)} title={t(title)} aria-label={`${t(label)} ${value}`}>
           <Icon size={14} aria-hidden="true"/><span className="top-stat-label">{t(label)}</span><b>{value}</b>
@@ -6355,9 +6339,6 @@ function App() {
   function renderDashboard() {
     const cpu = resourceUsage?.cpu || {};
     const memory = resourceUsage?.memory || {};
-    const disk = resourceUsage?.disk || {};
-    const network = resourceUsage?.network || {};
-    const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
 
     // Until the summary arrives, the lists already loaded stand in for it.
     const sum = dashSummary || {};
@@ -6431,14 +6412,6 @@ function App() {
 
     if (isAdmin) {
       const accounts = sum.accounts || {};
-      const history = usageHistory || [];
-      const figureTone = (percent) => (percent === null ? 'ok' : percent >= 90 ? 'bad' : percent >= 75 ? 'warn' : 'ok');
-      const figure = (page, label, value, percent, values, max) => <button type="button" key={page}
-        className={`dash-figure tone-${figureTone(percent)}`} onClick={() => navigateToPage(page)}>
-        <span className="dash-figure-label">{label}</span>
-        <strong>{value}</strong>
-        <Sparkline values={values} max={max}/>
-      </button>;
       return <div className="dashboard cp-layout">
         <div className="cp-main">
           {renderFeaturesCard()}
@@ -6447,11 +6420,8 @@ function App() {
           {statusCard}
           <section className="section side-card">
             <h3 className="side-card-title">{t('Server information')}</h3>
-            {/* CPU, RAM and disk are in the top bar (operator, 2026-10-25: not
-                twice); the network, which is not, stays here. */}
-            <div className="dash-figures">
-              {figure('traffic', t('Network'), resourceUsage ? `${formatBytes(networkTotal)}/s` : '—', null, history.map(h => h.network), 0)}
-            </div>
+            {/* CPU, RAM, disk and the network are in the top bar (operator,
+                2026-10-25/26: not twice). */}
             <InfoRow label={t('Hostname')} value={server.hostname} />
             <InfoRow label={t('IP address')} value={server.ipv4} />
             <InfoRow label={t('Operating system')} value={server.os} />

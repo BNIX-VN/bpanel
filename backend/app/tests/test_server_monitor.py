@@ -109,11 +109,9 @@ def test_the_shell_has_the_chips_on_top_and_the_account_below():
     assert 'className="secondary compact-btn top-lang"' not in APP
     assert '<div className="user-menu' in APP
     dashboard = APP.split("  function renderDashboard() {", 1)[1].split("\n  function ", 1)[0]
-    # CPU, RAM and disk open their pages from the top bar (operator,
-    # 2026-10-25: not twice); the network from the Dashboard.
-    assert "figure('traffic'," in dashboard
-    for page in ("processes", "ram-usage", "disk-usage"):
-        assert f"figure('{page}'," not in dashboard, page
+    # CPU, RAM, disk and the network open their pages from the top bar
+    # (operator, 2026-10-25/26: not twice), not from the Dashboard.
+    assert "dash-figures" not in dashboard and "Sparkline" not in APP
     for route in ("processes: '/processes'", "'ram-usage': '/ram-usage'", "'disk-usage': '/disk-usage'", "traffic: '/traffic'"):
         assert route in APP, route
     for page, render in (("processes", "renderProcessMonitor"), ("ram-usage", "renderRamUsage"),
@@ -133,12 +131,13 @@ def test_the_version_opens_updates_and_marks_a_waiting_release():
     assert "user-menu-version-item" not in APP
 
 
-def test_cpu_ram_and_disk_sit_in_the_top_bar_for_an_administrator():
+def test_cpu_ram_disk_and_network_sit_in_the_top_bar_for_an_administrator():
     top = APP.split('<div className="top-actions">', 1)[1].split("<NotificationBell", 1)[0]
     assert "{isAdmin && renderTopStats()}" in top
     stats = APP.split("function renderTopStats() {", 1)[1].split("\n  }\n", 1)[0]
     for page in ("'processes'", "'ram-usage'", "'disk-usage'"):
         assert page in stats
+    assert "['traffic', Activity, 'Network', null," in stats
     source = inspect.getsource(services.get_resource_usage)
     assert "ensure_role(current_user.role, Role.admin)" in source and "updates.cached_release_summary()" in source
 
