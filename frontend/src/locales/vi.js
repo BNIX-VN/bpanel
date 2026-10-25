@@ -2705,6 +2705,7 @@ export const vi = {
   "CPU: open the process monitor": "CPU: mở trình theo dõi tiến trình",
   "RAM: where the memory is": "RAM: bộ nhớ đang dùng vào đâu",
   "Disk: what takes the space": "Ổ đĩa: cái gì chiếm dung lượng",
+  "Network: traffic of each interface": "Mạng: lưu lượng của từng card mạng",
   "Proxy to": "Chuyển tiếp tới",
   "Enter the address to proxy to, for example http://127.0.0.1:3000": "Nhập địa chỉ cần chuyển tiếp tới, ví dụ http://127.0.0.1:3000",
   "Send the visitor's Host header (off: the address's own)": "Gửi Host của người truy cập (tắt: dùng Host của địa chỉ đích)",
