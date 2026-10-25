@@ -94,3 +94,15 @@ def test_the_launcher_finds_the_updater_on_gitlab_and_on_github():
     assert _updater_url("git@github.com:BNIX-VN/bpanel.git") == \
         "https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/tags/v1.8.1/installer/update.sh"
     assert _updater_url("file:///srv/bpanel").startswith("FAIL: Cannot tell where the updater")
+
+
+def test_the_repair_script_runs_only_a_checked_updater_of_the_newest_release():
+    """installer/repair-update.sh: what customers on v1.7.2 - v1.8.1 run once
+    (curl | sudo bash) when the Update button cannot reach GitLab."""
+    repair = (PROJECT_ROOT / "installer" / "repair-update.sh").read_text(encoding="utf-8")
+    assert '[[ $EUID -eq 0 ]] || fail' in repair
+    assert "git ls-remote --tags --refs" in repair and "sort -V | tail -n 1" in repair
+    run = repair.index('bash "$script" --release </dev/null')
+    for check in ('#!/usr/bin/env bash', "grep -q 'BPANEL_UPDATE_STABLE_COPY'", 'bash -n "$script"'):
+        assert repair.index(check) < run, check
+    assert 'BPANEL_UPDATER_URL="${REPO}/-/raw/{ref}/installer/update.sh"' in repair
