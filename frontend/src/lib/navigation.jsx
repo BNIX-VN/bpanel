@@ -87,11 +87,9 @@ export const HUBS = [
     { page: 'addons', label: msg('Addons') },
     { page: 'notifications', label: msg('Notifications'), when: (c) => c.notificationsAddonInstalled },
   ] },
-  { key: 'files', title: msg('Files'), roles: ['admin', 'reseller', 'customer'], tabs: [
-    { page: 'files', label: msg('File manager') },
-    { page: 'sftp', label: 'SFTP' },
-    { page: 'terminal', label: msg('Terminal'), when: (c) => c.canOpenTerminal },
-  ] },
+  // No Files hub (operator, 2026-10-26): the File manager opens in a browser
+  // tab of its own; SFTP accounts and the terminal are opened from the
+  // Dashboard's tools (see PARENTS below).
 ];
 
 const roleOf = (ctx) => (ctx.isAdmin ? 'admin' : ctx.isReseller ? 'reseller' : 'customer');
@@ -151,7 +149,7 @@ export function sidebarItems(ctx) {
 }
 
 // Pages that belong under a sidebar entry without being a tab of it.
-const PARENTS = { 'malware-scan': 'security-center', 'waf-site': 'security-center', website: 'websites' };
+const PARENTS = { 'malware-scan': 'security-center', 'waf-site': 'security-center', website: 'websites', sftp: 'files', terminal: 'files' };
 
 // The sidebar entry lit on a page: its hub's, its parent's, or the
 // Dashboard's - every other page is reached from there.

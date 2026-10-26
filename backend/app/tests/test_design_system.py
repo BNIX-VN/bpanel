@@ -109,10 +109,13 @@ def test_the_sidebar_holds_what_is_used_every_day():
     hubs = navigation.split("export const HUBS = [")[1].split("\n];")[0]
     tabs = re.findall(r"\{ page: '([a-z-]+)'", hubs)
     for page in ("processes", "ram-usage", "disk-usage", "traffic", "account-resources", "php", "services", "updates",
-                 "firewall", "waf", "access-logs", "malware", "panel-settings", "addons", "notifications",
-                 "files", "sftp", "terminal"):
+                 "firewall", "waf", "access-logs", "malware", "panel-settings", "addons", "notifications"):
         assert page in tabs, page
-    assert not set(keys) & set(tabs) - {"files"}, "a page in both places"
+    # The File manager opens in a tab of its own, SFTP and the terminal from
+    # the Dashboard (operator, 2026-10-26): no Files hub.
+    for page in ("files", "sftp", "terminal"):
+        assert page not in tabs, page
+    assert not set(keys) & set(tabs), "a page in both places"
 
 
 def test_a_settings_page_keeps_its_own_name_and_lights_up_settings():

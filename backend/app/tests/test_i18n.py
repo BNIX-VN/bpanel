@@ -225,7 +225,7 @@ def test_the_page_language_is_announced():
 # --- what the sweep must not have touched ------------------------------------
 
 @pytest.mark.parametrize("page_key", [
-    "navigateToPage('websites')", "navigateToPage('files')",
+    "navigateToPage('websites')", "navigateToPage('files', ",
     "routeForPage('files')",
 ])
 def test_page_keys_were_not_translated(page_key):

@@ -529,6 +529,14 @@ function editorParamsFromLocation() {
   return { websiteId: websiteId ? String(websiteId) : '', appId: appId ? String(appId) : '', path };
 }
 
+// The File manager's own browser tab (operator, 2026-10-26): /filemanager,
+// with ?website_id= or ?app_id= for what it opens on.
+function fileManagerTargetFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('view') === 'editor') return { websiteId: '', appId: '' };
+  return { websiteId: params.get('website_id') || '', appId: params.get('app_id') || '' };
+}
+
 function aceModeName(mode) {
   if (mode === 'PHP') return 'php';
   if (mode === 'JavaScript') return 'javascript';
@@ -779,6 +787,7 @@ function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [standaloneEditor] = useState(() => editorParamsFromLocation());
+  const [fileManagerTarget] = useState(() => fileManagerTargetFromLocation());
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -898,7 +907,7 @@ function App() {
   const [restorePicks, setRestorePicks] = useState([]);
   const [restoreFilter, setRestoreFilter] = useState('');
   const [restoreJob, setRestoreJob] = useState(null);
-  const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || '');
+  const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || fileManagerTarget.websiteId);
   const [sslMode, setSslMode] = useState('letsencrypt');
   const [manualSslForm, setManualSslForm] = useState({ certificate: '', private_key: '', ca_bundle: '' });
   const [manualSslFiles, setManualSslFiles] = useState({ certificate: null, private_key: null, ca_bundle: null });
@@ -1019,7 +1028,7 @@ function App() {
   const [siteAppDraft, setSiteAppDraft] = useState(EMPTY_SITE_APP_DRAFT);
   const [createSiteAppId, setCreateSiteAppId] = useState('');
   // File manager target: empty means the selected website, otherwise an app.
-  const [fileAppId, setFileAppId] = useState(() => standaloneEditor?.appId || '');
+  const [fileAppId, setFileAppId] = useState(() => standaloneEditor?.appId || fileManagerTarget.appId);
   const [siteAppLog, setSiteAppLog] = useState(null);
   const [composePlan, setComposePlan] = useState(null);
   const [siteAppEdit, setSiteAppEdit] = useState(null);
@@ -1031,8 +1040,8 @@ function App() {
   const [chmodTarget, setChmodTarget] = useState(null);
   const [chmodMode, setChmodMode] = useState('644');
   const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public_html/index.html');
-  const [fileListPath, setFileListPath] = useState('public_html');
-  const [fileUploadDir, setFileUploadDir] = useState('public_html');
+  const [fileListPath, setFileListPath] = useState(() => (fileManagerTarget.appId ? '' : 'public_html'));
+  const [fileUploadDir, setFileUploadDir] = useState(() => (fileManagerTarget.appId ? '' : 'public_html'));
   const [files, setFiles] = useState([]);
   const [fileJobs, setFileJobs] = useState([]);
   const [fileContent, setFileContent] = useState('');
@@ -1226,6 +1235,12 @@ function App() {
   const navigateToPage = useCallback((nextPage, options = {}) => {
     // A hub's own address opens its first tab this role may see.
     if (isHubKey(nextPage)) nextPage = hubLanding(nextPage, navCtxRef.current) || 'dashboard';
+    // The File manager opens in a browser tab of its own, with nothing of
+    // the panel around it, as cPanel's (operator, 2026-10-26).
+    if (nextPage === 'files') {
+      window.open(fileManagerUrl(options), '_blank', 'noopener');
+      return;
+    }
     // A page with an address of its own (one website's) passes it as `path`.
     const route = options.path || routeForPage(nextPage);
     if (!route) return;
@@ -4026,6 +4041,16 @@ function App() {
     finally { setLoading(''); }
   }
 
+  function fileManagerUrl({ websiteId, appId } = {}) {
+    const url = new URL(window.location.href);
+    url.pathname = routeForPage('files');
+    url.search = '';
+    url.hash = '';
+    if (appId) url.searchParams.set('app_id', String(appId));
+    else if (websiteId) url.searchParams.set('website_id', String(websiteId));
+    return url.toString();
+  }
+
   function fileEditorUrl(path) {
     const url = new URL(window.location.href);
     url.pathname = routeForPage('files');
@@ -4232,32 +4257,15 @@ function App() {
     if (page === 'files' && hasFileTarget()) loadFileJobs();
   }, [page, selectedWebsiteId, fileAppId]);
 
-  async function openWebsiteFileManager(site) {
-    setNginxCustomEditing(null);
-    setWordpressInstaller(null);
-    setLogViewer(null);
-    setTerminalViewer(null);
+  // A website's files - its application's, when one serves it - and an
+  // application's, in the File manager's own tab.
+  function openWebsiteFileManager(site) {
     const appId = linkedAppId(site.id);
-    setFileAppId(appId);
-    setSelectedWebsiteId(String(site.id));
-    navigateToPage('files');
-    setFileListPath(appId ? '' : 'public_html');
-    setFileUploadDir(appId ? '' : 'public_html');
-    setFiles([]);
-    setSelectedFilePaths([]);
+    navigateToPage('files', appId ? { appId } : { websiteId: site.id });
   }
 
   function openAppFileManager(app) {
-    setNginxCustomEditing(null);
-    setLogViewer(null);
-    setTerminalViewer(null);
-    setFileAppId(String(app.id));
-    // An app root has no public_html; the listing effect picks it up from here.
-    setFileListPath('');
-    setFileUploadDir('');
-    setFiles([]);
-    setSelectedFilePaths([]);
-    navigateToPage('files');
+    navigateToPage('files', { appId: app.id });
   }
 
   async function uploadSiteFile(file) {
@@ -5378,7 +5386,7 @@ function App() {
   // CPU, RAM, disk and network: the top bar's figures, read on every page
   // an administrator is on.
   useEffect(() => {
-    if (!isAuthenticated || !isAdmin) return undefined;
+    if (!isAuthenticated || !isAdmin || page === 'files') return undefined;
     loadResourceUsage();
     const timer = setInterval(loadResourceUsage, page === 'ram-usage' ? 5000 : 10000);
     return () => clearInterval(timer);
@@ -9711,7 +9719,8 @@ function App() {
     };
     return <>
       {renderChmodDialog()}
-      <PageHeader onRefresh={() => listFiles(fileListPath)} refreshDisabled={!hasTarget || !!loading}/>
+      {/* No page head over it (operator, 2026-10-26: the room is the
+          files'): Refresh sits in the toolbar with the folder's actions. */}
       <section className="section">
         <div className="file-manager">
           <div className="file-panel">
@@ -9741,6 +9750,7 @@ function App() {
                   <Upload size={14} aria-hidden="true"/> {t('Upload')}
                   <input type="file" disabled={!hasTarget || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
                 </label>
+                <button className="secondary-light" disabled={!hasTarget || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14} aria-hidden="true"/> {t('Refresh')}</button>
               </div>
               {selectedFilePaths.length > 0 && <div className="fm-selection" role="region" aria-label={t('Selected items')}>
                 <strong>{t('{count} selected', { count: selectedFilePaths.length })}</strong>
@@ -12682,7 +12692,35 @@ function App() {
     </main>;
   }
 
+  // The File manager's own tab: the files, and nothing else of the panel.
+  function renderStandaloneFiles() {
+    const app = fileAppId ? (siteApps.items || []).find(item => String(item.id) === String(fileAppId)) : null;
+    return <main className="standalone-files-page">
+      <header className="standalone-editor-top standalone-files-top">
+        <div className="standalone-files-brand">
+          {renderBrandMark()}
+          <div className="standalone-editor-title">
+            <strong>{t('File manager')}</strong>
+            <span>{app?.name || currentSite?.domain || panelSettings.app_name || 'BPanel'}</span>
+          </div>
+        </div>
+        <div className="standalone-editor-actions">
+          <ThemeToggle theme={theme} onToggle={toggleTheme} className="secondary-light icon-only" size={15}/>
+          <a className="standalone-files-link" href={routeForPage('dashboard')}><Home size={14}/> {t('Dashboard')}</a>
+          <button type="button" className="secondary-light" onClick={() => window.close()}><X size={14}/> {t('Close')}</button>
+        </div>
+      </header>
+      {currentUser?.demo && <div className="demo-banner" role="status"><Eye size={15}/> <span>{t('You are viewing a read-only demo: you can open every page, and nothing you change is saved.')}</span></div>}
+      <section className="standalone-files-body">
+        {renderFiles()}
+        {loading && <div className="loading"><span></span>{t(loading)}</div>}
+      </section>
+      {renderNotifications()}
+    </main>;
+  }
+
   if (standaloneEditor) return renderStandaloneEditor();
+  if (page === 'files') return renderStandaloneFiles();
 
   const ActiveIcon = litItem?.[2] || Home;
 
