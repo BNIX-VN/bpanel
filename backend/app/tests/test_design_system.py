@@ -217,7 +217,7 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
 def test_the_file_list_says_when_each_file_was_changed():
     """The API has sent every entry's mtime all along; nothing drew it. As in
     OPanel the date has a column of its own."""
-    files = APP.split("  function renderFiles() {")[1].split("\n  }\n")[0]
+    files = APP.split("  function renderFiles({ brand, actions } = {}) {")[1].split("\n  }\n")[0]
     assert '<time className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</time>' in files
 
 
@@ -228,7 +228,7 @@ def test_permissions_open_in_opanels_dialog_and_keep_what_bpanel_adds():
     dialog = APP.split("  function renderChmodDialog() {")[1].split("\n  }\n")[0]
     assert '<div className="modal-card chmod-card"' in dialog and '<div className="chmod-mode-row">' in dialog
     assert "special: bits.special === 2 ? 0 : 2" in dialog, "setgid on folders"
-    files = APP.split("  function renderFiles() {")[1].split("\n  }\n")[0]
+    files = APP.split("  function renderFiles({ brand, actions } = {}) {")[1].split("\n  }\n")[0]
     assert "onClick={() => openChmodDialog(selectedItems)}" in files
     assert "chmod-backdrop" not in APP and "file-modified" not in APP
 

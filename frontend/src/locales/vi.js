@@ -227,6 +227,7 @@ export const vi = {
   "Websites and domains": "Website và tên miền",
   "Files and backups": "File và backup",
   "Website type": "Loại website",
+  "Website or application": "Website hoặc ứng dụng",
   "Pick from the list": "Chọn từ danh sách",
   "Choose a domain on this server": "Chọn một tên miền trên server",
   "Another domain…": "Tên miền khác…",
