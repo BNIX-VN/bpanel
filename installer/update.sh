@@ -1835,43 +1835,57 @@ with SessionLocal() as db:
     # full parses of 18,503 rules - which is what ran a swapless 8 GB server
     # out of memory partway through an update and took nginx down with it.
     # A failure still rolls every vhost written in the batch back.
-    with nginx.deferred_reload():
+    def refresh_site(website):
+        try:
+            if website.linux_user:
+                runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
+                site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
+                site_users.ensure_document_root(
+                    website.root_path,
+                    getattr(website, "document_root", "public_html") or "public_html",
+                    website.linux_user,
+                )
+            # No fix_site_permissions here: it resets every file of the
+            # site to 644, undoing modes the owner chose, on each update
+            # that changed a service (operator, 2026-09-27).
+            # ensure_site_runtime above already puts the ownership right.
+            result = waf.sync_website_rules(website)
+            if result.returncode != 0:
+                print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")
+            if getattr(website, "nginx_config_mode", "managed") != "managed":
+                website.nginx_config_mode = "managed"
+                db.commit()
+            # The panel's own rebuild: aliases, redirect domains, SSL mode
+            # and the linked application's port included. The call that
+            # was here passed none of them, so every refresh dropped the
+            # pointer and redirect vhosts (crm.media.io.vn on .88 stopped
+            # redirecting) and refused every site fronting an application
+            # with "Pick an installed application for this website first"
+            # (.120, every update since at least 1.0.173).
+            websites_api._rewrite_website_vhost(website)
+            # Suspending never locked the Linux user before 1.3.0: the
+            # helper had no panel-user-lock, and the call ignored the
+            # error, so a suspended customer kept SFTP. Lock the ones
+            # suspended then; locking a locked user changes nothing.
+            if website.status == "suspended" and website.linux_user:
+                site_users.lock_linux_user(website.linux_user)
+        except Exception as exc:
+            print(f"WARNING: could not refresh {website.domain}: {exc}")
+
+    try:
+        with nginx.deferred_reload():
+            for website in websites:
+                refresh_site(website)
+    except Exception as exc:
+        # One site nginx refuses - or a file of nobody's in conf.d - failed
+        # the single test, and every vhost of the batch was put back. That
+        # stopped the whole update halfway (box .120, 2026-10-26: the code
+        # and database new, the API never restarted). Site by site instead:
+        # each one is tested on its own, and one nginx refuses keeps its last
+        # good config.
+        print(f"WARNING: nginx refused the refreshed configuration ({exc}); refreshing the sites one by one")
         for website in websites:
-            try:
-                if website.linux_user:
-                    runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
-                    site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
-                    site_users.ensure_document_root(
-                        website.root_path,
-                        getattr(website, "document_root", "public_html") or "public_html",
-                        website.linux_user,
-                    )
-                # No fix_site_permissions here: it resets every file of the
-                # site to 644, undoing modes the owner chose, on each update
-                # that changed a service (operator, 2026-09-27).
-                # ensure_site_runtime above already puts the ownership right.
-                result = waf.sync_website_rules(website)
-                if result.returncode != 0:
-                    print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")
-                if getattr(website, "nginx_config_mode", "managed") != "managed":
-                    website.nginx_config_mode = "managed"
-                    db.commit()
-                # The panel's own rebuild: aliases, redirect domains, SSL mode
-                # and the linked application's port included. The call that
-                # was here passed none of them, so every refresh dropped the
-                # pointer and redirect vhosts (crm.media.io.vn on .88 stopped
-                # redirecting) and refused every site fronting an application
-                # with "Pick an installed application for this website first"
-                # (.120, every update since at least 1.0.173).
-                websites_api._rewrite_website_vhost(website)
-                # Suspending never locked the Linux user before 1.3.0: the
-                # helper had no panel-user-lock, and the call ignored the
-                # error, so a suspended customer kept SFTP. Lock the ones
-                # suspended then; locking a locked user changes nothing.
-                if website.status == "suspended" and website.linux_user:
-                    site_users.lock_linux_user(website.linux_user)
-            except Exception as exc:
-                print(f"WARNING: could not refresh {website.domain}: {exc}")
+            refresh_site(website)
     try:
         result = nginx.sync_http_flood_zones(websites)
         if result.returncode != 0:
@@ -2108,8 +2122,15 @@ migrate_protect_php_from_autoremove
 migrate_service_update_origins
 migrate_user_backup_dir_owner
 migrate_site_cron_php_binary
-nginx -t
-systemctl reload nginx
+# The panel's own vhosts were each tested as they were written. A file nginx
+# still refuses here is one the panel did not write (box .167, 2026-10-26: a
+# hand-made staging server whose folder was deleted): the update is done, and
+# nginx keeps serving the configuration it loaded last.
+if nginx -t; then
+  systemctl reload nginx
+else
+  log "WARNING: nginx -t fails on a file named above, so nginx was not reloaded; it keeps serving the configuration it loaded last. Fix or remove that file, then run: systemctl reload nginx"
+fi
 
 # --- Did turning HTTPS on actually work? -----------------------------------
 if [[ -n "${PANEL_SWITCHED_TO_HTTPS:-}" ]]; then

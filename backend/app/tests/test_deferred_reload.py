@@ -142,7 +142,11 @@ def test_the_updater_actually_uses_it():
 
     assert "with nginx.deferred_reload():" in update
     block = update.split("with nginx.deferred_reload():", 1)[1].split("\nPY\n", 1)[0]
-    assert "websites_api._rewrite_website_vhost(website)" in block
+    # The per-site work is refresh_site(), run inside the block - and again
+    # site by site when the batch's one test fails (box .120, 2026-10-26).
+    assert block.split("except Exception", 1)[0].count("refresh_site(website)") == 1
+    site = update.split("    def refresh_site(website):", 1)[1].split("\n    try:\n        with nginx.deferred_reload():", 1)[0]
+    assert "websites_api._rewrite_website_vhost(website)" in site
 
 
 def test_the_updater_rebuilds_a_vhost_the_way_the_panel_does():

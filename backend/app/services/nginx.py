@@ -734,6 +734,48 @@ def _ensure_custom_include_position(content: str, domain: str) -> str:
     return cleaned.rstrip() + f"\n\n{block}\n"
 
 
+# Server-level directives the templates set once that a site's custom block
+# may set instead. nginx refuses a directive set twice in one block, so with
+# "client_max_body_size 50m;" in its custom block every rewrite of a site's
+# vhost failed nginx -t - and with it the updater's site refresh, every
+# update, on box .120 (2026-10-26). The custom value wins: the template's line
+# is left out, and comes back when the custom block no longer sets it.
+CUSTOM_OVERRIDABLE_DEFAULTS = {"client_max_body_size": "client_max_body_size 1100M;"}
+
+
+def _custom_top_level_directives(custom_directives: str) -> set[str]:
+    """The directives a custom block sets in the server block itself, not
+    inside one of its own location { } blocks."""
+    names: set[str] = set()
+    depth = 0
+    for raw in (custom_directives or "").splitlines():
+        line = raw.split("#", 1)[0]
+        for statement in re.split(r"(?<=[;{}])", line):
+            text = statement.strip()
+            if depth == 0 and text and not text.startswith("}"):
+                match = re.match(r"([a-z_][a-z0-9_]*)\b", text)
+                if match and not text.endswith("{"):
+                    names.add(match.group(1))
+            depth += statement.count("{") - statement.count("}")
+            depth = max(depth, 0)
+    return names
+
+
+def _apply_custom_overrides(content: str, custom_directives: str) -> str:
+    """Leave the template's line out of the primary server block for each
+    directive the custom block sets; put the default back when it does not."""
+    custom_names = _custom_top_level_directives(custom_directives)
+    for name, default in CUSTOM_OVERRIDABLE_DEFAULTS.items():
+        line = re.compile(rf"\n    {name} [^;\n]*;")
+        if name in custom_names:
+            content = line.sub("", content, count=1)
+        elif not line.search(content):
+            anchor = re.search(r"\n    error_log [^;\n]*;", content) or re.search(r"\n    server_name [^;\n]*;", content)
+            if anchor:
+                content = content[:anchor.end()] + f"\n\n    {default}" + content[anchor.end():]
+    return content
+
+
 def read_custom_include(domain: str) -> str:
     try:
         return _custom_include_path(domain).read_text(encoding="utf-8")
@@ -1428,6 +1470,7 @@ def render_vhost(
     # exactly the same thing. Done before the redirect vhosts are appended so
     # it lands in the primary server block, which is the one that serves.
     rendered = _replace_bot_block(rendered, blocked_bots)
+    rendered = _apply_custom_overrides(rendered, custom_directives)
     if app_type == "wordpress" and not fastcgi_cache:
         rendered = _without_fastcgi_cache(rendered)
     if ssl_cert_path or ssl_key_path:
@@ -1586,7 +1629,7 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
     if not target.exists():
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
-    positioned = _ensure_custom_include_position(existing, domain)
+    positioned = _apply_custom_overrides(_ensure_custom_include_position(existing, domain), safe_custom)
     custom_snapshot = _custom_include_snapshot(domain)
     _write_custom_include(domain, safe_custom)
     if positioned != existing:
