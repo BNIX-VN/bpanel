@@ -17,7 +17,7 @@ pyotp==2.9.0
 # Passkeys. Pulls cbor2, pyOpenSSL and asn1crypto.
 webauthn==3.0.1
 qrcode[pil]==7.4.2
-paramiko==3.4.0
+paramiko==5.1.0
 maxminddb==3.2.0
 # S3 and anything that speaks its API: Wasabi, B2, Spaces, R2, MinIO.
 # Chosen over boto3, which pulls botocore and roughly 100 MB of AWS service
