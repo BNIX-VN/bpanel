@@ -53,7 +53,7 @@ export const TILES = {
   mcp: { label: msg('AI assistants (MCP)'), icon: 'mcp', page: 'mcp', addon: 'mcp' },
   // The account's own Redis (Redis per account addon, operator 2026-10-27);
   // an administrator's tile lists which accounts have it on.
-  redis: { label: 'Redis', icon: 'cache', page: 'redis', addon: 'redis-accounts' },
+  redis: { label: 'Redis', icon: 'redis', page: 'redis', addon: 'redis-accounts' },
   services: { label: msg('Services'), icon: 'services', page: 'services', roles: ['admin'] },
   processes: { label: msg('Processes'), icon: 'processes', page: 'processes', roles: ['admin'] },
   ram: { label: 'RAM', icon: 'ram', page: 'ram-usage', roles: ['admin'] },
