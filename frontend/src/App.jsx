@@ -24,6 +24,7 @@ import { ChangelogHistory, ChangelogPreview } from './components/Changelog.jsx';
 import Tabs from './components/Tabs.jsx';
 import NotificationBell from './components/NotificationBell.jsx';
 import Drawer from './components/Drawer.jsx';
+import InlinePanel from './components/InlinePanel.jsx';
 import { generatePassword } from './lib/password.js';
 import { DialogHost, confirmDialog, promptDialog } from './components/Dialog.jsx';
 import { Checkbox, Field, PasswordField } from './components/Form.jsx';
@@ -1111,7 +1112,6 @@ function App() {
   const [globalBotText, setGlobalBotText] = useState('');
   // The WAF page's global bot editor: open or not, the one being added, the
   // list's filter and a pasted list.
-  const [wafBotsOpen, setWafBotsOpen] = useState(false);
   const [wafNewBot, setWafNewBot] = useState('');
   const [wafBotFilter, setWafBotFilter] = useState('');
   const [wafBotPaste, setWafBotPaste] = useState('');
@@ -8332,102 +8332,6 @@ function App() {
       { label: t('Delete website'), icon: Trash2, danger: true, disabled: !!loading, onClick: () => deleteWebsite(site.id) },
     ];
     return <>
-      <Drawer open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}
-        title={websites.length ? t('Create website') : t('Attach first domain')}
-        footer={<>
-          {/* Shown when the first site of an account failed and the sheet came back. */}
-          {!loading && error && <span className="sn-drawer-foot-note" role="alert">{error}</span>}
-          <button type="submit" form="website-create-form" disabled={!!loading || !domain}><Plus size={15} aria-hidden="true"/> {t('Create')}</button>
-        </>}>
-        <form id="website-create-form" onSubmit={(e) => {
-          e.preventDefault();
-          setCreateFormOpen(false);
-          setCreatePending(true);
-          Promise.resolve(createWordPress()).finally(() => setCreatePending(false));
-        }}>
-        <div className="sn-drawer-grid create-site-fields">
-          <Field className="is-wide" label={t('Domain')}>
-            <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" autoCapitalize="none" spellCheck={false} />
-          </Field>
-          {isReseller && users.length > 0 && <Field className="is-wide" label={t('Owner')}>
-            <select value={siteOwnerId} onChange={e => setSiteOwnerId(e.target.value)}>
-              <option value="">{t('For yourself')}</option>
-              {users.filter(u => u.id !== currentUser?.id).map(u => <option key={u.id} value={u.id}>{t('For {name}', { name: u.username })}</option>)}
-            </select>
-          </Field>}
-          <Field label={t('Website type')}>
-            <select value={siteType} onChange={e => setSiteType(e.target.value)}>
-              {WEBSITE_MODES.map(([value, label]) => <option
-                key={value}
-                value={value}
-                disabled={value === 'application' && !appsFeatureEnabled}
-              >{t(label)}</option>)}
-            </select>
-          </Field>
-          {siteType === 'proxy'
-            ? <Field className="is-wide" label={t('Proxy to')} hint={isAdmin ? t('Any http:// or https:// address, this server included (http://127.0.0.1:3000).') : t('A public http:// or https:// address.')}>
-              <input value={createProxyUrl} onChange={e => setCreateProxyUrl(e.target.value)} placeholder="http://127.0.0.1:3000" spellCheck={false} autoCapitalize="none"/>
-            </Field>
-            : siteType === 'application'
-            ? <Field label={t('Application')}>
-              <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
-                <option value="">{t('Select an application')}</option>
-                {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
-              </select>
-            </Field>
-            : <Field label={t('PHP version')}>
-              <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
-                {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
-              </select>
-            </Field>}
-        </div>
-        {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">{t('No applications installed yet. Install one on the')}<button type="button" className="link-button" onClick={() => navigateToPage('applications')}>{t('Applications')}</button> page first.
-        </p>}
-        {siteType === 'proxy' && <Checkbox checked={createProxyPreserve} onChange={setCreateProxyPreserve}
-          label={t("Send the visitor's Host header (off: the address's own)")}/>}
-        {siteType === 'wordpress' && <Checkbox checked={installWordPress} onChange={setInstallWordPress}
-          label={t('Install WordPress (creates database, downloads WP, configures vhost)')}/>}
-        {wpFieldsEnabled && <div className="sn-drawer-section">
-          <h3>{t('WordPress administrator')}</h3>
-          <div className="sn-drawer-grid">
-            <Field label={t('Admin user')}><input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder={t('WP admin user')} autoComplete="off"/></Field>
-            <Field label={t('Admin email')} optional><input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com"/></Field>
-            <Field className="is-wide" label={t('Admin password')} optional hint={t('Leave blank for a random one')}>
-              <PasswordField value={wpAdminPassword} onChange={setWpAdminPassword} generate copy/>
-            </Field>
-          </div>
-        </div>}
-        <Checkbox checked={sslAfterCreate} onChange={(v) => setCreateSslMode(v ? 'letsencrypt' : 'none')}
-          label={t('Set up SSL after creating')}/>
-        {sslAfterCreate && <div className="create-ssl-box">
-          <div className="segmented ssl-mode-tabs">
-            <button className={createSslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setCreateSslMode('letsencrypt')}><Lock size={13}/> Let's Encrypt</button>
-            <button className={createSslMode === 'wildcard' ? 'active' : ''} onClick={() => setCreateSslMode('wildcard')}><Globe size={13}/> {t('Wildcard (Cloudflare)')}</button>
-            <button className={createSslMode === 'shared' ? 'active' : ''} onClick={() => setCreateSslMode('shared')}><RefreshCw size={13}/> {t('Use existing')}</button>
-            <button className={createSslMode === 'manual' ? 'active' : ''} onClick={() => setCreateSslMode('manual')}><KeyRound size={13}/> {t('Manual')}</button>
-          </div>
-          {createSslMode === 'letsencrypt' && <p className="hint">{t("certbot HTTP-01 — the domain must point to this server's IP first.")}</p>}
-          {createSslMode === 'wildcard' && <div className="create-ssl-fields">
-            <input type="password" autoComplete="off" placeholder={t('Cloudflare API Token')} value={createSslToken} onChange={e => setCreateSslToken(e.target.value)} />
-            <p className="hint">{t('A scoped')} <strong>{t('API Token')}</strong> {t('(My Profile → API Tokens → Create Token),')} <strong>{t('not')}</strong> {t('the Global API Key. Permission')} <code>Zone → DNS → Edit</code> {t('for the zone(s) you issue certs for. Stored encrypted for renewal. Issues one cert for the zone and *.zone — no DNS record or port 80 needed. Leave the token blank to reuse one already saved for the zone.')}</p>
-          </div>}
-          {createSslMode === 'shared' && <p className="hint">{t('After the site is created the panel points it at an existing certificate that covers this domain (a wildcard first). If none does, the site is created without SSL.')}</p>}
-          {createSslMode === 'manual' && <div className="create-ssl-fields">
-            <textarea rows={4} placeholder="-----BEGIN CERTIFICATE-----" value={createSslManual.certificate} onChange={e => setCreateSslManual(p => ({ ...p, certificate: e.target.value }))} />
-            <textarea rows={4} placeholder="-----BEGIN PRIVATE KEY-----" value={createSslManual.private_key} onChange={e => setCreateSslManual(p => ({ ...p, private_key: e.target.value }))} />
-            <textarea rows={3} placeholder={t('CA bundle (optional)')} value={createSslManual.ca_bundle} onChange={e => setCreateSslManual(p => ({ ...p, ca_bundle: e.target.value }))} />
-            <p className="hint">{t('Left empty, the SSL page opens after the site is created so you can paste them there.')}</p>
-          </div>}
-        </div>}
-        <p className="hint">{t(wpFieldsEnabled
-          ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
-          : siteType === 'application'
-            ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
-          : siteType === 'proxy'
-            ? 'Nginx will forward this domain to the address above, with WebSocket upgrades and the visitor\'s address in X-Forwarded-For. SSL, the WAF and the access log stay on this server.'
-            : 'A virtual host will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
-        </form>
-      </Drawer>
       <section className="section">
         <PageHeader subtitle={wsQuery ? t('{shown} of {total}', { shown: filteredWebsites.length, total: websites.length })
           : (websites.length === 1 ? t('{n} website', { n: websites.length }) : t('{n} websites', { n: websites.length }))}
@@ -8441,7 +8345,104 @@ function App() {
             ? t('{shown} of {total}', { shown: filteredWebsites.length, total: websites.length })
             : (websites.length === 1 ? t('{n} website', { n: websites.length }) : t('{n} websites', { n: websites.length }))}</span>
         </div>}
-        {websites.length === 0 && <EmptyState icon={Globe} message={t('No websites yet.')} action={{ label: t('New website'), icon: Plus, onClick: openCreate }} />}
+        {/* Under the search, not a sheet at the right edge (operator, 2026-10-27). */}
+        <InlinePanel open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}
+          title={websites.length ? t('Create website') : t('Attach first domain')}
+          footer={<>
+            {/* Shown when the first site of an account failed and the sheet came back. */}
+            {!loading && error && <span className="sn-drawer-foot-note" role="alert">{error}</span>}
+            <button type="submit" form="website-create-form" disabled={!!loading || !domain}><Plus size={15} aria-hidden="true"/> {t('Create')}</button>
+          </>}>
+          <form id="website-create-form" onSubmit={(e) => {
+            e.preventDefault();
+            setCreateFormOpen(false);
+            setCreatePending(true);
+            Promise.resolve(createWordPress()).finally(() => setCreatePending(false));
+          }}>
+          <div className="sn-drawer-grid create-site-fields">
+            <Field className="is-wide" label={t('Domain')}>
+              <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" autoCapitalize="none" spellCheck={false} />
+            </Field>
+            {isReseller && users.length > 0 && <Field className="is-wide" label={t('Owner')}>
+              <select value={siteOwnerId} onChange={e => setSiteOwnerId(e.target.value)}>
+                <option value="">{t('For yourself')}</option>
+                {users.filter(u => u.id !== currentUser?.id).map(u => <option key={u.id} value={u.id}>{t('For {name}', { name: u.username })}</option>)}
+              </select>
+            </Field>}
+            <Field label={t('Website type')}>
+              <select value={siteType} onChange={e => setSiteType(e.target.value)}>
+                {WEBSITE_MODES.map(([value, label]) => <option
+                  key={value}
+                  value={value}
+                  disabled={value === 'application' && !appsFeatureEnabled}
+                >{t(label)}</option>)}
+              </select>
+            </Field>
+            {siteType === 'proxy'
+              ? <Field className="is-wide" label={t('Proxy to')} hint={isAdmin ? t('Any http:// or https:// address, this server included (http://127.0.0.1:3000).') : t('A public http:// or https:// address.')}>
+                <input value={createProxyUrl} onChange={e => setCreateProxyUrl(e.target.value)} placeholder="http://127.0.0.1:3000" spellCheck={false} autoCapitalize="none"/>
+              </Field>
+              : siteType === 'application'
+              ? <Field label={t('Application')}>
+                <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
+                  <option value="">{t('Select an application')}</option>
+                  {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+                </select>
+              </Field>
+              : <Field label={t('PHP version')}>
+                <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
+                  {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+                </select>
+              </Field>}
+          </div>
+          {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">{t('No applications installed yet. Install one on the')}<button type="button" className="link-button" onClick={() => navigateToPage('applications')}>{t('Applications')}</button> page first.
+          </p>}
+          {siteType === 'proxy' && <Checkbox checked={createProxyPreserve} onChange={setCreateProxyPreserve}
+            label={t("Send the visitor's Host header (off: the address's own)")}/>}
+          {siteType === 'wordpress' && <Checkbox checked={installWordPress} onChange={setInstallWordPress}
+            label={t('Install WordPress (creates database, downloads WP, configures vhost)')}/>}
+          {wpFieldsEnabled && <div className="sn-drawer-section">
+            <h3>{t('WordPress administrator')}</h3>
+            <div className="sn-drawer-grid">
+              <Field label={t('Admin user')}><input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder={t('WP admin user')} autoComplete="off"/></Field>
+              <Field label={t('Admin email')} optional><input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com"/></Field>
+              <Field className="is-wide" label={t('Admin password')} optional hint={t('Leave blank for a random one')}>
+                <PasswordField value={wpAdminPassword} onChange={setWpAdminPassword} generate copy/>
+              </Field>
+            </div>
+          </div>}
+          <Checkbox checked={sslAfterCreate} onChange={(v) => setCreateSslMode(v ? 'letsencrypt' : 'none')}
+            label={t('Set up SSL after creating')}/>
+          {sslAfterCreate && <div className="create-ssl-box">
+            <div className="segmented ssl-mode-tabs">
+              <button className={createSslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setCreateSslMode('letsencrypt')}><Lock size={13}/> Let's Encrypt</button>
+              <button className={createSslMode === 'wildcard' ? 'active' : ''} onClick={() => setCreateSslMode('wildcard')}><Globe size={13}/> {t('Wildcard (Cloudflare)')}</button>
+              <button className={createSslMode === 'shared' ? 'active' : ''} onClick={() => setCreateSslMode('shared')}><RefreshCw size={13}/> {t('Use existing')}</button>
+              <button className={createSslMode === 'manual' ? 'active' : ''} onClick={() => setCreateSslMode('manual')}><KeyRound size={13}/> {t('Manual')}</button>
+            </div>
+            {createSslMode === 'letsencrypt' && <p className="hint">{t("certbot HTTP-01 — the domain must point to this server's IP first.")}</p>}
+            {createSslMode === 'wildcard' && <div className="create-ssl-fields">
+              <input type="password" autoComplete="off" placeholder={t('Cloudflare API Token')} value={createSslToken} onChange={e => setCreateSslToken(e.target.value)} />
+              <p className="hint">{t('A scoped')} <strong>{t('API Token')}</strong> {t('(My Profile → API Tokens → Create Token),')} <strong>{t('not')}</strong> {t('the Global API Key. Permission')} <code>Zone → DNS → Edit</code> {t('for the zone(s) you issue certs for. Stored encrypted for renewal. Issues one cert for the zone and *.zone — no DNS record or port 80 needed. Leave the token blank to reuse one already saved for the zone.')}</p>
+            </div>}
+            {createSslMode === 'shared' && <p className="hint">{t('After the site is created the panel points it at an existing certificate that covers this domain (a wildcard first). If none does, the site is created without SSL.')}</p>}
+            {createSslMode === 'manual' && <div className="create-ssl-fields">
+              <textarea rows={4} placeholder="-----BEGIN CERTIFICATE-----" value={createSslManual.certificate} onChange={e => setCreateSslManual(p => ({ ...p, certificate: e.target.value }))} />
+              <textarea rows={4} placeholder="-----BEGIN PRIVATE KEY-----" value={createSslManual.private_key} onChange={e => setCreateSslManual(p => ({ ...p, private_key: e.target.value }))} />
+              <textarea rows={3} placeholder={t('CA bundle (optional)')} value={createSslManual.ca_bundle} onChange={e => setCreateSslManual(p => ({ ...p, ca_bundle: e.target.value }))} />
+              <p className="hint">{t('Left empty, the SSL page opens after the site is created so you can paste them there.')}</p>
+            </div>}
+          </div>}
+          <p className="hint">{t(wpFieldsEnabled
+            ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
+            : siteType === 'application'
+              ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
+            : siteType === 'proxy'
+              ? 'Nginx will forward this domain to the address above, with WebSocket upgrades and the visitor\'s address in X-Forwarded-For. SSL, the WAF and the access log stay on this server.'
+              : 'A virtual host will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
+          </form>
+        </InlinePanel>
+        {websites.length === 0 && !createOpen && <EmptyState icon={Globe} message={t('No websites yet.')} action={{ label: t('New website'), icon: Plus, onClick: openCreate }} />}
         {websites.length > 0 && filteredWebsites.length === 0 && <EmptyState icon={Globe} message={t('No domain matches “{query}”.', { query: websiteSearch })} />}
         <div className="site-grid">
           {filteredWebsites.map(site => <div className="site-stack" key={site.id}>
@@ -8560,7 +8561,8 @@ function App() {
         onRefresh={() => loadWebsiteList('', true)} refreshDisabled={!!loading}
         actions={<>
           <a className="button-link secondary-light" href={websiteUrl(site)} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} aria-hidden="true"/> {t('Open website')}</a>
-          <ActionMenu label={t('More actions for {domain}', { domain: site.domain })} items={menuItems}/>
+          {/* Icons, one click each, not a "…" menu (operator, 2026-10-27). */}
+          <IconActions label={t('Website actions for {domain}', { domain: site.domain })} items={menuItems}/>
         </>}/>
       <Tabs className="wsd-tabs" label={t('Website sections')} value={tab} onChange={goTab} tabs={tabs}/>
       {tab === 'overview' && renderSiteOverview(site, owner, typeLabel, goTab)}
@@ -9047,7 +9049,29 @@ function App() {
           {dbSearch && <button type="button" className="secondary-light icon-button" onClick={() => setDbSearch('')}
             aria-label={t('Clear the search')} title={t('Clear the search')}><X size={15}/></button>}
         </div>}
-        {databases.length === 0 && <EmptyState icon={Database} title={t('No databases yet.')} message={t('A database for a website or an application: MariaDB, with phpMyAdmin.')}
+        {/* Under the search, not a sheet at the right edge (operator, 2026-10-27). */}
+        <InlinePanel open={dbCreateOpen} onClose={closeCreate} title={t('New database')} subtitle={t('A MariaDB database, with a user of its own.')}
+          footer={<>
+            {dbCreateTried && createBad && <span className="sn-drawer-foot-note" role="alert">{t('Some fields need attention.')}</span>}
+            <button type="button" className="secondary-light" onClick={closeCreate}>{t('Cancel')}</button>
+            <button type="submit" form="db-create-form" disabled={!!loading}><Plus size={15} aria-hidden="true"/> {t('Create database')}</button>
+          </>}>
+          <form id="db-create-form" noValidate onSubmit={submitCreate}>
+            <Field label={t('Database name')} required error={dbCreateTried ? createProblems.name : ''} hint={t('Letters, digits and underscores.')}>
+              <input name="new-db-name" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))}
+                placeholder={t('e.g. {example}', { example: 'shop' })} autoComplete="off" spellCheck={false} />
+            </Field>
+            <Field label={t('Database user')} optional error={dbCreateTried ? createProblems.user : ''} hint={t('The database name, if left empty.')}>
+              <input name="new-db-user" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))}
+                autoComplete="off" spellCheck={false} />
+            </Field>
+            <Field label={t('Password')} optional error={dbCreateTried ? createProblems.password : ''} hint={t('At least 12 characters. Left empty, one is made for you.')}>
+              <PasswordField value={newDatabase.db_password} onChange={v => setNewDatabase(prev => ({ ...prev, db_password: v }))}
+                generate copy onGenerate={() => generateRandomPassword()} />
+            </Field>
+          </form>
+        </InlinePanel>
+        {databases.length === 0 && !dbCreateOpen && <EmptyState icon={Database} title={t('No databases yet.')} message={t('A database for a website or an application: MariaDB, with phpMyAdmin.')}
           action={{ label: t('New database'), icon: Plus, onClick: openCreate }} />}
         {databases.length > 0 && filteredDatabases.length === 0 && <EmptyState icon={Search} message={t('No databases match this search.')}
           action={{ label: t('Clear the search'), icon: X, secondary: true, onClick: () => setDbSearch('') }} />}
@@ -9073,27 +9097,6 @@ function App() {
         </div>}
         {databases.length > 0 && <p className="hint">{t('phpMyAdmin signs you in directly; the link works for 60 seconds.')}</p>}
       </section>
-      <Drawer open={dbCreateOpen} onClose={closeCreate} title={t('New database')} subtitle={t('A MariaDB database, with a user of its own.')}
-        footer={<>
-          {dbCreateTried && createBad && <span className="sn-drawer-foot-note" role="alert">{t('Some fields need attention.')}</span>}
-          <button type="button" className="secondary-light" onClick={closeCreate}>{t('Cancel')}</button>
-          <button type="submit" form="db-create-form" disabled={!!loading}><Plus size={15} aria-hidden="true"/> {t('Create database')}</button>
-        </>}>
-        <form id="db-create-form" noValidate onSubmit={submitCreate}>
-          <Field label={t('Database name')} required error={dbCreateTried ? createProblems.name : ''} hint={t('Letters, digits and underscores.')}>
-            <input name="new-db-name" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))}
-              placeholder={t('e.g. {example}', { example: 'shop' })} autoComplete="off" spellCheck={false} />
-          </Field>
-          <Field label={t('Database user')} optional error={dbCreateTried ? createProblems.user : ''} hint={t('The database name, if left empty.')}>
-            <input name="new-db-user" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))}
-              autoComplete="off" spellCheck={false} />
-          </Field>
-          <Field label={t('Password')} optional error={dbCreateTried ? createProblems.password : ''} hint={t('At least 12 characters. Left empty, one is made for you.')}>
-            <PasswordField value={newDatabase.db_password} onChange={v => setNewDatabase(prev => ({ ...prev, db_password: v }))}
-              generate copy onGenerate={() => generateRandomPassword()} />
-          </Field>
-        </form>
-      </Drawer>
       <Drawer open={!!moving} onClose={() => { setAssignDbId(''); setAssignDbUserId(''); }}
         title={moving ? t('Change the owner of {name}', { name: moving.db_name }) : ''}
         subtitle={t('The database, its MariaDB user and its password stay as they are; only who manages it in the panel changes. A database linked to a website moves with that website.')}
@@ -10957,9 +10960,10 @@ function App() {
               ? t('Blocked on every website on this server. A site can add more of its own from its page. Currently {count} bot(s).', { count: savedBots.length })
               : t('Blocked on every website on this server. A site can add more of its own from its page. Nothing blocked globally yet.')}</p>
           </div>
-          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => setWafBotsOpen(open => !open)}>{wafBotsOpen ? t('Hide') : t('Edit')}</button>
         </div>
-        {wafBotsOpen && <div className="global-bots">
+        {/* Open, the paste box shown: no click to get to them (operator,
+            2026-10-27). */}
+        <div className="global-bots">
           <div className="global-bots-add">
             <input value={wafNewBot} placeholder={t('Add one bot, e.g. Amazonbot')} onChange={e => setWafNewBot(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addBots(wafNewBot); setWafNewBot(''); } }} />
@@ -10973,12 +10977,12 @@ function App() {
               <button type="button" title={t('Remove {name}', { name })} aria-label={t('Remove {name}', { name })} onClick={() => removeBot(name)}><X size={12}/></button>
             </span>)}
           </div>
-          <details className="global-bots-paste">
-            <summary>{t('Paste a list')}</summary>
+          <label className="global-bots-paste">
+            <span className="field-label">{t('Paste a list')}</span>
             <textarea className="code-editor" rows={6} spellCheck={false} value={wafBotPaste} onChange={e => setWafBotPaste(e.target.value)}
               placeholder={'AhrefsBot\nSemrushBot\nMJ12bot'} />
-            <button type="button" disabled={!wafBotPaste.trim()} onClick={() => { addBots(wafBotPaste); setWafBotPaste(''); }}><Plus size={14}/> {t('Add to list')}</button>
-          </details>
+          </label>
+          <button type="button" className="global-bots-paste-add" disabled={!wafBotPaste.trim()} onClick={() => { addBots(wafBotPaste); setWafBotPaste(''); }}><Plus size={14}/> {t('Add to list')}</button>
           <div className="global-bots-actions">
             <button type="button" disabled={!!loading} onClick={() => saveGlobalBots(globalBotText)}>
               <Shield size={14}/> {t('Save and apply to all {count} website(s)', { count: websites.length })}
@@ -10990,7 +10994,7 @@ function App() {
               {botsChanged ? ` · ${t('unsaved changes')}` : ''}
             </span>
           </div>
-        </div>}
+        </div>
       </section>}
 
       {isAdmin && <section className="section">

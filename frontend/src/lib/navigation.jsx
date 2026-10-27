@@ -14,7 +14,7 @@
 // A page key is App's (PAGE_ROUTES there); a hub's key is either its first
 // page (files) or an address of its own (server, security-center, config)
 // that opens its first tab.
-import { Archive, Clock, Database, FolderOpen, Globe, Home, Lock, Server, Settings, ShieldCheck, Users } from 'lucide-react';
+import { Archive, Clock, Database, FolderOpen, Globe, Home, Lock, PackageOpen, Server, Settings, ShieldCheck, Users } from 'lucide-react';
 import WordPressGlyph from '../icons/WordPressGlyph.jsx';
 
 const msg = (text) => text;
@@ -67,11 +67,13 @@ export const PAGE_TITLES = {
 // The hubs: one header, the pages as its tabs.
 export const HUBS = [
   { key: 'server', title: msg('Server'), roles: ['admin'], tabs: [
+    // Every account's use against its limits first, the one opened most
+    // (operator, 2026-10-27).
+    { page: 'account-resources', label: msg('Account resources'), when: (c) => c.limitsOn },
     { page: 'processes', label: msg('Processes') },
     { page: 'ram-usage', label: 'RAM' },
     { page: 'disk-usage', label: msg('Disk') },
     { page: 'traffic', label: msg('Traffic') },
-    { page: 'account-resources', label: msg('Account resources'), when: (c) => c.limitsOn },
     { page: 'php', label: msg('PHP config') },
     { page: 'services', label: msg('Services') },
     { page: 'updates', label: msg('Updates') },
@@ -82,9 +84,10 @@ export const HUBS = [
     { page: 'access-logs', label: msg('Access logs') },
     { page: 'malware', label: msg('Malware Scanner'), also: ['malware-scan'], when: (c) => c.malwareAddonInstalled },
   ] },
+  // Addons are a sidebar entry of their own (operator, 2026-10-27), not a tab
+  // of Settings.
   { key: 'config', title: msg('Settings'), roles: ['admin'], tabs: [
     { page: 'panel-settings', label: msg('Panel settings') },
-    { page: 'addons', label: msg('Addons') },
     { page: 'notifications', label: msg('Notifications'), when: (c) => c.notificationsAddonInstalled },
   ] },
   // No Files hub (operator, 2026-10-26): the File manager opens in a browser
@@ -138,6 +141,7 @@ export function sidebarItems(ctx) {
       ['users', msg('Panel users'), Users],
       ['server', msg('Server'), Server],
       ['security-center', msg('Security'), ShieldCheck],
+      ['addons', msg('Addons'), PackageOpen],
       ['config', msg('Settings'), Settings],
       ...wordpress,
     ];
