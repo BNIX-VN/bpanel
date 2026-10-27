@@ -65,6 +65,11 @@ export const TILES = {
   updates: { label: msg('Updates'), icon: 'updates', page: 'updates', roles: ['admin'] },
   addons: { label: msg('Addons'), icon: 'addons', page: 'addons', roles: ['admin'] },
   'panel-settings': { label: msg('Panel settings'), icon: 'panel-settings', page: 'panel-settings', roles: ['admin'] },
+  // Migration: each import addon's page, a tab of the Migration hub
+  // (operator, 2026-10-27, as OPanel's Dashboard has them).
+  'da-import': { label: msg('DirectAdmin Import'), icon: 'directadmin-import', page: 'importDirectadmin', roles: ['admin'], addon: 'directadmin' },
+  'cpanel-import': { label: msg('cPanel Import'), icon: 'cpanel-import', page: 'importCpanel', roles: ['admin'], addon: 'cpanel' },
+  'fastpanel-import': { label: msg('FastPanel Import'), icon: 'migration', page: 'importFastpanel', roles: ['admin'], addon: 'fastpanel' },
 };
 
 // The Dashboard's sections, in order, for each role - SNPanel's own
@@ -79,6 +84,9 @@ const ADMIN = [
   ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
   ['security', msg('Security'), ['firewall', 'waf', 'access-logs', 'malware', 'account-security']],
   ['server', msg('Server'), ['php', 'services', 'processes', 'ram', 'disk', 'traffic', 'account-resources', 'updates']],
+  // Shown only once a migration addon is installed: a section with no tile
+  // is left out.
+  ['migration', msg('Migration'), ['da-import', 'cpanel-import', 'fastpanel-import']],
   // Addons with the rest of Advanced, not a section of one tile of their own
   // (operator, 2026-10-25).
   ['advanced', msg('Advanced'), ['cron', 'redis', 'mcp', 'api-tokens', 'notifications', 'panel-settings', 'addons']],

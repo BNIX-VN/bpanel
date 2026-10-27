@@ -58,12 +58,16 @@ export const PAGE_TITLES = {
   'disk-usage': msg('Disk usage'),
   traffic: msg('Traffic'),
   'account-resources': msg('Account resources'),
+  importDirectadmin: msg('DirectAdmin Import'),
+  importCpanel: msg('cPanel Import'),
+  importFastpanel: msg('FastPanel Import'),
 };
 
 // The facts a role's navigation depends on, from App:
 // { isAdmin, isReseller, canManageUsers, canOpenTerminal, appsFeatureEnabled,
 //   mailAddonInstalled, dnsAddonInstalled, gitAddonInstalled,
-//   mcpAddonInstalled, notificationsAddonInstalled, malwareAddonInstalled }
+//   mcpAddonInstalled, notificationsAddonInstalled, malwareAddonInstalled,
+//   directadminImport, cpanelImport, fastpanelImport }
 
 // The hubs: one header, the pages as its tabs.
 export const HUBS = [
@@ -90,6 +94,14 @@ export const HUBS = [
   { key: 'config', title: msg('Settings'), roles: ['admin'], tabs: [
     { page: 'panel-settings', label: msg('Panel settings') },
     { page: 'notifications', label: msg('Notifications'), when: (c) => c.notificationsAddonInstalled },
+  ] },
+  // Accounts moved here from other panels (operator, 2026-10-27, as OPanel
+  // has it): a tab per migration addon that is installed, reached from the
+  // Dashboard's Migration tiles and the Addons page - not the sidebar.
+  { key: 'migration', title: msg('Migration'), roles: ['admin'], tabs: [
+    { page: 'importDirectadmin', label: 'DirectAdmin', when: (c) => c.directadminImport },
+    { page: 'importCpanel', label: 'cPanel', when: (c) => c.cpanelImport },
+    { page: 'importFastpanel', label: 'FastPanel', when: (c) => c.fastpanelImport },
   ] },
   // No Files hub (operator, 2026-10-26): the File manager opens in a browser
   // tab of its own; SFTP accounts and the terminal are opened from the

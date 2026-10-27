@@ -1017,6 +1017,10 @@ save_waf_custom_rules() {
 }
 
 DA_BACKUP_DIR="/home/admin/bpanel_backups/da"
+# cPanel and FastPanel archives waiting to be imported (the cPanel Import and
+# FastPanel Import addons, operator 2026-10-27), beside DirectAdmin's.
+CPANEL_BACKUP_DIR="/home/admin/bpanel_backups/cpanel"
+FASTPANEL_BACKUP_DIR="/home/admin/bpanel_backups/fastpanel"
 DA_IMPORT_UNIT="bpanel-da-import"
 
 start_da_import() {
@@ -1083,6 +1087,13 @@ ensure_da_backup_dir() {
   [[ -d /home/admin ]] || install -d -m 0755 -o root -g root /home/admin
   install -d -m 0750 -o root -g bpanel /home/admin/bpanel_backups
   install -d -m 0770 -o root -g bpanel "$DA_BACKUP_DIR"
+  # The other migration addons' folders, the same way: one verb for all three,
+  # so a server updated before they existed gets them on first use.
+  local folder
+  for folder in "$CPANEL_BACKUP_DIR" "$FASTPANEL_BACKUP_DIR"; do
+    [[ ! -L "$folder" ]] || deny "$folder is a symlink"
+    [[ -d "$folder" ]] || install -d -m 0770 -o root -g bpanel "$folder"
+  done
   echo "$DA_BACKUP_DIR"
 }
 
@@ -1139,7 +1150,22 @@ backup_inbox_take() {
       owner="root:bpanel"
       ensure_da_backup_dir >/dev/null
       ;;
-    *) deny "usage: backup-inbox-take <file> <bpanel|directadmin>" ;;
+    cpanel)
+      # cpmove-<user> (pkgacct) or backup-<date>_<time>_<user> (a cPanel
+      # backup run): the names cpanel_import.NAME_RE takes.
+      [[ "$name" =~ ^(cpmove-|backup-[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4}_[0-9]{1,2}-[0-9]{1,2}-[0-9]{1,2}_)[a-z0-9][a-z0-9_.-]*\.(tar\.gz|tgz|tar)$ ]] \
+        || deny "not a cPanel backup: $name"
+      dest_dir="$CPANEL_BACKUP_DIR"
+      owner="root:bpanel"
+      ensure_da_backup_dir >/dev/null
+      ;;
+    fastpanel)
+      [[ "$name" =~ ^fastpanel-[a-z][a-z0-9_-]{0,31}\.tar\.gz$ ]] || deny "not a FastPanel archive: $name"
+      dest_dir="$FASTPANEL_BACKUP_DIR"
+      owner="root:bpanel"
+      ensure_da_backup_dir >/dev/null
+      ;;
+    *) deny "usage: backup-inbox-take <file> <bpanel|directadmin|cpanel|fastpanel>" ;;
   esac
   src="${BACKUP_INBOX}/${name}"
   [[ -f "$src" && ! -L "$src" ]] || deny "$name is not in the backup folder"
@@ -9644,7 +9670,7 @@ case "$cmd" in
     ensure_backup_inbox
     ;;
   backup-inbox-take)
-    [[ $# -eq 2 ]] || deny "usage: backup-inbox-take <file> <bpanel|directadmin>"
+    [[ $# -eq 2 ]] || deny "usage: backup-inbox-take <file> <bpanel|directadmin|cpanel|fastpanel>"
     backup_inbox_take "$1" "$2"
     ;;
   da-backup-dir-ensure)

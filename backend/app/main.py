@@ -51,6 +51,16 @@ def _adopt_addons_already_in_use() -> None:
             logger.info("Addon 'malware' adopted: the scanner was already in use")
     except Exception:  # noqa: BLE001 - never let this stop the panel booting
         logger.warning("Could not check whether the malware scanner was in use", exc_info=True)
+    try:
+        # DirectAdmin import was part of Backups > Restore until it became
+        # the DirectAdmin Import addon (operator, 2026-10-27, as on OPanel): a
+        # server that has imported from DirectAdmin keeps it.
+        from app.services import da_import
+
+        if addons.adopt_existing(addons.DIRECTADMIN, da_import.was_used()):
+            logger.info("Addon 'directadmin' adopted: DirectAdmin backups were imported here before")
+    except Exception:  # noqa: BLE001 - never let this stop the panel booting
+        logger.warning("Could not check whether DirectAdmin import was in use", exc_info=True)
 
 
 _adopt_addons_already_in_use()

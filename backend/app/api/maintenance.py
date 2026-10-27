@@ -992,20 +992,46 @@ def create_sftp_target(
     return target
 
 
-def _save_restore_upload(file: UploadFile) -> tuple[str, str]:
+# Where an archive of each kind is restored from, for an upload on the wrong
+# page (operator, 2026-10-27: each Migration page restores its own panel's
+# backups, Backups > Restore the panel's own, as on OPanel).
+_RESTORE_PAGES = {
+    restore_sources.KIND_PANEL: "Backups > Restore",
+    restore_sources.KIND_DA: "Migration > DirectAdmin",
+    restore_sources.KIND_CPANEL: "Migration > cPanel",
+    restore_sources.KIND_FASTPANEL: "Migration > FastPanel",
+}
+
+
+def _save_restore_upload(file: UploadFile, mode: str = "") -> tuple[str, str]:
     """Keep one uploaded archive where its kind is restored from; return its
-    path and file name."""
+    path and file name. ``mode`` is the kind the page uploading restores, ""
+    for any (an API caller)."""
     kind = restore_sources.archive_kind(file.filename or "")
+    if mode and kind and kind != mode:
+        label = restore_sources.KIND_LABELS.get(kind, kind)
+        raise HTTPException(status_code=400, detail=(
+            f"{file.filename} is a {label} backup: restore it from {_RESTORE_PAGES.get(kind, 'its own page')}"))
+    if kind in restore_sources.KIND_ADDONS and not restore_sources.kind_enabled(kind):
+        raise HTTPException(status_code=400, detail=f"{file.filename}: {restore_sources.off_message(kind)}")
     if kind == restore_sources.KIND_PANEL:
         item = _save_user_restore_upload(file)
         return item["backup_file"], item["filename"]
-    if kind != restore_sources.KIND_DA:
+    if kind == restore_sources.KIND_FASTPANEL:
+        # The panel packs a FastPanel account itself, over SSH; there is no
+        # FastPanel backup that holds what an import needs.
+        raise HTTPException(status_code=400, detail=(
+            f"{file.filename}: FastPanel accounts are brought straight off the server; use FastPanel server"))
+    if kind not in {restore_sources.KIND_DA, restore_sources.KIND_CPANEL}:
         raise HTTPException(status_code=400, detail=(
             f"{file.filename}: not a backup archive (.tar.gz, .tar.zst, .tar.bz2, .tar.xz or .tar)"))
-    from app.services import da_import
+    from app.services import cpanel_import, da_import
 
     try:
-        path = da_import.save_da_upload(file.filename or "", file.file)
+        if kind == restore_sources.KIND_CPANEL:
+            path = cpanel_import.save_upload(file.filename or "", file.file)
+        else:
+            path = da_import.save_da_upload(file.filename or "", file.file)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -1018,24 +1044,32 @@ def restore_upload(
     request: Request,
     files: list[UploadFile] = File(...),
     source: str = Form(...),
+    mode: str = Form(""),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Upload backup, in step 2 of the Restore tab: into this server's restore
     folder, or on to the destination or server picked in step 1, where a
     Refresh then lists it. A panel backup is checked to be an account backup
-    before it goes anywhere, a DirectAdmin one - told apart by its name - goes
-    to the DA folder; a copy only passing through is not kept here."""
+    before it goes anywhere, a DirectAdmin or cPanel one - told apart by its
+    name - goes to its own folder; a copy only passing through is not kept
+    here. ``mode`` is the kind the page restores: an archive of another kind
+    is sent to its own page."""
     ensure_role(current_user.role, Role.admin)
     try:
         spec = RestoreSource.model_validate_json(source).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="The source is not valid") from exc
+    # Called as a function (the tests, a script) the default is FastAPI's
+    # Form marker, not "": no mode, then.
+    mode = mode if isinstance(mode, str) else ""
+    if mode and mode not in _RESTORE_PAGES:
+        raise HTTPException(status_code=400, detail="Unknown kind of backup")
     if not files:
         raise HTTPException(status_code=400, detail="No backup files uploaded")
     uploaded = []
     for file in files:
-        saved, name = _save_restore_upload(file)
+        saved, name = _save_restore_upload(file, mode)
         if spec["kind"] == "local":
             uploaded.append(name)
             continue
@@ -1073,12 +1107,14 @@ def restore_delete_local(request: Request, key: str = Query(...), db: Session = 
 def restore_list(payload: RestoreListRequest, db: Session = Depends(get_db),
                  current_user: User = Depends(get_current_user)):
     """What one source holds that can be restored, newest first, and which of
-    those accounts already exist here (restoring one overwrites it).
+    those accounts already exist here (restoring one overwrites it). From an
+    old DirectAdmin, cPanel or FastPanel server signed in to over SSH, its
+    accounts.
 
     POST because another server's password travels in the body."""
     ensure_role(current_user.role, Role.admin)
     try:
-        result = restore_sources.list_source(payload.source.model_dump(), db)
+        result = restore_sources.list_source(payload.source.model_dump(), db, kinds=payload.kinds)
     except backup.SftpHostKeyMismatch as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except restore_sources.RestoreSourceError as exc:
@@ -1104,14 +1140,19 @@ def _set_restore_result(job_id: str, index: int, **updates) -> None:
             job["results"][index].update(updates)
 
 
-def _restore_directadmin(path: str) -> dict:
-    """One DirectAdmin archive through the importer, the way the Restore tab
-    promises: an account that exists here is overwritten with its own sites;
-    a domain of another account stops it. The generated passwords go back to
-    the job, which only an admin can read, as the DA Import tab showed them."""
-    from app.services import da_import
+def _restore_directadmin(path: str, kind: str = restore_sources.KIND_DA) -> dict:
+    """One DirectAdmin, cPanel or FastPanel archive through the importer, the
+    way the Restore tab promises: an account that exists here is overwritten
+    with its own sites; a domain of another account stops it. The generated
+    passwords go back to the job, which only the admin who ran it can read,
+    as the DA Import tab showed them."""
+    from app.services import cpanel_import, da_import, fastpanel_import
 
-    result = da_import.import_da_backup(path, replace_own=True)
+    importer = {
+        restore_sources.KIND_CPANEL: cpanel_import.import_cpanel_backup,
+        restore_sources.KIND_FASTPANEL: fastpanel_import.import_fastpanel_backup,
+    }.get(kind, da_import.import_da_backup)
+    result = importer(path, replace_own=True)
     summary = result.get("summary") or []
     errors = result.get("errors") or []
     imported = [domain for item in summary for domain in item.get("imported_domains") or []]
@@ -1144,13 +1185,30 @@ def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: lis
             for index, item in enumerate(items):
                 staged = ""
                 try:
-                    _set_restore_result(job_id, index, status="fetching" if source["kind"] != "local" else "restoring")
+                    if source["kind"] == "ssh":
+                        _set_restore_result(job_id, index, status="packing")
+                    else:
+                        _set_restore_result(job_id, index, status="fetching" if source["kind"] != "local" else "restoring")
                     kind = restore_sources.key_kind(source, item["key"])
-                    path, is_copy = restore_sources.fetch(source, item["key"], item.get("size") or 0, db)
+
+                    def heard(text: str, _index: int = index) -> None:
+                        # What the old server is doing: packing, waiting for
+                        # DirectAdmin's queue, then the download.
+                        _set_restore_result(job_id, _index, detail=text[:300],
+                                            status="fetching" if text.startswith("Downloading") else "packing")
+
+                    # Only an old server over SSH has anything to say while
+                    # it works; every other source is a plain download.
+                    heard_from = {"on_status": heard} if source["kind"] == "ssh" else {}
+                    path, is_copy = restore_sources.fetch(source, item["key"], item.get("size") or 0, db, **heard_from)
                     staged = path if is_copy else ""
-                    _set_restore_result(job_id, index, status="restoring")
-                    if kind == restore_sources.KIND_DA:
-                        outcome = _restore_directadmin(path)
+                    _set_restore_result(job_id, index, status="restoring", detail="")
+                    if kind in restore_sources.KIND_ADDONS:
+                        outcome = _restore_directadmin(path, kind)
+                        # directadmin_import, cpanel_import, fastpanel_import:
+                        # which panel each account came from, in the log.
+                        log_action(db, request_user_id, f"{kind}_import", Path(path).name,
+                                   restore_sources.describe(source, db))
                     else:
                         outcome = backup.restore_user_backup(path, db)
                     username = outcome.get("username", "") if isinstance(outcome, dict) else ""
@@ -1189,21 +1247,24 @@ def restore_run(payload: RestoreRunRequest, request: Request, db: Session = Depe
     stop the rest."""
     ensure_role(current_user.role, Role.admin)
     source = payload.source.model_dump()
-    if source["kind"] == "remote" and source["protocol"] == "sftp" and not source["host_key"]:
+    if ((source["kind"] == "remote" and source["protocol"] == "sftp") or source["kind"] == "ssh") \
+            and not source["host_key"]:
         raise HTTPException(status_code=400, detail="List the server first, so its key can be checked")
     results = []
     for item in payload.items:
         try:
             name = restore_sources.check_key(source, item.key)
             kind = restore_sources.key_kind(source, item.key)
+            restore_sources.require_kind(kind)
         except restore_sources.RestoreSourceError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         results.append({"name": name, "username": item.username, "kind": kind, "status": "queued", "detail": ""})
-    if any(row["kind"] == restore_sources.KIND_DA for row in results) and _da_import_busy():
+    if any(row["kind"] in restore_sources.KIND_ADDONS for row in results) and _da_import_busy():
         raise HTTPException(status_code=429, detail="A DirectAdmin import is already running. Please wait.")
     job = _queue_backup_job(current_user, "user_restore", "Restore queued", results=results)
-    # The source - another server's password included - goes to the worker
-    # only; it is never kept in the job the page can read.
+    # The source - another server's password, or an old server's root login,
+    # included - goes to the worker only; it is never kept in the job the page
+    # can read, nor written anywhere.
     _backup_job_executor.submit(_run_restore_job, job["job_id"], current_user.id, source,
                                 [item.model_dump() for item in payload.items])
     log_action(db, current_user.id, "queue_restore_users", restore_sources.describe(source, db),
@@ -1827,11 +1888,16 @@ def delete_file(website_id: int, path: str, db: Session = Depends(get_db), curre
 # ---------------------------------------------------------------------------
 # DirectAdmin Import
 # ---------------------------------------------------------------------------
+# The old DA Import endpoints belong to the DirectAdmin Import addon since
+# it became one (operator, 2026-10-27): with it off they answer 409, as
+# every addon's routes do.
+
 
 @router.get("/da-import/backups")
 def list_da_backups(current_user: User = Depends(get_current_user)):
     """List all uploaded DirectAdmin backup archives."""
     ensure_role(current_user.role, Role.admin)
+    addons.require(addons.DIRECTADMIN)
     from app.services import da_import
     return da_import.list_da_backups()
 
@@ -1844,6 +1910,7 @@ async def upload_da_backup(
 ):
     """Upload a DirectAdmin backup archive to the DA backup directory."""
     ensure_role(current_user.role, Role.admin)
+    addons.require(addons.DIRECTADMIN)
     from app.services import da_import
 
     da_import.ensure_backup_dir()
@@ -1882,6 +1949,7 @@ async def upload_da_backup(
 def scan_da_backup(body: dict, current_user: User = Depends(get_current_user)):
     """Scan a DirectAdmin backup to preview users/domains/databases."""
     ensure_role(current_user.role, Role.admin)
+    addons.require(addons.DIRECTADMIN)
     from app.services import da_import
 
     archive_path = body.get("archive_path", "")
@@ -1907,6 +1975,7 @@ DA_IMPORT_JOB_LIMIT = 10
 def import_da_backup(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Start an async DA backup import job."""
     ensure_role(current_user.role, Role.admin)
+    addons.require(addons.DIRECTADMIN)
     from app.services import da_import
 
     archive_path = body.get("archive_path", "")
@@ -1935,6 +2004,7 @@ def import_da_backup(body: dict, db: Session = Depends(get_db), current_user: Us
 def get_da_import_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Get the status and result of a DA import job."""
     ensure_role(current_user.role, Role.admin)
+    addons.require(addons.DIRECTADMIN)
     from app.services import da_import
 
     info = da_import.detached_import_status()
@@ -1994,6 +2064,7 @@ def _run_da_bulk_import_job(job_id: str, archive_paths: list[str], force: bool):
 def bulk_import_da_backups(body: DaBulkImportRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Start a sequential bulk import of multiple DA backup archives."""
     ensure_role(current_user.role, Role.admin)
+    addons.require(addons.DIRECTADMIN)
     if not body.archive_paths:
         raise HTTPException(status_code=400, detail="archive_paths is required")
 
@@ -2040,6 +2111,7 @@ def bulk_import_da_backups(body: DaBulkImportRequest, db: Session = Depends(get_
 def get_da_bulk_import_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Get the status and results of a DA bulk import job."""
     ensure_role(current_user.role, Role.admin)
+    addons.require(addons.DIRECTADMIN)
     with _da_bulk_import_jobs_lock:
         job = _da_bulk_import_jobs.get(job_id)
     if not job:
@@ -2051,6 +2123,7 @@ def get_da_bulk_import_job(job_id: str, current_user: User = Depends(get_current
 def delete_da_backup(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete an uploaded DirectAdmin backup archive."""
     ensure_role(current_user.role, Role.admin)
+    addons.require(addons.DIRECTADMIN)
     from app.services import da_import
 
     archive_path = body.get("archive_path", "")

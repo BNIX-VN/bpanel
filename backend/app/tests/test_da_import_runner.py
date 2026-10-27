@@ -165,6 +165,8 @@ def admin():
 
 
 def test_the_page_gets_the_summary_of_its_own_import_only(monkeypatch, admin):
+    # The old DA Import endpoints are the DirectAdmin Import addon's (2026-10-27).
+    monkeypatch.setattr(maintenance.addons, "is_installed", lambda slug: slug == "directadmin")
     info = {"status": "completed", "invocation": "b" * 32, "archive": "e2.tar.zst", "error": "",
             "log": [], "import_result": SUMMARY}
     monkeypatch.setattr(da_import, "detached_import_status", lambda: dict(info))

@@ -21,13 +21,16 @@ ADDONS_DIR = Path(os.environ.get("BPANEL_DATA_DIR", "/var/lib/bpanel"))
 ADDONS_FILE = ADDONS_DIR / "addons.json"
 
 APPLICATION = "application"
+CPANEL = "cpanel"
 DEMO = "demo"
+DIRECTADMIN = "directadmin"
 DNS = "dns"
 FAIL2BAN = "fail2ban"
 GIT = "git"
 LIMITS = "limits"
 MAIL = "mail"
 MALWARE = "malware"
+FASTPANEL = "fastpanel"
 MCP = "mcp"
 NOTIFICATIONS = "notifications"
 REDIS_ACCOUNTS = "redis-accounts"
@@ -243,6 +246,63 @@ CATALOGUE: dict[str, dict] = {
             "The demo passwords are shown on the sign-in page, so pick accounts that exist only for the demo. They are never the SFTP or SSH password.",
             "Signing out of a demo account ends only that visitor's session, not everyone else's.",
             "Removing the addon gives both accounts a random password, so the public ones stop working. Installing it again restores them.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    # The migration addons (operator, 2026-10-27: "bpanel không có các addon
+    # import cpanel, import DirectAdmin, import FastPanel"), as OPanel has
+    # them: part of the panel, so installing one only turns its page on -
+    # Migration > DirectAdmin, cPanel, FastPanel. Their code is
+    # services/da_import.py, cpanel_import.py, fastpanel_import.py and
+    # migrate_ssh.py; restore_sources.py refuses their archives while they
+    # are off.
+    DIRECTADMIN: {
+        "name": "DirectAdmin Import",
+        "version": "1.0.0",
+        "summary": "Move accounts from DirectAdmin: its user backups, or straight off the server over SSH.",
+        "details": [
+            "Restores DirectAdmin user backups as panel accounts: the user, every domain and subdomain as a website with its Nginx vhost and PHP-FPM pool, the pointers as aliases, the databases with the passwords the sites already use, and the certificates they were served with.",
+            "The backups can be uploaded, put in the SFTP folder or read from another server over SFTP or FTP; or the panel signs in to the DirectAdmin server as root, has it back up each account you pick, and brings it over.",
+            "It is all on Migration > DirectAdmin, with each account's result and the passwords the import generated.",
+        ],
+        "notes": [
+            "DirectAdmin backups were restored under Backups > Restore until this addon; a server that had imported one has it installed already.",
+            "The root login for a pull is used for that import only and never saved. Each account is backed up into a private folder there, downloaded, and that folder is removed.",
+            "Email accounts and cron jobs are not imported.",
+            "Removing the addon hides the page and refuses its imports; the archives already on this server are kept.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    CPANEL: {
+        "name": "cPanel Import",
+        "version": "1.0.0",
+        "summary": "Move accounts from cPanel: cpmove backups, or straight off the server over SSH.",
+        "details": [
+            "Restores cPanel account backups (cpmove-<user>.tar.gz from pkgacct, or the backup-<date>_<user>.tar.gz cPanel's own backups write) as panel accounts: the main, addon and subdomains as websites, parked domains as aliases, the databases with the passwords the sites already use, and their certificates.",
+            "The backups can be uploaded, put in the SFTP folder or read from another server; or the panel signs in to the cPanel server as root, runs pkgacct for each account you pick, and brings the archive over.",
+            "It is all on Migration > cPanel.",
+        ],
+        "notes": [
+            "The root login for a pull is used for that import only and never saved. pkgacct writes into a private folder there, which is removed once the archive is downloaded.",
+            "Email accounts, cron jobs and DNS zones are not imported: the result says how many there were.",
+            "Every website runs this server's default PHP version; one that ran another on cPanel is named in the result.",
+            "Removing the addon hides the page and refuses its imports; the archives already on this server are kept.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    FASTPANEL: {
+        "name": "FastPanel Import",
+        "version": "1.0.0",
+        "summary": "Move accounts from FastPanel, straight off the server over SSH.",
+        "details": [
+            "FastPanel's own backups keep a site's files and its databases apart, so the panel signs in to the FastPanel server as root and packs each account you pick itself: every site's files, the databases its configs name, its other domain names and its certificate.",
+            "Each comes back as a panel account with its websites, aliases, databases and SSL. It is all on Migration > FastPanel.",
+        ],
+        "notes": [
+            "The root login is used for that import only and never saved. Each account is packed into a private folder there, downloaded, and that folder is removed.",
+            "Email accounts, cron jobs and DNS zones are not imported.",
+            "Written for FastPanel 2's layout (/var/www/<user>/data/www and /etc/nginx/fastpanel2-sites) and not yet tried against a live FastPanel server: check the first account you bring over.",
+            "Removing the addon hides the page; the archives already on this server are kept.",
         ],
         "keeps_data_on_uninstall": True,
     },

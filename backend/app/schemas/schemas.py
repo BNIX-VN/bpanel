@@ -1292,10 +1292,13 @@ class BackupScheduleOut(BaseModel):
 
 
 class RestoreSource(BaseModel):
-    """Where a restore comes from: this server, a saved destination, or
-    another server whose details are typed in for this restore only."""
+    """Where a restore comes from: this server, a saved destination, another
+    server whose details are typed in for this restore only, or - on the
+    Migration pages (operator, 2026-10-27) - an old DirectAdmin, cPanel or
+    FastPanel server signed in to over SSH, whose root login is likewise
+    typed in and never stored."""
 
-    kind: str = Field(pattern=r"^(local|target|remote)$")
+    kind: str = Field(pattern=r"^(local|target|remote|ssh)$")
     target_id: Optional[int] = None
     protocol: str = Field(default="sftp", pattern=r"^(sftp|ftp|ftps)$")
     host: str = Field(default="", max_length=253)
@@ -1306,22 +1309,34 @@ class RestoreSource(BaseModel):
     # The SFTP key the server presented when it was listed; a download checks
     # it is still the same server before sending the password again.
     host_key: str = Field(default="", max_length=128)
+    # kind "ssh": the panel the old server runs, which packs the accounts, and
+    # a private key to sign in with instead of a password (the password is
+    # then its passphrase, if it has one).
+    panel: str = Field(default="", pattern=r"^(|directadmin|cpanel|fastpanel)$")
+    private_key: str = Field(default="", max_length=16384)
 
     @model_validator(mode="after")
     def check_source(self):
         if self.kind == "target" and not self.target_id:
             raise ValueError("Pick a backup destination")
-        if self.kind == "remote":
+        if self.kind in {"remote", "ssh"}:
             self.host = self.host.strip()
             if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}|\[?[0-9A-Fa-f:.]{2,45}\]?", self.host):
                 raise ValueError("Enter the server's host name or IP address")
             self.host = self.host.strip("[]")
+            if any(ord(char) < 32 for char in self.username + self.path):
+                raise ValueError("The username or folder contains a control character")
+        if self.kind == "remote":
             if not self.username.strip():
                 raise ValueError("Enter the username")
             if not self.password:
                 raise ValueError("Enter the password")
-            if any(ord(char) < 32 for char in self.username + self.path):
-                raise ValueError("The username or folder contains a control character")
+        if self.kind == "ssh":
+            if not self.panel:
+                raise ValueError("Choose the panel the old server runs")
+            self.username = self.username.strip() or "root"
+            if not self.password and not self.private_key.strip():
+                raise ValueError("Enter the root password or a private key")
         return self
 
 
@@ -1333,6 +1348,10 @@ class RestoreItem(BaseModel):
 
 class RestoreListRequest(BaseModel):
     source: RestoreSource
+    # Which kinds of archive the page asking restores: Backups > Restore only
+    # the panel's own, each Migration page its own panel's (operator,
+    # 2026-10-27, as on OPanel). None is every kind, for API callers.
+    kinds: Optional[list[Literal["bpanel", "directadmin", "cpanel", "fastpanel"]]] = Field(default=None, max_length=4)
 
 
 class RestoreRunRequest(BaseModel):

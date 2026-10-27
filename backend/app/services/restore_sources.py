@@ -31,6 +31,15 @@ This server's list also reads the admin's SFTP drop folder, /home/admin/backups
 (operator, 2026-10-06: "Login admin như DA"). A large archive goes up over
 SFTP as the admin's own login, the DirectAdmin way, and the restore moves it
 into the panel's folder for its kind before anything reads it.
+
+DirectAdmin, cPanel and FastPanel archives are the migration addons'
+(operator, 2026-10-27: "bpanel không có các addon import cpanel, import
+DirectAdmin, import FastPanel" - as OPanel has them): each is restored from
+its own Migration page, which asks only for its own kind, and with its addon
+off one is listed - for an API caller that asks for every kind - but marked
+and never restored. Those pages add a fourth source, ``ssh``: the old server
+signed in to as root, which packs each account picked and hands it over
+(services/migrate_ssh.py). Its login, like another server's, is never stored.
 """
 from __future__ import annotations
 
@@ -54,10 +63,10 @@ import paramiko
 from app.core.config import settings
 from app.core.secrets import decrypt
 from app.models.entities import SftpBackupTarget
-from app.services import backup, backup_s3, da_import
+from app.services import addons, backup, backup_s3, cpanel_import, da_import, fastpanel_import, migrate_ssh
 from app.services.shell import shell
 
-DEFAULT_PORTS = {"sftp": 22, "ftp": 21, "ftps": 21}
+DEFAULT_PORTS = {"sftp": 22, "ftp": 21, "ftps": 21, "ssh": 22}
 TIMEOUT = 30
 LIST_LIMIT = 1000
 # Folders under users/ that hold archives of any account, not one account.
@@ -68,6 +77,15 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 KIND_PANEL = "bpanel"
 KIND_DA = "directadmin"
+KIND_CPANEL = "cpanel"
+# Packed by the panel itself off a FastPanel server (fastpanel_import).
+KIND_FASTPANEL = "fastpanel"
+KIND_LABELS = {KIND_PANEL: "BPanel", KIND_DA: "DirectAdmin", KIND_CPANEL: "cPanel", KIND_FASTPANEL: "FastPanel"}
+# The addon each foreign kind belongs to; a panel backup needs none.
+KIND_ADDONS = {KIND_DA: addons.DIRECTADMIN, KIND_CPANEL: addons.CPANEL, KIND_FASTPANEL: addons.FASTPANEL}
+# Where each foreign kind waits to be imported: a key prefix of this server's
+# list, and the folder (read at call time, so a test can point it elsewhere).
+FOREIGN_KEYS = {KIND_DA: "@da", KIND_CPANEL: "@cpanel", KIND_FASTPANEL: "@fastpanel"}
 # user.<creator>.<account>.tar.zst (or .tar.gz and the rest): what DirectAdmin
 # writes for every account, whichever compression the box is set to.
 DA_NAME_RE = re.compile(
@@ -99,14 +117,21 @@ def _iso(timestamp: float | int | None) -> str:
 
 
 def archive_kind(name: str) -> str | None:
-    """``bpanel``, ``directadmin``, or None for a file that is not a backup.
+    """``bpanel``, ``directadmin``, ``cpanel``, ``fastpanel``, or None for a
+    file that is not a backup.
 
-    The panel only ever writes ``.tar.gz``; any other tar format, and any
-    ``.tar.gz`` named the DirectAdmin way, is a DirectAdmin archive.
+    The panel only ever writes ``user-<account>-...tar.gz``. cPanel names its
+    archives cpmove-<user> or backup-<date>_<user>, the panel itself packs a
+    FastPanel account as fastpanel-<user>.tar.gz; any other tar format, and
+    any ``.tar.gz`` named the DirectAdmin way, is a DirectAdmin archive.
     """
     base = posixpath.basename((name or "").replace("\\", "/"))
     if DA_NAME_RE.match(base):
         return KIND_DA
+    if cpanel_import.is_cpanel_name(base):
+        return KIND_CPANEL
+    if fastpanel_import.is_fastpanel_name(base):
+        return KIND_FASTPANEL
     lower = base.lower()
     if lower.endswith(".tar.gz"):
         return KIND_PANEL
@@ -118,13 +143,54 @@ def archive_kind(name: str) -> str | None:
 def account_of(kind: str, name: str) -> str:
     """The account an archive belongs to, from its name; "" when the name
     does not say. A listing only: the restore reads the archive itself."""
+    base = posixpath.basename((name or "").replace("\\", "/"))
     if kind == KIND_DA:
-        base = posixpath.basename(name)
         match = DA_NAME_RE.match(base)
         # The name the import will give it here: DirectAdmin's "admin", say,
         # is taken by the panel and becomes da_admin_<hash>.
         return da_import._normalize_username(match.group("user"), base) if match else ""
+    if kind == KIND_CPANEL:
+        account = cpanel_import.account_of(base)
+        return da_import._normalize_username(account, base) if account else ""
+    if kind == KIND_FASTPANEL:
+        account = fastpanel_import.account_of(base)
+        return da_import._normalize_username(account, base) if account else ""
     return backup.username_from_archive_name(name)
+
+
+def foreign_dir(kind: str) -> Path:
+    """The folder a DirectAdmin, cPanel or FastPanel archive is imported from."""
+    return {KIND_CPANEL: cpanel_import.BACKUP_DIR, KIND_FASTPANEL: fastpanel_import.BACKUP_DIR}.get(
+        kind, da_import.DA_BACKUP_DIR)
+
+
+def _ensure_foreign_dir(kind: str) -> None:
+    {KIND_CPANEL: cpanel_import.ensure_backup_dir, KIND_FASTPANEL: fastpanel_import.ensure_backup_dir}.get(
+        kind, da_import.ensure_backup_dir)()
+
+
+def kind_enabled(kind: str) -> bool:
+    """Whether archives of this kind may be restored: a foreign one needs its
+    addon installed."""
+    addon = KIND_ADDONS.get(kind)
+    return addon is None or addons.is_installed(addon)
+
+
+# Whole sentences, so the page can translate them.
+OFF_MESSAGES = {
+    KIND_DA: "Install the DirectAdmin Import addon (Addons) to restore this",
+    KIND_CPANEL: "Install the cPanel Import addon (Addons) to restore this",
+    KIND_FASTPANEL: "Install the FastPanel Import addon (Addons) to restore this",
+}
+
+
+def off_message(kind: str) -> str:
+    return OFF_MESSAGES.get(kind, "Install its addon (Addons) to restore this")
+
+
+def require_kind(kind: str) -> None:
+    if not kind_enabled(kind):
+        raise RestoreSourceError(off_message(kind))
 
 
 def _row(name: str, key: str, size, modified: str, username: str = "", kind: str | None = None,
@@ -181,6 +247,13 @@ def list_local() -> list[dict]:
             info = path.stat()
             rows.append(_row(path.name, f"{DA_KEY}/{path.name}", info.st_size, _iso(info.st_mtime),
                              kind=KIND_DA, where="da"))
+    # cPanel's and FastPanel's folders hold only archives named their way.
+    for kind in (KIND_CPANEL, KIND_FASTPANEL):
+        for path in _files(foreign_dir(kind)):
+            if archive_kind(path.name) == kind:
+                info = path.stat()
+                rows.append(_row(path.name, f"{FOREIGN_KEYS[kind]}/{path.name}", info.st_size, _iso(info.st_mtime),
+                                 kind=kind, where=kind))
     rows.extend(list_inbox())
     return _newest_first(_rows(rows))
 
@@ -252,8 +325,9 @@ def _confined(folder: Path, *parts: str) -> Path:
 
 def local_archive(key: str) -> tuple[Path, str, str]:
     """The archive a local key names, its kind and where it is: users/<folder>/
-    <file>.tar.gz, @da/<file> in the DA folder, or @inbox/<file> in the drop
-    folder - nothing else."""
+    <file>.tar.gz, @da/<file> in the DA folder, @cpanel/<file> or
+    @fastpanel/<file> in theirs, or @inbox/<file> in the drop folder -
+    nothing else."""
     parts = (key or "").split("/")
     if len(parts) != 2 or any(part in {"", ".", ".."} or _CONTROL.search(part) for part in parts):
         raise RestoreSourceError("Not a backup in the panel's backup folder")
@@ -263,6 +337,12 @@ def local_archive(key: str) -> tuple[Path, str, str]:
             raise RestoreSourceError("Not a DirectAdmin backup")
         path = _confined(da_import.DA_BACKUP_DIR, name)
         kind, where = KIND_DA, "da"
+    elif folder in (FOREIGN_KEYS[KIND_CPANEL], FOREIGN_KEYS[KIND_FASTPANEL]):
+        kind = KIND_CPANEL if folder == FOREIGN_KEYS[KIND_CPANEL] else KIND_FASTPANEL
+        if archive_kind(name) != kind:
+            raise RestoreSourceError(f"Not a {KIND_LABELS[kind]} backup")
+        path = _confined(foreign_dir(kind), name)
+        where = kind
     elif folder == INBOX_KEY:
         kind = archive_kind(name)
         if not kind:
@@ -314,8 +394,9 @@ def take_from_inbox(name: str, kind: str) -> str:
 
 def delete_local(key: str) -> str:
     """Remove an archive that was brought here to be restored: an upload, a
-    DirectAdmin archive or one in the drop folder. A panel backup in
-    users/<account>/ is managed under Backup user, not from here."""
+    DirectAdmin, cPanel or FastPanel archive, or one in the drop folder. A
+    panel backup in users/<account>/ is managed under Backup user, not from
+    here."""
     path, _kind, where = local_archive(key)
     if where == "panel" and path.parent.name not in SHARED_FOLDERS:
         raise RestoreSourceError("Delete account backups under Backup user")
@@ -326,10 +407,11 @@ def delete_local(key: str) -> str:
 # --- SFTP -----------------------------------------------------------------------
 
 @contextmanager
-def _sftp(host: str, port: int, username: str, *, password: str = "", private_key: str = "",
-          pinned: str = "") -> Iterator[tuple[paramiko.SFTPClient, dict]]:
-    """An SFTP session. The server's key is read and compared with `pinned`
-    before any credential leaves this machine."""
+def _transport(host: str, port: int, username: str, *, password: str = "", private_key: str = "",
+               pinned: str = "", what: str = "SFTP") -> Iterator[tuple[paramiko.Transport, dict]]:
+    """A signed-in SSH transport. The server's key is read and compared with
+    `pinned` before any credential leaves this machine; with a private key,
+    `password` is its passphrase."""
     try:
         sock = socket.create_connection((host, port), timeout=TIMEOUT)
     except OSError as exc:
@@ -340,7 +422,7 @@ def _sftp(host: str, port: int, username: str, *, password: str = "", private_ke
         try:
             transport.start_client(timeout=TIMEOUT)
         except paramiko.SSHException as exc:
-            raise RestoreSourceError(f"{host}:{port} is not an SFTP server ({exc})") from None
+            raise RestoreSourceError(f"{host}:{port} is not an {what} server ({exc})") from None
         key = transport.get_remote_server_key()
         seen = {"type": key.get_name(), "fingerprint": backup._fingerprint(key)}
         if pinned and pinned != seen["fingerprint"]:
@@ -349,11 +431,58 @@ def _sftp(host: str, port: int, username: str, *, password: str = "", private_ke
                 f"got {seen['fingerprint']}. Nothing was sent to it.")
         try:
             if private_key:
-                transport.auth_publickey(username, backup._load_private_key(private_key, password or None))
+                try:
+                    pkey = backup._load_private_key(private_key, password or None)
+                except (ValueError, paramiko.SSHException):
+                    raise RestoreSourceError("The private key could not be read (or its passphrase is wrong)") from None
+                transport.auth_publickey(username, pkey)
             else:
                 transport.auth_password(username, password)
         except paramiko.AuthenticationException:
             raise RestoreSourceError("The server refused the username or password") from None
+        yield transport, seen
+    finally:
+        transport.close()
+
+
+class _SshSession:
+    """What migrate_ssh asks of a connection: its transport, to run commands
+    on, and an SFTP session on the same login, to download with."""
+
+    def __init__(self, transport: paramiko.Transport):
+        self._transport = transport
+
+    def get_transport(self) -> paramiko.Transport:
+        return self._transport
+
+    def open_sftp(self) -> paramiko.SFTPClient:
+        client = paramiko.SFTPClient.from_transport(self._transport)
+        if client is None:
+            raise RestoreSourceError("The server did not open an SFTP session")
+        client.get_channel().settimeout(TIMEOUT * 4)
+        return client
+
+
+@contextmanager
+def _ssh(source: dict, pinned: str = "") -> Iterator[tuple[_SshSession, dict]]:
+    """The old server of a migration, signed in to as root (or whoever was
+    typed in). Its login lives in `source` only, which is never stored."""
+    port = int(source.get("port") or DEFAULT_PORTS["ssh"])
+    with _transport(source["host"], port, source.get("username") or "root", password=source.get("password") or "",
+                    private_key=source.get("private_key") or "", pinned=pinned, what="SSH") as (transport, seen):
+        try:
+            yield _SshSession(transport), seen
+        except (paramiko.SSHException, EOFError, socket.timeout) as exc:
+            raise RestoreSourceError(f"SSH: the connection failed partway ({exc or type(exc).__name__})") from None
+
+
+@contextmanager
+def _sftp(host: str, port: int, username: str, *, password: str = "", private_key: str = "",
+          pinned: str = "") -> Iterator[tuple[paramiko.SFTPClient, dict]]:
+    """An SFTP session. The server's key is read and compared with `pinned`
+    before any credential leaves this machine."""
+    with _transport(host, port, username, password=password, private_key=private_key,
+                    pinned=pinned) as (transport, seen):
         try:
             client = paramiko.SFTPClient.from_transport(transport)
         except (paramiko.SSHException, paramiko.SFTPError, EOFError, OSError) as exc:
@@ -367,8 +496,6 @@ def _sftp(host: str, port: int, username: str, *, password: str = "", private_ke
             yield client, seen
         except (paramiko.SSHException, paramiko.SFTPError, EOFError, socket.timeout) as exc:
             raise RestoreSourceError(f"SFTP: the connection failed partway ({exc or type(exc).__name__})") from None
-    finally:
-        transport.close()
 
 
 def _sftp_list(client: paramiko.SFTPClient, folder: str) -> list[dict]:
@@ -476,12 +603,54 @@ def describe(source: dict, db=None) -> str:
     if source["kind"] == "target":
         target = db.get(SftpBackupTarget, source.get("target_id")) if db is not None else None
         return f"destination {target.name if target else source.get('target_id')}"
+    if source["kind"] == "ssh":
+        port = int(source.get("port") or DEFAULT_PORTS["ssh"])
+        return (f"{KIND_LABELS.get(source.get('panel'), source.get('panel'))} server "
+                f"{source.get('username') or 'root'}@{source['host']}:{port}")
     return f"{source['protocol']}://{source['username']}@{source['host']}{remote_folder(source.get('path'))}"
 
 
-def list_source(source: dict, db) -> dict:
+def list_source(source: dict, db, kinds: list[str] | None = None) -> dict:
     """What can be restored from this source, newest first, plus where that
-    is and - for another SFTP server - the key it presented."""
+    is and - for another SFTP or SSH server - the key it presented.
+
+    ``kinds`` is what the page asking restores (operator, 2026-10-27, as on
+    OPanel): Backups > Restore the panel's own backups, each Migration page
+    its own panel's. None is every kind, for an API caller; there an archive
+    whose addon is not installed is listed with ``error`` saying so, and the
+    restore refuses it.
+    """
+    if source["kind"] == "ssh":
+        return list_accounts(source)
+    result = _list_archives(source, db)
+    items = [row for row in result["items"] if kinds is None or row["kind"] in kinds]
+    for row in items:
+        if not kind_enabled(row["kind"]):
+            row["error"] = off_message(row["kind"])
+    result["items"] = items
+    return result
+
+
+def list_accounts(source: dict) -> dict:
+    """The accounts on a DirectAdmin, cPanel or FastPanel server, signed in to
+    over SSH. Only a listing: nothing is packed until a restore asks."""
+    panel = source.get("panel") or ""
+    if panel not in migrate_ssh.PANELS:
+        raise RestoreSourceError("Choose the panel the old server runs")
+    require_kind(panel)
+    with _ssh(source) as (session, seen):
+        try:
+            rows = migrate_ssh.list_accounts(session, panel)
+        except migrate_ssh.MigrateError as exc:
+            raise RestoreSourceError(str(exc)) from None
+    for row in rows:
+        # The name the import gives it here, so "already here" is honest.
+        row["username"] = da_import._normalize_username(row["key"])
+    rows.sort(key=lambda row: row["key"])
+    return {"items": rows[:LIST_LIMIT], "location": describe(source), "host_key": seen}
+
+
+def _list_archives(source: dict, db) -> dict:
     kind = source["kind"]
     if kind == "local":
         return {"items": list_local(), "location": str(users_dir()), "host_key": None}
@@ -570,9 +739,16 @@ def _sftp_put(client: paramiko.SFTPClient, local_file: str, folder: str, name: s
 
 
 def check_key(source: dict, key: str) -> str:
-    """Refuse a key this source could not have listed; return its file name."""
+    """Refuse a key this source could not have listed; return its file name -
+    or, from an old server over SSH, the account's name, which that server
+    packs when the restore runs."""
     if _CONTROL.search(key or ""):
         raise RestoreSourceError("Not a backup file")
+    if source["kind"] == "ssh":
+        try:
+            return migrate_ssh.check_account(key)
+        except ValueError:
+            raise RestoreSourceError(f"Not an account of that server: {key}") from None
     if source["kind"] == "local":
         return local_archive(key)[0].name
     name = posixpath.basename(key)
@@ -585,6 +761,8 @@ def check_key(source: dict, key: str) -> str:
 
 def key_kind(source: dict, key: str) -> str:
     """Which restore an archive this source listed goes through."""
+    if source["kind"] == "ssh":
+        return source.get("panel") or KIND_DA
     if source["kind"] == "local":
         return local_archive(key)[1]
     return archive_kind(posixpath.basename(key)) or KIND_PANEL
@@ -598,23 +776,29 @@ def _room_for(size: int, folder: Path) -> None:
             f"{free // 1024 ** 2} MB free")
 
 
-def _stage_da(pull, name: str) -> str:
-    """Download a DirectAdmin archive into the DA folder, where its import
-    reads from, and return its path.
+def _stage_foreign(pull, name: str, kind: str) -> str:
+    """Download a DirectAdmin, cPanel or FastPanel archive into the folder its
+    import reads from, and return its path.
 
     Under its own name when that is free, so the listing still says whose it
     is; as a hidden .part until it is whole, so a half download is never
     offered.
     """
     safe = (name or "").strip()
-    if (archive_kind(safe) != KIND_DA or "/" in safe or "\\" in safe or ".." in safe
+    if (archive_kind(safe) != kind or "/" in safe or "\\" in safe or ".." in safe
             or safe.startswith(".") or safe != Path(safe).name):
         raise ValueError("Not a backup file name")
-    folder = da_import.DA_BACKUP_DIR
+    folder = foreign_dir(kind)
     destination = folder / safe
     if destination.exists():
-        stem = da_import._strip_archive_suffix(safe)
-        destination = folder / f"{stem}-{secrets.token_hex(3)}{safe[len(stem):]}"
+        if kind == KIND_CPANEL:
+            # A cPanel name ends in the account; a suffix there would change it.
+            destination = folder / cpanel_import.free_name(safe, folder)
+        else:
+            stem = da_import._strip_archive_suffix(safe)
+            destination = folder / f"{stem}-{secrets.token_hex(3)}{safe[len(stem):]}"
+        if archive_kind(destination.name) != kind or destination.exists():
+            raise RestoreSourceError(f"{safe} is already here; delete it from this server first")
     partial = folder / f".{destination.name}.part"
     try:
         pull(str(partial))
@@ -627,26 +811,39 @@ def _stage_da(pull, name: str) -> str:
     return str(destination)
 
 
+def _stage_da(pull, name: str) -> str:
+    return _stage_foreign(pull, name, KIND_DA)
+
+
 def _stage_panel(pull, name: str) -> str:
     return str(Path(backup.user_restore_dir()) / backup.stage_remote_backup(pull, name))
 
 
-def fetch(source: dict, key: str, size: int, db) -> tuple[str, bool]:
+def fetch(source: dict, key: str, size: int, db, on_status=None) -> tuple[str, bool]:
     """A local archive to restore from, and whether it is a downloaded copy
     that should go once the restore has succeeded.
 
-    A DirectAdmin archive lands in the DA folder and a panel one in the restore
-    folder; one in the admin's drop folder is moved to the same place first.
+    A DirectAdmin, cPanel or FastPanel archive lands in its own folder and a
+    panel one in the restore folder; one in the admin's drop folder is moved
+    to the same place first. From an old server over SSH the account is
+    packed there first; ``on_status`` hears what it is waiting for.
     """
     name = check_key(source, key)
+    kind = key_kind(source, key)
+    require_kind(kind)
+    if source["kind"] == "ssh":
+        return _fetch_over_ssh(source, name, kind, on_status), True
     if source["kind"] == "local":
         path, kind, where = local_archive(key)
         if where == "inbox":
             return take_from_inbox(name, kind), False
         return str(path), False
-    if archive_kind(name) == KIND_DA:
-        da_import.ensure_backup_dir()
-        folder, stage = da_import.DA_BACKUP_DIR, _stage_da
+    if kind in KIND_ADDONS:
+        _ensure_foreign_dir(kind)
+        folder = foreign_dir(kind)
+
+        def stage(pull, archive_name):
+            return _stage_foreign(pull, archive_name, kind)
     else:
         folder, stage = users_dir(), _stage_panel
         folder.mkdir(parents=True, exist_ok=True)
@@ -677,3 +874,25 @@ def fetch(source: dict, key: str, size: int, db) -> tuple[str, bool]:
         finally:
             _ftp_close(ftp)
     return staged, True
+
+
+def _fetch_over_ssh(source: dict, account: str, kind: str, on_status=None) -> str:
+    """Have the old server pack one account, bring the archive into the
+    folder its kind is imported from, and return where it is.
+
+    The server's key is the one it showed when it was listed: the root login
+    is only ever sent to that server.
+    """
+    if not source.get("host_key"):
+        raise RestoreSourceError("List the server first, so its key can be checked")
+    _ensure_foreign_dir(kind)
+    folder = foreign_dir(kind)
+    with _ssh(source, pinned=source["host_key"]) as (session, _seen):
+        try:
+            return migrate_ssh.pack_and_fetch(
+                session, kind, account,
+                stage=lambda name, pull: _stage_foreign(pull, name, kind),
+                ensure_room=lambda size: _room_for(size, folder),
+                on_status=on_status)
+        except migrate_ssh.MigrateError as exc:
+            raise RestoreSourceError(str(exc)) from None

@@ -1010,6 +1010,9 @@ install_panel_runtime() {
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel /var/lib/bpanel/geoip
   # DirectAdmin import staging dirs
   install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/da
+  # cPanel and FastPanel archives waiting to be imported (the cPanel Import
+  # and FastPanel Import addons, operator 2026-10-27).
+  install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/cpanel /home/admin/bpanel_backups/fastpanel
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/da-import
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/import-stage
   # The admin's SFTP drop folder for large backups, which Restore > This server
