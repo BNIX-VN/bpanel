@@ -1269,6 +1269,7 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
                   "mail": "page: 'mail', before: 'mailMailboxes', addon: 'mail'",
                   "notifications": "page: 'notifications', addon: 'notifications', roles: ['admin']",
                   "wordpress": "page: 'wordpress', addon: 'wordpress'",
+                  "redis-accounts": "page: 'redis', addon: 'redis-accounts'",
                   # Each account's use: Server > Account resources, and the
                   # customer's own Resource usage.
                   "limits": "page: 'account-resources', roles: ['admin'], when: (c) => c.limitsOn"}.get(slug)

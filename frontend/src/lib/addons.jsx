@@ -12,6 +12,7 @@ export const ADDON_META = {
   notifications: { page: 'notifications', label: msg('Notifications'), featureIcon: 'notifications' },
   limits: { page: 'usage', label: msg('Resource limits'), featureIcon: 'resource-usage' },
   git: { page: 'git', label: 'Git', featureIcon: 'git' },
+  'redis-accounts': { page: 'redis', label: msg('Redis per account'), featureIcon: 'cache' },
   wordpress: { page: 'wordpress', label: msg('WordPress Manager'), featureIcon: 'wordpress' },
   application: { page: 'applications', label: msg('Applications'), featureIcon: 'applications' },
   demo: { page: 'addons', label: msg('Demo mode'), featureIcon: 'account' },

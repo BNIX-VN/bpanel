@@ -186,6 +186,7 @@ export const PAGE_FEATURE_ICONS = {
   security: 'account-security',
   sftp: 'sftp',
   git: 'git',
+  redis: 'cache',
   terminal: 'terminal',
   php: 'php',
   firewall: 'firewall',

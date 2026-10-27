@@ -51,6 +51,9 @@ export const TILES = {
   cron: { label: msg('Cron'), icon: 'cron', page: 'cron' },
   usage: { label: msg('Resource usage'), icon: 'resource-usage', page: 'usage', roles: ['reseller', 'customer'], when: (c) => c.limitsOn },
   mcp: { label: msg('AI assistants (MCP)'), icon: 'mcp', page: 'mcp', addon: 'mcp' },
+  // The account's own Redis (Redis per account addon, operator 2026-10-27);
+  // an administrator's tile lists which accounts have it on.
+  redis: { label: 'Redis', icon: 'cache', page: 'redis', addon: 'redis-accounts' },
   services: { label: msg('Services'), icon: 'services', page: 'services', roles: ['admin'] },
   processes: { label: msg('Processes'), icon: 'processes', page: 'processes', roles: ['admin'] },
   ram: { label: 'RAM', icon: 'ram', page: 'ram-usage', roles: ['admin'] },
@@ -78,7 +81,7 @@ const ADMIN = [
   ['server', msg('Server'), ['php', 'services', 'processes', 'ram', 'disk', 'traffic', 'account-resources', 'updates']],
   // Addons with the rest of Advanced, not a section of one tile of their own
   // (operator, 2026-10-25).
-  ['advanced', msg('Advanced'), ['cron', 'mcp', 'api-tokens', 'notifications', 'panel-settings', 'addons']],
+  ['advanced', msg('Advanced'), ['cron', 'redis', 'mcp', 'api-tokens', 'notifications', 'panel-settings', 'addons']],
 ];
 const CUSTOMER = [
   ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'wordpress', 'applications']],
@@ -86,7 +89,7 @@ const CUSTOMER = [
   ['databases', msg('Databases'), ['databases', 'database-add', 'phpmyadmin']],
   ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
   ['security', msg('Security'), ['account-security', 'waf']],
-  ['advanced', msg('Advanced'), ['cron', 'mcp', 'usage']],
+  ['advanced', msg('Advanced'), ['cron', 'redis', 'mcp', 'usage']],
 ];
 const RESELLER = [
   ['accounts', msg('Customers'), ['users', 'user-add', 'packages']],

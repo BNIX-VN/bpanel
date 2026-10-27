@@ -30,6 +30,7 @@ MAIL = "mail"
 MALWARE = "malware"
 MCP = "mcp"
 NOTIFICATIONS = "notifications"
+REDIS_ACCOUNTS = "redis-accounts"
 SHARED_BLOCKLIST = "sharedblocklist"
 WORDPRESS = "wordpress"
 
@@ -103,6 +104,26 @@ CATALOGUE: dict[str, dict] = {
             "Removing the addon lifts every limit at once; the limits you set stay with the accounts and packages.",
         ],
         "keeps_data_on_uninstall": True,
+    },
+    # DirectAdmin-style, one Redis per hosting account (operator, 2026-10-27).
+    # services/redis_accounts.py; the instances are the helper's redis-* verbs.
+    REDIS_ACCOUNTS: {
+        "name": "Redis per account",
+        "version": "1.0.0",
+        "summary": "Each hosting account can turn on a Redis of its own, for WordPress object cache, Laravel and other PHP apps.",
+        "details": [
+            "The customer turns it on and off on the Redis page. It runs as the account's own Linux user and is reached only through a socket in the account's home, so no other account can use it.",
+            "You set how much memory it may use on each package, and on each account without a package: 64 MB unless you change it.",
+            "When it is full it forgets the keys used least recently, as a cache should, rather than refusing to store more.",
+        ],
+        "notes": [
+            "The socket is /home/<user>/.redis/redis.sock; the Redis page shows the settings for WordPress (Redis Object Cache), PHP and Laravel.",
+            "It is a cache: nothing is saved to disk, and a restart empties it.",
+            "0 MB means the package may not use it.",
+            "Removing the addon stops every account's Redis and turns it off for all of them.",
+            "The server's own Redis on 127.0.0.1:6379, if there is one, is not touched.",
+        ],
+        "keeps_data_on_uninstall": False,
     },
     GIT: {
         "name": "Git",

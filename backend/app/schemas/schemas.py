@@ -228,6 +228,8 @@ class UserPackageCreate(ResourceLimitsIn):
     node_app_memory_mb: int = Field(default=512, ge=64, le=16384)
     sftp_accounts_limit: int = Field(default=3, ge=0, le=100)
     mail_accounts_limit: int = Field(default=10, ge=0, le=1000)
+    # Redis per account addon: each account's own Redis, in MB; 0 = not allowed.
+    redis_memory_mb: int = Field(default=64, ge=0, le=4096)
     # Resource limits addon (0 = unlimited); copied to the accounts on it.
     cpu_percent: int = 0
     memory_mb: int = 0
@@ -260,6 +262,7 @@ class UserPackageUpdate(ResourceLimitsIn):
     node_app_memory_mb: Optional[int] = Field(default=None, ge=64, le=16384)
     sftp_accounts_limit: Optional[int] = Field(default=None, ge=0, le=100)
     mail_accounts_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+    redis_memory_mb: Optional[int] = Field(default=None, ge=0, le=4096)
     cpu_percent: Optional[int] = None
     memory_mb: Optional[int] = None
     process_limit: Optional[int] = None
@@ -296,6 +299,7 @@ class UserPackageOut(BaseModel):
     node_apps_limit: int = 0
     sftp_accounts_limit: int = 3
     mail_accounts_limit: int = 10
+    redis_memory_mb: int = 64
     cpu_percent: int = 0
     memory_mb: int = 0
     process_limit: int = 0
@@ -333,6 +337,9 @@ class UserCreate(ResourceLimitsIn, GroupLimitsIn):
     # a package brings its own.
     terminal_enabled: bool = False
     node_apps_limit: int = Field(default=0, ge=0, le=100)
+    # Redis per account addon, as the two above: a custom package's own, from
+    # the administrator; 0 = not allowed.
+    redis_memory_mb: int = Field(default=64, ge=0, le=4096)
     # Resource limits addon (0 = unlimited). group_* are a reseller's caps on
     # its whole group, the administrator's to set.
     cpu_percent: int = 0
@@ -377,6 +384,7 @@ class UserUpdate(ResourceLimitsIn, GroupLimitsIn):
     # As on UserCreate: a custom package only, the administrator only.
     terminal_enabled: Optional[bool] = None
     node_apps_limit: Optional[int] = Field(default=None, ge=0, le=100)
+    redis_memory_mb: Optional[int] = Field(default=None, ge=0, le=4096)
     cpu_percent: Optional[int] = None
     memory_mb: Optional[int] = None
     process_limit: Optional[int] = None
@@ -433,6 +441,8 @@ class UserOut(BaseModel):
     database_limit: int = 0
     terminal_enabled: bool = False
     node_apps_limit: int = 0
+    redis_memory_mb: int = 64
+    redis_enabled: bool = False
     reseller_id: Optional[int] = None
     pool_user_limit: int = 0
     pool_storage_limit_mb: int = 0

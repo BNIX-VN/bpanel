@@ -1,0 +1,14 @@
+/* An account's own Redis (App.jsx renderRedis, Redis per account addon,
+   operator 2026-10-27): the switch and its state on one line, the limit and
+   the use as two figures, and for an administrator the accounts in the
+   table SNPanel's lists use (pages/Databases.css .dbt). */
+.redis-status-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:14px}
+.redis-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:0 0 14px}
+.redis-facts div{border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);padding:10px 12px}
+.redis-facts dt{color:var(--text-secondary);font-size:var(--text-sm);margin:0 0 4px}
+.redis-facts dd{margin:0;font-weight:600;color:var(--text)}
+.redis-snippets{display:grid;gap:10px}
+.dbt.redis-table .dbt-row{grid-template-columns:minmax(160px,1.4fr) minmax(120px,1fr) minmax(90px,auto) minmax(70px,auto)}
+@media (max-width:640px){
+  .dbt.redis-table .dbt-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+}

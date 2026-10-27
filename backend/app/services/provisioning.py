@@ -116,6 +116,10 @@ def suspend_account(db: Session, account: ProvisioningAccount, reason: str = "")
     account.last_action = "suspend"
     account.last_message = reason
     db.commit()
+    # Redis per account: stopped, the switch kept for the unsuspend.
+    from app.services import redis_accounts
+
+    redis_accounts.reconcile_quietly(db, user)
 
 
 def unsuspend_account(db: Session, account: ProvisioningAccount) -> None:
@@ -139,6 +143,9 @@ def unsuspend_account(db: Session, account: ProvisioningAccount) -> None:
     account.last_action = "unsuspend"
     account.last_message = ""
     db.commit()
+    from app.services import redis_accounts
+
+    redis_accounts.reconcile_quietly(db, user)
 
 
 def terminate_account(db: Session, account: ProvisioningAccount, backup: bool = False) -> list[str]:

@@ -52,6 +52,7 @@ import './pages/Databases.css';
 import './pages/Sftp.css';
 import './pages/Cron.css';
 import './pages/Git.css';
+import './pages/Redis.css';
 import './pages/Users.css';
 import './pages/Files.css';
 import './pages/Backups.css';
@@ -143,6 +144,7 @@ const PAGE_ROUTES = {
   mail: '/email',
   usage: '/resource-usage',
   git: '/git',
+  redis: '/redis',
   wordpress: '/wordpress',
   terminal: '/terminal',
   // The server's own pages, behind the top bar's status chips (admin only).
@@ -935,6 +937,12 @@ function App() {
   // Git repositories in the account's home (operator, 2026-10-09).
   const BLANK_GIT_FORM = { owner_id: '', name: '', mode: 'clone', path: '', remote_url: '', branch: 'main', auth_type: 'none', https_username: '', https_token: '', deploy_commands: [], php_version: '' };
   const [gitInfo, setGitInfo] = useState(null);
+  // The account's own Redis (Redis per account addon, operator 2026-10-27);
+  // for an administrator, every account's switch. redisGoing is where the
+  // switch is going while the server starts or stops it.
+  const [redisInfo, setRedisInfo] = useState(null);
+  const [redisAccounts, setRedisAccounts] = useState([]);
+  const [redisGoing, setRedisGoing] = useState(null);
   const [gitRepo, setGitRepo] = useState(null);
   const [showCreateGit, setShowCreateGit] = useState(false);
   const [gitForm, setGitForm] = useState(BLANK_GIT_FORM);
@@ -1212,6 +1220,9 @@ function App() {
   const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
   const mailAddonInstalled = !!addons.items.find(item => item.slug === 'mail')?.installed;
   const limitsOn = !!addons.items.find(item => item.slug === 'limits')?.installed;
+  // Redis per account (2026-10-27): its page, its tile and the package and
+  // account field only while installed.
+  const redisAddonInstalled = !!addons.items.find(item => item.slug === 'redis-accounts')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -2018,6 +2029,8 @@ function App() {
   // Resource limits addon: an account's own, and a reseller's caps on its group.
   const RL_FIELDS = ['cpu_percent', 'memory_mb', 'process_limit', 'io_read_mbps', 'io_write_mbps'];
   const limitValues = (form, prefix = '') => Object.fromEntries(RL_FIELDS.map(field => [prefix + field, Number(form[prefix + field]) || 0]));
+  // Redis per account: 64 MB until someone types another; 0 = not allowed.
+  const redisMbOf = (form) => (form.redis_memory_mb === undefined ? 64 : Number(form.redis_memory_mb) || 0);
 
   async function createUser() {
     const payload = {
@@ -2033,6 +2046,7 @@ function App() {
     if (isAdmin && !newUser.package_id) {
       payload.terminal_enabled = !!newUser.terminal_enabled;
       payload.node_apps_limit = Number(newUser.node_apps_limit) || 0;
+      if (redisAddonInstalled) payload.redis_memory_mb = redisMbOf(newUser);
     }
     if (isAdmin && newUser.role === 'end_user' && newUser.reseller_id) payload.reseller_id = Number(newUser.reseller_id);
     if (isAdmin && newUser.role === 'reseller') {
@@ -2096,6 +2110,7 @@ function App() {
       database_limit: user.database_limit ?? 0,
       terminal_enabled: !!user.terminal_enabled,
       node_apps_limit: user.node_apps_limit ?? 0,
+      redis_memory_mb: user.redis_memory_mb ?? 64,
       new_password: '',
       confirm_password: '',
     });
@@ -2138,6 +2153,7 @@ function App() {
     if (isAdmin && !editingUserForm.package_id) {
       payload.terminal_enabled = !!editingUserForm.terminal_enabled;
       payload.node_apps_limit = Number(editingUserForm.node_apps_limit) || 0;
+      if (redisAddonInstalled) payload.redis_memory_mb = redisMbOf(editingUserForm);
     }
     if (isAdmin) {
       if (editingUser.id !== currentUser?.id) payload.role = editingUserForm.role;
@@ -2202,7 +2218,7 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(newPackage.node_apps_limit) || 0 } : {}), open_basedir: !!newPackage.open_basedir, ...(limitsOn ? limitValues(newPackage) : {}) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(newPackage.node_apps_limit) || 0 } : {}), ...(redisAddonInstalled ? { redis_memory_mb: redisMbOf(newPackage) } : {}), open_basedir: !!newPackage.open_basedir, ...(limitsOn ? limitValues(newPackage) : {}) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
@@ -2223,6 +2239,7 @@ function App() {
       terminal_enabled: !!item.terminal_enabled,
       open_basedir: !!item.open_basedir,
       node_apps_limit: item.node_apps_limit ?? 0,
+      redis_memory_mb: item.redis_memory_mb ?? 64,
       ...limitValues(item),
     });
   }
@@ -2246,7 +2263,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(editingPackageForm.node_apps_limit) || 0 } : {}), open_basedir: !!editingPackageForm.open_basedir, ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(editingPackageForm.node_apps_limit) || 0 } : {}), ...(redisAddonInstalled ? { redis_memory_mb: redisMbOf(editingPackageForm) } : {}), open_basedir: !!editingPackageForm.open_basedir, ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -3852,6 +3869,34 @@ function App() {
     if (data?.php_binary) setCronPhpInfo({ php_binary: data.php_binary, php_version: data.php_version || '' });
   }
 
+  // The account's own Redis; an administrator's page lists every account's.
+  async function loadRedis() {
+    const data = await request('/redis', { silent: true });
+    if (data) setRedisInfo(data);
+    if (isAdmin) {
+      const list = await request('/redis/accounts', { silent: true });
+      if (list?.items) setRedisAccounts(list.items);
+    }
+  }
+
+  async function setRedisEnabled(enabled) {
+    setRedisGoing(enabled);
+    const data = await request(enabled ? '/redis/enable' : '/redis/disable', { method: 'POST' },
+      enabled ? t('Starting Redis...') : t('Stopping Redis...'));
+    setRedisGoing(null);
+    if (!data) return;
+    setRedisInfo(data);
+    setNotice(enabled ? t('Redis is on.') : t('Redis is off, and what it held is gone.'));
+  }
+
+  async function flushRedis() {
+    if (!(await confirmDialog({ message: t("Empty this account's Redis? Every key in it is deleted; the websites that use it fill it again as visitors come."), danger: true }))) return;
+    const data = await request('/redis/flush', { method: 'POST' }, t('Emptying Redis...'));
+    if (!data) return;
+    setRedisInfo(data);
+    setNotice(t('Redis is empty.'));
+  }
+
   // Every extra login on the account, each with the website it reaches.
   async function loadGit() {
     const data = await request('/git/overview', { silent: true });
@@ -5453,6 +5498,11 @@ function App() {
     loadGit();
     if (isAdmin) loadUsers();
   }, [isAuthenticated, page, gitAddonInstalled]);
+
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'redis' || !redisAddonInstalled) return;
+    loadRedis();
+  }, [isAuthenticated, page, redisAddonInstalled]);
 
   useEffect(() => {
     if (!currentSite) return;
@@ -9179,6 +9229,88 @@ function App() {
   // Git repositories, laid out as SNPanel lays out its lists: the page's
   // header with Refresh and "New repository", one table row a repository
   // (opening it), and the new one made in a side sheet.
+  // An account's own Redis (Redis per account addon, operator 2026-10-27):
+  // the switch, its state, the socket to copy, the memory it may hold and
+  // holds, an Empty button, and how WordPress, PHP and Laravel reach it. An
+  // administrator has no Redis of their own: the page lists the accounts and
+  // says how to turn one on for a customer (log in as the customer).
+  function redisSnippets(socket) {
+    return [
+      [t('WordPress (Redis Object Cache plugin): in wp-config.php'), `define('WP_REDIS_SCHEME', 'unix');\ndefine('WP_REDIS_PATH', '${socket}');`],
+      [t('PHP (phpredis)'), `$redis = new Redis();\n$redis->connect('${socket}');`],
+      // Stock Laravel reads REDIS_HOST and REDIS_PORT only; phpredis takes a
+      // host that starts with / as a socket.
+      [t('Laravel: in .env'), `REDIS_CLIENT=phpredis\nREDIS_HOST=${socket}\nREDIS_PORT=0`],
+    ];
+  }
+
+  function renderRedis() {
+    const info = redisInfo;
+    const header = <PageHeader subtitle={t('A Redis of your own, for object caching in WordPress, Laravel and other PHP apps. It runs as your account, is reached only through its socket, and keeps nothing on disk: a restart empties it.')}
+      onRefresh={loadRedis} refreshDisabled={!!loading}/>;
+    if (!info) return <>{header}<section className="section"><p className="hint">{t('Loading…')}</p></section></>;
+    if (isAdmin) return <>
+      {header}
+      <section className="section">
+        <p className="hint">{t('Each account turns its own Redis on and off on this page; for a customer, log in as the customer. The memory is set on the package, or on an account without one.')}</p>
+        {redisAccounts.length === 0
+          ? <p className="hint">{t('No hosting accounts yet.')}</p>
+          : <div className="dbt redis-table" role="table" aria-label={t('Redis of each account')}>
+            <div className="dbt-row dbt-head" role="row">
+              <span role="columnheader">{t('Account')}</span>
+              <span role="columnheader">{t('Package')}</span>
+              <span role="columnheader">{t('Memory')}</span>
+              <span role="columnheader">{t('State')}</span>
+            </div>
+            {redisAccounts.map(item => <div className="dbt-row" role="row" key={item.id}>
+              <span role="cell" className="dbt-name"><Database size={15} aria-hidden="true"/><strong>{item.username}</strong></span>
+              <span role="cell" data-label={t('Package')}>{item.package_name || t('Custom')}</span>
+              <span role="cell" data-label={t('Memory')}>{item.limit_mb > 0 ? `${item.limit_mb} MB` : t('Not allowed')}</span>
+              <span role="cell" data-label={t('State')}><span className={item.enabled ? 'badge ok' : 'badge'}>{item.enabled ? t('On') : t('Off')}</span></span>
+            </div>)}
+          </div>}
+      </section>
+    </>;
+    if (!info.allowed) return <>{header}<section className="section">
+      <EmptyState icon={Database} message={t('Redis is not part of your package. Ask your provider to add it.')}/>
+    </section></>;
+    const going = redisGoing;
+    const shown = going ?? info.enabled;
+    // Turning it off is never refused; turning it on is, for a suspended account.
+    const blocked = !!info.problem && !info.enabled;
+    const socket = info.socket || '';
+    return <>
+      {header}
+      <section className="section">
+        {info.problem && <div className="info-box"><AlertCircle size={14}/> {t(info.detail || '')}</div>}
+        <div className="redis-status-row">
+          <Switch checked={shown} pending={going !== null} disabled={going !== null || blocked} onChange={setRedisEnabled} label="Redis">
+            <span>{shown ? t('On') : t('Off')}</span>
+          </Switch>
+          <span className={info.running ? 'badge ok' : info.enabled ? 'badge warn' : 'badge'}>
+            {info.running ? t('Running') : info.enabled ? t('Not running') : t('Stopped')}</span>
+          <button type="button" className="secondary-light" disabled={!!loading || !info.running} onClick={flushRedis}>
+            <Trash2 size={14} aria-hidden="true"/> {t('Empty Redis')}</button>
+        </div>
+        <dl className="redis-facts">
+          <div><dt>{t('Memory limit')}</dt><dd>{info.limit_mb} MB</dd></div>
+          <div><dt>{t('In use')}</dt><dd>{info.running ? formatBytes(info.used_bytes) : '—'}</dd></div>
+        </dl>
+        {renderCopyBlock(t('Socket'), socket, { copiedMessage: t('Socket path copied.') })}
+        <p className="hint">{t('When it is full, Redis forgets the keys used least recently, so a full cache keeps working.')}</p>
+      </section>
+      <section className="section">
+        <h2>{t('Use it')}</h2>
+        <p className="hint">{t('Point the app at the socket, with no host, port or password. Your websites run as your account, so they can reach it; no other account can.')}</p>
+        <div className="redis-snippets">
+          {redisSnippets(socket).map(([title, text]) => <React.Fragment key={title}>
+            {renderCopyBlock(title, text, { multiline: true })}
+          </React.Fragment>)}
+        </div>
+      </section>
+    </>;
+  }
+
   function renderGit() {
     if (gitRepo) return renderGitRepo();
     const info = gitInfo || {};
@@ -12064,7 +12196,9 @@ function App() {
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" disabled={packaged} value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" disabled={packaged} value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
           {applicationAddonInstalled && <label><span>{t('Applications')}</span><input type="number" min="0" max="100" disabled={packaged || !isAdmin} value={packaged ? (packages.find(item => String(item.id) === String(form.package_id))?.node_apps_limit ?? 0) : (form.node_apps_limit ?? 0)} onChange={set('node_apps_limit')} /></label>}
+          {redisAddonInstalled && <label><span>{t('Redis RAM (MB)')}</span><input type="number" min="0" max="4096" disabled={packaged || !isAdmin} value={packaged ? (packages.find(item => String(item.id) === String(form.package_id))?.redis_memory_mb ?? 64) : (form.redis_memory_mb ?? 64)} onChange={set('redis_memory_mb')} /></label>}
         </div>
+        {redisAddonInstalled && isAdmin && !packaged && <p className="hint">{t('Redis RAM: 0 = not allowed.')}</p>}
         {/* A custom account's own terminal (a package brings its own). */}
         {isAdmin && !packaged && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
       </fieldset>}
@@ -12353,6 +12487,7 @@ function App() {
     if (mailAddonInstalled) chips.push([Mail, t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })]);
     if (limitsOn && item.cpu_percent) chips.push([Cpu, `CPU ${item.cpu_percent}%`]);
     if (limitsOn && item.memory_mb) chips.push([MemoryStick, `RAM ${formatMegabytes(item.memory_mb)}`]);
+    if (redisAddonInstalled) chips.push([Database, Number(item.redis_memory_mb) > 0 ? `Redis ${item.redis_memory_mb} MB` : t('No Redis')]);
     if (item.terminal_enabled) chips.push([TerminalIcon, t('Terminal')]);
     if (item.open_basedir) chips.push([Lock, 'open_basedir']);
     return <div className="plan-chips">{chips.map(([Icon, text]) => <span className="plan-chip" key={text}><Icon size={13}/>{text}</span>)}</div>;
@@ -12371,7 +12506,9 @@ function App() {
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
           {isAdmin && applicationAddonInstalled && <label><span>{t('Applications')}</span><input type="number" min="0" max="100" value={form.node_apps_limit ?? 0} onChange={set('node_apps_limit')} /></label>}
+          {redisAddonInstalled && <label><span>{t('Redis RAM (MB)')}</span><input type="number" min="0" max="4096" value={form.redis_memory_mb ?? 64} onChange={set('redis_memory_mb')} /></label>}
         </div>
+        {redisAddonInstalled && <p className="hint">{t('Redis RAM: 0 = not allowed.')}</p>}
         {canGrantTerminal && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
         {canGrantTerminal && <p className="hint">{t("A shell as the account's own Linux user: it sees its own home and its own processes only, with no root access. Administrators and resellers open it by logging in as the customer.")}</p>}
         <label className="check-line"><input type="checkbox" checked={!!form.open_basedir} onChange={e => setForm(prev => ({ ...prev, open_basedir: e.target.checked }))} /> {t("Fence PHP into each site's folder (open_basedir)")}</label>
@@ -12601,6 +12738,7 @@ function App() {
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
     if (page === 'git') return gitAddonInstalled ? renderGit() : renderAddonMissing('git');
+    if (page === 'redis') return redisAddonInstalled ? renderRedis() : renderAddonMissing('redis-accounts');
     // The WordPress Manager is a page of its own (pages/WordPress.jsx, OPanel's),
     // reading what it needs from App through PanelContext.
     if (page === 'wordpress') return wordpressAddonInstalled

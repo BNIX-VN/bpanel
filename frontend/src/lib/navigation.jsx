@@ -52,6 +52,7 @@ export const PAGE_TITLES = {
   services: msg('Services'),
   usage: msg('Resource usage'),
   git: 'Git',
+  redis: 'Redis',
   processes: msg('Process monitor'),
   'ram-usage': msg('RAM usage'),
   'disk-usage': msg('Disk usage'),

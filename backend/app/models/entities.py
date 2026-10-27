@@ -51,6 +51,10 @@ class UserPackage(Base):
     process_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     io_read_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     io_write_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # Redis per account addon (operator, 2026-10-27): how much memory each
+    # account's own Redis may hold; 0 = the package's accounts may not run one.
+    # Read through the package, not copied (redis_accounts.limit_mb).
+    redis_memory_mb: Mapped[int] = mapped_column(Integer, default=64, server_default=text("64"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     users: Mapped[List["User"]] = relationship(back_populates="package", foreign_keys="User.package_id")
@@ -117,6 +121,12 @@ class User(Base):
     group_process_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     group_io_read_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     group_io_write_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # Redis per account addon (operator, 2026-10-27). The memory is the
+    # account's own only without a package, as node_apps_limit is; with one,
+    # the package's counts. redis_enabled is the customer's switch, kept while
+    # the account is suspended so its Redis comes back with it.
+    redis_memory_mb: Mapped[int] = mapped_column(Integer, default=64, server_default=text("64"))
+    redis_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     # When this account's Linux/SFTP password was last set on its own.
     #
     # NULL is load-bearing: it means the Linux password has never been set

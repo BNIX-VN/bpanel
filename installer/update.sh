@@ -1707,6 +1707,16 @@ if [[ -f /etc/systemd/system/bpanel-limits.service && -f "$LIMITS_AGENT_SOURCE" 
     || echo "  (warning: could not update the resource limits agent; reinstall the addon on the Addons page)"
 fi
 
+# --- Redis per account: the template unit -------------------------------------
+# Only where the addon is installed. The helper rewrites the unit when this
+# release's differs and reloads systemd; running instances keep theirs until
+# they next restart, since a restart empties every account's cache.
+if [[ -f /etc/systemd/system/bpanel-redis@.service ]] && id -u bpanel >/dev/null 2>&1; then
+  log "Refreshing the Redis per account unit"
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper redis-unit-refresh >/dev/null \
+    || echo "  (warning: could not refresh the Redis per account unit; reinstall the addon on the Addons page)"
+fi
+
 # --- Malware scanner: retrofit LMD on servers that already run the scanner --
 # The scanner is opt-in; only touch a server whose admin turned it on. LMD adds
 # fast site-root scans, a daily incremental scan and named malware families on

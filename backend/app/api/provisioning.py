@@ -387,6 +387,10 @@ def change_package(external_id: str, payload: ProvisioningPackageChange, request
     account.last_action = "change_package"
     db.commit()
     php_isolation.sync_user(db, account.user)
+    # The new package's Redis size, or off when it allows none.
+    from app.services import redis_accounts
+
+    redis_accounts.reconcile_quietly(db, account.user)
     log_action(db, None, "provisioning_change_package", external_id, detail=str(package.id), request=request)
     return {"ok": True, "package_id": package.id}
 
