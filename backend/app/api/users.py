@@ -24,7 +24,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import demo_mode, git_repos, mail, mariadb, nginx, php_isolation, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, terminal, waf, wordpress
+from app.services import demo_mode, git_repos, mail, mariadb, nginx, php_isolation, redis_accounts, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, terminal, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -192,6 +192,11 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         # _apply_package_limits below replaces them when there is a package.
         terminal_enabled=bool(payload.terminal_enabled) and package is None and is_admin_role(current_user.role),
         node_apps_limit=payload.node_apps_limit if package is None and is_admin_role(current_user.role) else 0,
+        # Redis per account: the administrator's to set on a custom account; a
+        # reseller's custom customers get the default, never more than the
+        # reseller's own (a package brings its own either way).
+        redis_memory_mb=(payload.redis_memory_mb if is_admin_role(current_user.role)
+                         else min(redis_accounts.DEFAULT_MB, redis_accounts.limit_mb(current_user))),
         sftp_password_set_at=datetime.utcnow(),
         # Resource limits: the account's own from whoever creates it; a group
         # cap only on a reseller, and only from the administrator.
@@ -368,6 +373,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
             user.terminal_enabled = payload.terminal_enabled
         if payload.node_apps_limit is not None:
             user.node_apps_limit = payload.node_apps_limit
+        if payload.redis_memory_mb is not None:
+            user.redis_memory_mb = payload.redis_memory_mb
     for field in RESOURCE_LIMIT_FIELDS:
         if getattr(payload, field) is not None:
             setattr(user, field, getattr(payload, field))
@@ -398,6 +405,9 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
     log_action(db, current_user.id, "update_user", user.username, request=request)
     # Its limits, its reseller or its role may have moved its slice.
     resource_limits.sync_in_background()
+    # Its Redis follows: a new package or limit restarts it at the new size
+    # (off at 0), a suspension stops it, a new reseller moves its slice.
+    redis_accounts.reconcile_quietly(db, user)
     return _user_out(user, db)
 
 
@@ -612,6 +622,8 @@ def suspend_user(user_id: int, request: Request, db: Session = Depends(get_db), 
     teardown.set_owner_sftp_accounts_locked(db, user.id, True)
 
     db.commit()
+    # Its Redis stops; the switch is kept, so it comes back on unsuspend.
+    redis_accounts.reconcile_quietly(db, user)
     log_action(db, current_user.id, "suspend_user", user.username, request=request)
     return {"message": f"Suspended user {user.username}", "affected_websites": len(websites)}
 
@@ -637,6 +649,7 @@ def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db)
     teardown.set_owner_sftp_accounts_locked(db, user.id, False)
 
     db.commit()
+    redis_accounts.reconcile_quietly(db, user)
     log_action(db, current_user.id, "unsuspend_user", user.username, request=request)
     return {"message": f"Unsuspended user {user.username}", "affected_websites": len(websites)}
 

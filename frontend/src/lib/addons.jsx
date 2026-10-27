@@ -12,9 +12,14 @@ export const ADDON_META = {
   notifications: { page: 'notifications', label: msg('Notifications'), featureIcon: 'notifications' },
   limits: { page: 'usage', label: msg('Resource limits'), featureIcon: 'resource-usage' },
   git: { page: 'git', label: 'Git', featureIcon: 'git' },
+  'redis-accounts': { page: 'redis', label: msg('Redis per account'), featureIcon: 'cache' },
   wordpress: { page: 'wordpress', label: msg('WordPress Manager'), featureIcon: 'wordpress' },
   application: { page: 'applications', label: msg('Applications'), featureIcon: 'applications' },
   demo: { page: 'addons', label: msg('Demo mode'), featureIcon: 'account' },
+  // The migration addons (2026-10-27): each opens its Migration tab.
+  directadmin: { page: 'importDirectadmin', label: msg('DirectAdmin Import'), featureIcon: 'directadmin-import' },
+  cpanel: { page: 'importCpanel', label: msg('cPanel Import'), featureIcon: 'cpanel-import' },
+  fastpanel: { page: 'importFastpanel', label: msg('FastPanel Import'), featureIcon: 'migration' },
 };
 
 export const addonPage = (slug) => ADDON_META[slug]?.page || 'addons';

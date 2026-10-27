@@ -90,9 +90,18 @@ def check_pool(db: Session, reseller: User, *, pool: Optional[dict] = None,
 
 
 def check_package_grants(reseller: User, package: Optional[UserPackage]) -> None:
-    """A reseller cannot hand out a terminal it does not have itself."""
+    """A reseller cannot hand out a terminal it does not have itself, nor a
+    bigger Redis than its own (Redis per account addon, operator 2026-10-27:
+    nothing else bounds what a reseller's customers' Redis add up to)."""
     if package is not None and package.terminal_enabled and not reseller.terminal_enabled:
         raise ValueError("Your account has no terminal, so your packages cannot include one")
+    if package is not None:
+        from app.services import redis_accounts
+
+        if redis_accounts.installed():
+            own = redis_accounts.limit_mb(reseller)
+            if int(package.redis_memory_mb or 0) > own:
+                raise ValueError(f"Your account's Redis may use {own} MB, so your packages cannot give more")
 
 
 def usage(db: Session, reseller: User) -> dict:

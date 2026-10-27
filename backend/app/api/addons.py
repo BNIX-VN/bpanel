@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.services import addons, demo_mode, dns, fail2ban, mail, panel_settings, resource_limits, site_apps
+from app.services import addons, demo_mode, dns, fail2ban, mail, panel_settings, redis_accounts, resource_limits, site_apps
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -118,6 +118,13 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
             resource_limits.install()
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
+    if slug == addons.REDIS_ACCOUNTS:
+        # The template unit, and redis-server only where the box has none;
+        # the server's own Redis is left exactly as it is.
+        try:
+            redis_accounts.install()
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     if slug == addons.MALWARE:
         # The scanner's own switch: installs LMD and the ClamAV engine in the
         # background when they are missing, and returns at once.
@@ -175,7 +182,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
                                 "Open Email to make the first mailbox. The webmail is on port 2096 of the panel's address."
                                 if slug == addons.MAIL else (
                                     "This server is registering with the collector; its status is on the Firewall page."
-                                    if slug == addons.SHARED_BLOCKLIST else ""
+                                    if slug == addons.SHARED_BLOCKLIST else (
+                                        "Each package gives 64 MB unless you change it on the package. Customers turn their Redis on on the Redis page."
+                                        if slug == addons.REDIS_ACCOUNTS else ""
+                                    )
                                 )
                             )
                         )
@@ -247,6 +257,14 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
             stopped.append("bpanel-limits")
         except RuntimeError:
             failed.append("bpanel-limits")
+    if slug == addons.REDIS_ACCOUNTS:
+        # Every account's Redis stopped and gone, and every switch off: it is
+        # a cache, so there is nothing to keep but the limits.
+        try:
+            redis_accounts.uninstall(db)
+            stopped.append("Redis per account")
+        except RuntimeError:
+            failed.append("Redis per account")
     retired: list[str] = []
     if slug == addons.DEMO:
         # Before the flag goes: once it has, these are ordinary accounts, and
@@ -279,6 +297,8 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         if slug == addons.MALWARE
         else "Every limit is lifted. The limits set on accounts and packages are kept and apply again when you install the addon again."
         if slug == addons.LIMITS
+        else "Every account's Redis was stopped and turned off. The memory set on packages and accounts is kept."
+        if slug == addons.REDIS_ACCOUNTS
         else "The WordPress the panel found, their restore points and each website's Nginx cache setting are kept. The sites are not touched."
         if slug == addons.WORDPRESS
         else (f"{revoked} MCP token(s) were revoked. Assistants using them can no longer reach the panel."

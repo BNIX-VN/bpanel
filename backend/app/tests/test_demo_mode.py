@@ -85,6 +85,10 @@ REVIEWED_READS = {
     "/api/updates/services",
     "/api/users/me", "/api/users/storage-usage", "/api/users/pool", "/api/users/{user_id}/pool",
     "/api/resource-limits", "/api/resource-limits/{user_id}/history",
+    # Redis per account (2026-10-27): the account's own switch, limit, use and
+    # socket path, and for an administrator each account's switch and limit.
+    # Redis has no password here; the socket is the account's 0770.
+    "/api/redis", "/api/redis/accounts",
     "/api/waf/access-logs", "/api/waf/bots",
     "/api/waf/crs", "/api/waf/orphans", "/api/waf/rules", "/api/waf/status",
     "/api/waf/websites/{website_id}", "/api/websites", "/api/websites/{website_id}/aliases",

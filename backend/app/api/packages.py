@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_reseller_role
 from app.models.entities import User, UserPackage
 from app.schemas.schemas import RESOURCE_LIMIT_FIELDS, UserPackageCreate, UserPackageOut, UserPackageUpdate
-from app.services import php_isolation, reseller as reseller_pool, resource_limits, terminal
+from app.services import php_isolation, redis_accounts, reseller as reseller_pool, resource_limits, terminal
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/packages", tags=["packages"])
@@ -83,6 +83,8 @@ def create_package(
         sftp_accounts_limit=payload.sftp_accounts_limit,
         mail_accounts_limit=payload.mail_accounts_limit,
         node_app_memory_mb=payload.node_app_memory_mb,
+        # Redis per account addon: read through the package, not copied.
+        redis_memory_mb=payload.redis_memory_mb,
         # Resource limits addon (cpu_percent, memory_mb, process_limit,
         # io_read_mbps, io_write_mbps); copied to the accounts on the package.
         **{field: getattr(payload, field) for field in RESOURCE_LIMIT_FIELDS},
@@ -137,6 +139,9 @@ def update_package(
         package.mail_accounts_limit = payload.mail_accounts_limit
     if payload.node_app_memory_mb is not None:
         package.node_app_memory_mb = payload.node_app_memory_mb
+    redis_before = int(package.redis_memory_mb or 0)
+    if payload.redis_memory_mb is not None:
+        package.redis_memory_mb = payload.redis_memory_mb
     for field in RESOURCE_LIMIT_FIELDS:
         if getattr(payload, field) is not None:
             setattr(package, field, getattr(payload, field))
@@ -169,6 +174,10 @@ def update_package(
             terminal.end_sessions(user.id, "access-changed")
     if assigned:
         resource_limits.sync_in_background()
+    if int(package.redis_memory_mb or 0) != redis_before:
+        # Every Redis on the package restarts with the new size, or stops and
+        # turns off at 0 (operator, 2026-10-27).
+        redis_accounts.reconcile_in_background(user.id for user in assigned if user.redis_enabled)
     # Turning open_basedir on or off moves every site of the package's
     # accounts with it (operator, 2026-10-22).
     failed = php_isolation.sync_package(db, package) if bool(package.open_basedir) != basedir_before else []

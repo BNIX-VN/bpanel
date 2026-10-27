@@ -1010,6 +1010,9 @@ install_panel_runtime() {
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel /var/lib/bpanel/geoip
   # DirectAdmin import staging dirs
   install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/da
+  # cPanel and FastPanel archives waiting to be imported (the cPanel Import
+  # and FastPanel Import addons, operator 2026-10-27).
+  install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/cpanel /home/admin/bpanel_backups/fastpanel
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/da-import
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/import-stage
   # The admin's SFTP drop folder for large backups, which Restore > This server
@@ -1705,6 +1708,16 @@ if [[ -f /etc/systemd/system/bpanel-limits.service && -f "$LIMITS_AGENT_SOURCE" 
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper limits-agent-install \
     <"$LIMITS_AGENT_SOURCE" >/dev/null \
     || echo "  (warning: could not update the resource limits agent; reinstall the addon on the Addons page)"
+fi
+
+# --- Redis per account: the template unit -------------------------------------
+# Only where the addon is installed. The helper rewrites the unit when this
+# release's differs and reloads systemd; running instances keep theirs until
+# they next restart, since a restart empties every account's cache.
+if [[ -f /etc/systemd/system/bpanel-redis@.service ]] && id -u bpanel >/dev/null 2>&1; then
+  log "Refreshing the Redis per account unit"
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper redis-unit-refresh >/dev/null \
+    || echo "  (warning: could not refresh the Redis per account unit; reinstall the addon on the Addons page)"
 fi
 
 # --- Malware scanner: retrofit LMD on servers that already run the scanner --

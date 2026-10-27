@@ -40,6 +40,9 @@ def folders(monkeypatch, tmp_path):
         folder.mkdir(parents=True)
     monkeypatch.setattr(da_import, "DA_BACKUP_DIR", da)
     monkeypatch.setattr(restore_sources, "INBOX_DIR", inbox)
+    # DirectAdmin archives are the DirectAdmin Import addon's since 2026-10-27;
+    # test_migration_import.py has what happens with it off.
+    monkeypatch.setattr(restore_sources.addons, "is_installed", lambda slug: slug == "directadmin")
 
     def make(folder: Path, name: str, age: float = 3600, data: bytes = b"x" * 10) -> Path:
         path = folder / name

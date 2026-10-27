@@ -102,21 +102,60 @@ def ensure_backup_dir() -> None:
     Never raises: a caller that cannot create it should still be able to report
     an empty list rather than fail the whole request.
     """
-    if DA_BACKUP_DIR.is_dir() and os.access(DA_BACKUP_DIR, os.W_OK):
+    ensure_import_dir(DA_BACKUP_DIR, DA_BACKUP_DIR_IS_DEFAULT)
+
+
+def ensure_import_dir(folder: Path, is_default: bool) -> None:
+    """The same for any folder a migration addon's archives wait in: the
+    DirectAdmin one, and cPanel's and FastPanel's beside it (operator,
+    2026-10-27). The helper's da-backup-dir-ensure makes all three, so one
+    verb covers every addon. Never raises."""
+    if folder.is_dir() and os.access(folder, os.W_OK):
         return
-    if DA_BACKUP_DIR_IS_DEFAULT:
+    if is_default:
         try:
             shell.privileged(
                 "da-backup-dir-ensure",
                 check=False,
-                fallback=["bash", "-lc", f"install -d -m 0770 {DA_BACKUP_DIR}"],
+                fallback=["bash", "-lc", f"install -d -m 0770 {folder}"],
             )
         except Exception:  # pragma: no cover - helper failure
-            logger.warning("could not create %s through the helper", DA_BACKUP_DIR)
+            logger.warning("could not create %s through the helper", folder)
     try:
-        DA_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        folder.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        logger.warning("DA backup directory %s is unusable: %s", DA_BACKUP_DIR, exc)
+        logger.warning("import directory %s is unusable: %s", folder, exc)
+
+
+def was_used() -> bool:
+    """Signs that this server has imported DirectAdmin backups: an archive in
+    the DA folder, the detached import's record, or an import in the audit
+    log. Decides once whether the DirectAdmin Import addon starts installed
+    (main._adopt_addons_already_in_use)."""
+    try:
+        if any(_is_archive(path) for path in DA_BACKUP_DIR.iterdir()):
+            return True
+    except OSError:
+        pass
+    if IMPORT_RESULT_FILE.is_file():
+        return True
+    try:
+        from sqlalchemy import and_, or_
+
+        from app.models.entities import AuditLog
+
+        with SessionLocal() as db:
+            return db.query(AuditLog.id).filter(or_(
+                AuditLog.action.in_(("da_backup_upload", "da_backup_import_start", "da_bulk_import_start",
+                                     "directadmin_import")),
+                # A DirectAdmin archive uploaded on Backups > Restore, by the
+                # name DirectAdmin gives it.
+                and_(AuditLog.action == "upload_restore_backups",
+                     or_(AuditLog.detail.like("%user.%"), AuditLog.detail.like("%reseller.%"),
+                         AuditLog.detail.like("%.tar.zst%"))),
+            )).first() is not None
+    except Exception:  # noqa: BLE001 - no database to ask is no sign of an import
+        return False
 
 
 def start_detached_import(archive_path: str, force: bool) -> str:
@@ -1547,26 +1586,47 @@ def import_da_backup(archive_path: str, force: bool = False, replace_own: bool =
         raise FileNotFoundError(f"Backup not found: {path.name}")
     if not _is_archive(path):
         raise ValueError("Not a supported archive format")
+    return import_laid_out(path, _lay_out_directadmin, force=force, replace_own=replace_own)
 
+
+def _lay_out_directadmin(archive: Path, stage_dir: Path) -> tuple[Path, list[str]]:
+    """A DirectAdmin archive is already in the layout the importer reads:
+    unpack it, find its root, and unpack the per-domain archives inside."""
+    extracted = stage_dir / "extracted"
+    _log(f"Extracting {archive.name} ...")
+    _safe_extract_tar(archive, extracted)
+    root = _find_backup_root(extracted)
+    _extract_nested_domain_archives(root)
+    return root, []
+
+
+def import_laid_out(path: Path, lay_out, *, force: bool = False, replace_own: bool = False,
+                    source: str = "DirectAdmin") -> dict:
+    """The import itself, for any archive ``lay_out`` can turn into the
+    DirectAdmin layout (operator, 2026-10-27: the cPanel and FastPanel Import
+    addons, as OPanel's): one importer for users, websites, Nginx vhosts,
+    PHP-FPM pools, databases, aliases and certificates, with each panel's
+    archive layout in front of it.
+
+    ``lay_out(archive, stage_dir)`` unpacks ``archive`` somewhere under
+    ``stage_dir`` - where the helper copies site files from - and returns the
+    folder laid out the DirectAdmin way plus the warnings it has for the
+    summary (what that panel's archive carries and the import leaves out).
+    """
     stamp = _utc_stamp()
     stage_dir = STAGE_BASE / f"web-{stamp}-{secrets.token_hex(4)}"
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     summary: list[dict] = []
     credentials: list[str] = [
-        "# BPanel DirectAdmin import credentials",
+        f"# BPanel {source} import credentials",
         f"# Web import: {stamp}",
         f"# Archive: {path.name}",
         "# Keep this file private. It contains generated panel and database passwords.",
     ]
 
     try:
-        extracted = stage_dir / "extracted"
-        _log(f"Extracting {path.name} ...")
-        _safe_extract_tar(path, extracted)
-
-        root = _find_backup_root(extracted)
-        _extract_nested_domain_archives(root)
+        root, notes = lay_out(path, stage_dir)
         domains = _discover_domains(root)
         username, email = _discover_username(root, path.name)
         subdomain_sources = _relocate_da_subdomain_sources(root, domains)
@@ -1581,7 +1641,7 @@ def import_da_backup(archive_path: str, force: bool = False, replace_own: bool =
             "aliases": [],
             "ssl_enabled_domains": [],
             "ssl_imported_domains": [],
-            "warnings": [],
+            "warnings": list(notes),
         }
 
         if not all_domains:

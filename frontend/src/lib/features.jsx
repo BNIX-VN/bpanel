@@ -51,6 +51,9 @@ export const TILES = {
   cron: { label: msg('Cron'), icon: 'cron', page: 'cron' },
   usage: { label: msg('Resource usage'), icon: 'resource-usage', page: 'usage', roles: ['reseller', 'customer'], when: (c) => c.limitsOn },
   mcp: { label: msg('AI assistants (MCP)'), icon: 'mcp', page: 'mcp', addon: 'mcp' },
+  // The account's own Redis (Redis per account addon, operator 2026-10-27);
+  // an administrator's tile lists which accounts have it on.
+  redis: { label: 'Redis', icon: 'redis', page: 'redis', addon: 'redis-accounts' },
   services: { label: msg('Services'), icon: 'services', page: 'services', roles: ['admin'] },
   processes: { label: msg('Processes'), icon: 'processes', page: 'processes', roles: ['admin'] },
   ram: { label: 'RAM', icon: 'ram', page: 'ram-usage', roles: ['admin'] },
@@ -62,6 +65,11 @@ export const TILES = {
   updates: { label: msg('Updates'), icon: 'updates', page: 'updates', roles: ['admin'] },
   addons: { label: msg('Addons'), icon: 'addons', page: 'addons', roles: ['admin'] },
   'panel-settings': { label: msg('Panel settings'), icon: 'panel-settings', page: 'panel-settings', roles: ['admin'] },
+  // Migration: each import addon's page, a tab of the Migration hub
+  // (operator, 2026-10-27, as OPanel's Dashboard has them).
+  'da-import': { label: msg('DirectAdmin Import'), icon: 'directadmin-import', page: 'importDirectadmin', roles: ['admin'], addon: 'directadmin' },
+  'cpanel-import': { label: msg('cPanel Import'), icon: 'cpanel-import', page: 'importCpanel', roles: ['admin'], addon: 'cpanel' },
+  'fastpanel-import': { label: msg('FastPanel Import'), icon: 'migration', page: 'importFastpanel', roles: ['admin'], addon: 'fastpanel' },
 };
 
 // The Dashboard's sections, in order, for each role - SNPanel's own
@@ -76,9 +84,12 @@ const ADMIN = [
   ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
   ['security', msg('Security'), ['firewall', 'waf', 'access-logs', 'malware', 'account-security']],
   ['server', msg('Server'), ['php', 'services', 'processes', 'ram', 'disk', 'traffic', 'account-resources', 'updates']],
+  // Shown only once a migration addon is installed: a section with no tile
+  // is left out.
+  ['migration', msg('Migration'), ['da-import', 'cpanel-import', 'fastpanel-import']],
   // Addons with the rest of Advanced, not a section of one tile of their own
   // (operator, 2026-10-25).
-  ['advanced', msg('Advanced'), ['cron', 'mcp', 'api-tokens', 'notifications', 'panel-settings', 'addons']],
+  ['advanced', msg('Advanced'), ['cron', 'redis', 'mcp', 'api-tokens', 'notifications', 'panel-settings', 'addons']],
 ];
 const CUSTOMER = [
   ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'wordpress', 'applications']],
@@ -86,7 +97,7 @@ const CUSTOMER = [
   ['databases', msg('Databases'), ['databases', 'database-add', 'phpmyadmin']],
   ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
   ['security', msg('Security'), ['account-security', 'waf']],
-  ['advanced', msg('Advanced'), ['cron', 'mcp', 'usage']],
+  ['advanced', msg('Advanced'), ['cron', 'redis', 'mcp', 'usage']],
 ];
 const RESELLER = [
   ['accounts', msg('Customers'), ['users', 'user-add', 'packages']],

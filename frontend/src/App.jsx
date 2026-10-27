@@ -52,6 +52,7 @@ import './pages/Databases.css';
 import './pages/Sftp.css';
 import './pages/Cron.css';
 import './pages/Git.css';
+import './pages/Redis.css';
 import './pages/Users.css';
 import './pages/Files.css';
 import './pages/Backups.css';
@@ -143,6 +144,7 @@ const PAGE_ROUTES = {
   mail: '/email',
   usage: '/resource-usage',
   git: '/git',
+  redis: '/redis',
   wordpress: '/wordpress',
   terminal: '/terminal',
   // The server's own pages, behind the top bar's status chips (admin only).
@@ -151,7 +153,32 @@ const PAGE_ROUTES = {
   'account-resources': '/account-resources',
   'disk-usage': '/disk-usage',
   traffic: '/traffic',
+  // The migration addons' pages (the Migration hub, lib/navigation.jsx).
+  migration: '/migration',
+  importDirectadmin: '/migration/directadmin',
+  importCpanel: '/migration/cpanel',
+  importFastpanel: '/migration/fastpanel',
 };
+
+// Restore: what each kind of archive is called (services/restore_sources.py).
+const RESTORE_KIND_LABELS = { bpanel: 'BPanel', directadmin: 'DirectAdmin', cpanel: 'cPanel', fastpanel: 'FastPanel' };
+// One wizard, several pages (operator, 2026-10-27: "bpanel không có các addon
+// import cpanel, import DirectAdmin, import FastPanel" - as OPanel has them):
+// what each restores and where from. Backups > Restore is the panel's own
+// backups only; each migration addon's page its own panel's, straight off
+// the old server over SSH first.
+const RESTORE_MODES = {
+  bpanel: { kinds: ['bpanel'], sources: ['local', 'target', 'remote'] },
+  directadmin: { kinds: ['directadmin'], sources: ['ssh', 'local', 'remote'] },
+  cpanel: { kinds: ['cpanel'], sources: ['ssh', 'local', 'remote'] },
+  // FastPanel's own backups split files and databases: over SSH only, and
+  // This server for an account brought over that did not import, to try
+  // again or delete.
+  fastpanel: { kinds: ['fastpanel'], sources: ['ssh', 'local'] },
+};
+// The migration addons' pages, and the mode each runs the wizard in (the
+// addon's slug is the mode's name).
+const IMPORT_PAGES = { importDirectadmin: 'directadmin', importCpanel: 'cpanel', importFastpanel: 'fastpanel' };
 
 /* ---------------------------------------------------------------
    Theme (light / dark)
@@ -901,8 +928,14 @@ function App() {
   // 'remote'), another server's details when that is the source, what the
   // source holds, which users are ticked, and the job restoring them.
   const [restoreSource, setRestoreSource] = useState('local');
+  // Which page the wizard is on (RESTORE_MODES): Backups > Restore, or a
+  // migration addon's page.
+  const [restoreMode, setRestoreMode] = useState('bpanel');
   const [restoreTargetId, setRestoreTargetId] = useState('');
   const [restoreRemote, setRestoreRemote] = useState({ protocol: 'sftp', host: '', port: '', username: '', password: '', path: '/' });
+  // The old server of a migration, signed in to over SSH: held here for this
+  // import only, never saved anywhere.
+  const [restoreSsh, setRestoreSsh] = useState({ host: '', port: '22', username: 'root', password: '', use_key: false, private_key: '' });
   const [restoreListing, setRestoreListing] = useState(null);
   const [restoreChoice, setRestoreChoice] = useState({});
   const [restorePicks, setRestorePicks] = useState([]);
@@ -935,6 +968,12 @@ function App() {
   // Git repositories in the account's home (operator, 2026-10-09).
   const BLANK_GIT_FORM = { owner_id: '', name: '', mode: 'clone', path: '', remote_url: '', branch: 'main', auth_type: 'none', https_username: '', https_token: '', deploy_commands: [], php_version: '' };
   const [gitInfo, setGitInfo] = useState(null);
+  // The account's own Redis (Redis per account addon, operator 2026-10-27);
+  // for an administrator, every account's switch. redisGoing is where the
+  // switch is going while the server starts or stops it.
+  const [redisInfo, setRedisInfo] = useState(null);
+  const [redisAccounts, setRedisAccounts] = useState([]);
+  const [redisGoing, setRedisGoing] = useState(null);
   const [gitRepo, setGitRepo] = useState(null);
   const [showCreateGit, setShowCreateGit] = useState(false);
   const [gitForm, setGitForm] = useState(BLANK_GIT_FORM);
@@ -1212,6 +1251,16 @@ function App() {
   const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
   const mailAddonInstalled = !!addons.items.find(item => item.slug === 'mail')?.installed;
   const limitsOn = !!addons.items.find(item => item.slug === 'limits')?.installed;
+  // Redis per account (2026-10-27): its page, its tile and the package and
+  // account field only while installed.
+  const redisAddonInstalled = !!addons.items.find(item => item.slug === 'redis-accounts')?.installed;
+  // The migration addons (2026-10-27): each a tab of the Migration hub while
+  // installed. Keyed by mode, which is the addon's slug.
+  const importAddonsInstalled = {
+    directadmin: !!addons.items.find(item => item.slug === 'directadmin')?.installed,
+    cpanel: !!addons.items.find(item => item.slug === 'cpanel')?.installed,
+    fastpanel: !!addons.items.find(item => item.slug === 'fastpanel')?.installed,
+  };
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -2018,6 +2067,8 @@ function App() {
   // Resource limits addon: an account's own, and a reseller's caps on its group.
   const RL_FIELDS = ['cpu_percent', 'memory_mb', 'process_limit', 'io_read_mbps', 'io_write_mbps'];
   const limitValues = (form, prefix = '') => Object.fromEntries(RL_FIELDS.map(field => [prefix + field, Number(form[prefix + field]) || 0]));
+  // Redis per account: 64 MB until someone types another; 0 = not allowed.
+  const redisMbOf = (form) => (form.redis_memory_mb === undefined ? 64 : Number(form.redis_memory_mb) || 0);
 
   async function createUser() {
     const payload = {
@@ -2033,6 +2084,7 @@ function App() {
     if (isAdmin && !newUser.package_id) {
       payload.terminal_enabled = !!newUser.terminal_enabled;
       payload.node_apps_limit = Number(newUser.node_apps_limit) || 0;
+      if (redisAddonInstalled) payload.redis_memory_mb = redisMbOf(newUser);
     }
     if (isAdmin && newUser.role === 'end_user' && newUser.reseller_id) payload.reseller_id = Number(newUser.reseller_id);
     if (isAdmin && newUser.role === 'reseller') {
@@ -2096,6 +2148,7 @@ function App() {
       database_limit: user.database_limit ?? 0,
       terminal_enabled: !!user.terminal_enabled,
       node_apps_limit: user.node_apps_limit ?? 0,
+      redis_memory_mb: user.redis_memory_mb ?? 64,
       new_password: '',
       confirm_password: '',
     });
@@ -2138,6 +2191,7 @@ function App() {
     if (isAdmin && !editingUserForm.package_id) {
       payload.terminal_enabled = !!editingUserForm.terminal_enabled;
       payload.node_apps_limit = Number(editingUserForm.node_apps_limit) || 0;
+      if (redisAddonInstalled) payload.redis_memory_mb = redisMbOf(editingUserForm);
     }
     if (isAdmin) {
       if (editingUser.id !== currentUser?.id) payload.role = editingUserForm.role;
@@ -2202,7 +2256,7 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(newPackage.node_apps_limit) || 0 } : {}), open_basedir: !!newPackage.open_basedir, ...(limitsOn ? limitValues(newPackage) : {}) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(newPackage.node_apps_limit) || 0 } : {}), ...(redisAddonInstalled ? { redis_memory_mb: redisMbOf(newPackage) } : {}), open_basedir: !!newPackage.open_basedir, ...(limitsOn ? limitValues(newPackage) : {}) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
@@ -2223,6 +2277,7 @@ function App() {
       terminal_enabled: !!item.terminal_enabled,
       open_basedir: !!item.open_basedir,
       node_apps_limit: item.node_apps_limit ?? 0,
+      redis_memory_mb: item.redis_memory_mb ?? 64,
       ...limitValues(item),
     });
   }
@@ -2246,7 +2301,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(editingPackageForm.node_apps_limit) || 0 } : {}), open_basedir: !!editingPackageForm.open_basedir, ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), ...(isAdmin && applicationAddonInstalled ? { node_apps_limit: Number(editingPackageForm.node_apps_limit) || 0 } : {}), ...(redisAddonInstalled ? { redis_memory_mb: redisMbOf(editingPackageForm) } : {}), open_basedir: !!editingPackageForm.open_basedir, ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -3854,6 +3909,34 @@ function App() {
     if (data?.php_binary) setCronPhpInfo({ php_binary: data.php_binary, php_version: data.php_version || '' });
   }
 
+  // The account's own Redis; an administrator's page lists every account's.
+  async function loadRedis() {
+    const data = await request('/redis', { silent: true });
+    if (data) setRedisInfo(data);
+    if (isAdmin) {
+      const list = await request('/redis/accounts', { silent: true });
+      if (list?.items) setRedisAccounts(list.items);
+    }
+  }
+
+  async function setRedisEnabled(enabled) {
+    setRedisGoing(enabled);
+    const data = await request(enabled ? '/redis/enable' : '/redis/disable', { method: 'POST' },
+      enabled ? t('Starting Redis...') : t('Stopping Redis...'));
+    setRedisGoing(null);
+    if (!data) return;
+    setRedisInfo(data);
+    setNotice(enabled ? t('Redis is on.') : t('Redis is off, and what it held is gone.'));
+  }
+
+  async function flushRedis() {
+    if (!(await confirmDialog({ message: t("Empty this account's Redis? Every key in it is deleted; the websites that use it fill it again as visitors come."), danger: true }))) return;
+    const data = await request('/redis/flush', { method: 'POST' }, t('Emptying Redis...'));
+    if (!data) return;
+    setRedisInfo(data);
+    setNotice(t('Redis is empty.'));
+  }
+
   // Every extra login on the account, each with the website it reaches.
   async function loadGit() {
     const data = await request('/git/overview', { silent: true });
@@ -4475,10 +4558,22 @@ function App() {
     return !!data;
   }
 
-  // A source is 'local', 'target:<id>' (a Backup Destination) or 'remote'.
-  function restoreSourceBody(source) {
+  // A source is 'local', 'target:<id>' (a Backup Destination), 'remote', or
+  // on a migration page 'ssh' - the old server, which packs each account.
+  function restoreSourceBody(source, mode = restoreMode) {
     if (source === 'local') return { kind: 'local' };
     if (source.startsWith('target:')) return { kind: 'target', target_id: Number(source.slice(7)) };
+    if (source === 'ssh') {
+      const ssh = restoreSsh;
+      return {
+        kind: 'ssh', panel: mode, host: ssh.host, port: ssh.port ? Number(ssh.port) : null,
+        username: ssh.username.trim() || 'root', password: ssh.password,
+        private_key: ssh.use_key ? ssh.private_key : '',
+        // As for another server: the root login only ever goes back to the
+        // server whose key was seen when its accounts were listed.
+        host_key: restoreListing?.source === 'ssh' ? (restoreListing.host_key?.fingerprint || '') : '',
+      };
+    }
     return {
       kind: 'remote', ...restoreRemote, port: restoreRemote.port ? Number(restoreRemote.port) : null,
       // The key the server showed when it was listed: the download checks it
@@ -4487,17 +4582,41 @@ function App() {
     };
   }
 
-  async function listRestoreSource(source) {
+  // `mode` is the page asking (RESTORE_MODES): it says which kinds of archive
+  // it restores, so Backups > Restore never offers a cPanel backup.
+  async function listRestoreSource(source, mode = restoreMode) {
     setRestoreListing(null);
     setRestorePicks([]);
     setRestoreChoice({});
     const data = await request('/maintenance/restore/list', {
-      method: 'POST', body: JSON.stringify({ source: restoreSourceBody(source) }),
-    }, t('Looking for backups...'));
-    if (data) setRestoreListing({ ...data, source });
+      method: 'POST', body: JSON.stringify({ source: restoreSourceBody(source, mode), kinds: RESTORE_MODES[mode].kinds }),
+    }, source === 'ssh' ? t('Signing in to the old server...') : t('Looking for backups...'));
+    if (data) setRestoreListing({ ...data, source, mode });
   }
 
-  // Step 1 has three cards; the destination itself is picked in step 2.
+  // Into a page's mode: Backups > Restore, or a migration addon's page. A
+  // listing of another page's kinds is not this page's to show.
+  function enterRestoreMode(mode) {
+    const switched = restoreMode !== mode;
+    const source = switched || !RESTORE_MODES[mode].sources.includes(restoreSource) ? RESTORE_MODES[mode].sources[0] : restoreSource;
+    if (switched || source !== restoreSource) {
+      setRestoreMode(mode);
+      setRestoreSource(source);
+      setRestoreListing(null);
+      setRestorePicks([]);
+      setRestoreChoice({});
+      setRestoreFilter('');
+    }
+    if (source === 'local') listRestoreSource('local', mode);
+  }
+
+  function editRestoreSsh(changes) {
+    setRestoreSsh(prev => ({ ...prev, ...changes }));
+    // What was listed belongs to the login it was listed with.
+    if (restoreListing?.source === 'ssh') { setRestoreListing(null); setRestorePicks([]); }
+  }
+
+  // Step 1 has a card per source; the destination itself is picked in step 2.
   function chooseRestoreSource(kind) {
     setRestoreSource(kind);
     setRestoreListing(null);
@@ -4526,6 +4645,8 @@ function App() {
     const form = new FormData();
     chosen.forEach(file => form.append('files', file));
     form.append('source', JSON.stringify(restoreSourceBody(source)));
+    // Which kind this page restores: another kind is sent to its own page.
+    form.append('mode', restoreMode);
     const data = await request('/maintenance/restore/upload', { method: 'POST', body: form },
       t('Uploading {n} backup(s)...', { n: chosen.length }));
     if (data) {
@@ -4556,11 +4677,11 @@ function App() {
     return group.backups.find(item => item.key === restoreChoice[group.id]) || group.backups[0];
   }
 
-  // What was brought here to be restored - an upload, a DirectAdmin archive,
-  // one in the SFTP folder - can be deleted from the list; an account's own
-  // backups are managed under Backup user.
+  // What was brought here to be restored - an upload, a DirectAdmin, cPanel
+  // or FastPanel archive, one in the SFTP folder - can be deleted from the
+  // list; an account's own backups are managed under Backup user.
   function restoreDeletable(item) {
-    return item.where === 'inbox' || item.where === 'da' || /^(restore|uploads)\//.test(item.key);
+    return ['inbox', 'da', 'cpanel', 'fastpanel'].includes(item.where) || /^(restore|uploads)\//.test(item.key);
   }
 
   async function deleteRestoreArchive(item) {
@@ -4578,10 +4699,13 @@ function App() {
   }
 
   async function runRestore() {
-    const picked = restoreGroupsOf(restoreListing).filter(group => restorePicks.includes(group.id));
+    const picked = restoreGroupsOf(restoreListing).filter(group => restorePicks.includes(group.id) && !chosenRestoreBackup(group).error);
     if (picked.length === 0) return;
     const names = picked.map(group => group.username || chosenRestoreBackup(group).name).join(', ');
-    if (!(await confirmDialog(`${t('Restore {n} user(s)? An account that already exists on this server is overwritten with what is in its backup.', { n: picked.length })}\n\n${names}`))) return;
+    const question = restoreListing.source === 'ssh'
+      ? t('Bring {n} account(s) over from {panel}? The old server backs each one up, the panel downloads it and imports it; an account that already exists here is overwritten with its own websites.', { n: picked.length, panel: RESTORE_KIND_LABELS[restoreMode] })
+      : t('Restore {n} user(s)? An account that already exists on this server is overwritten with what is in its backup.', { n: picked.length });
+    if (!(await confirmDialog(`${question}\n\n${names}`))) return;
     const data = await request('/maintenance/restore/run', {
       method: 'POST',
       body: JSON.stringify({
@@ -4593,7 +4717,8 @@ function App() {
       }),
     }, t('Starting the restore...'));
     if (data?.job_id) {
-      setRestoreJob(data);
+      // The page it was started on shows it (each page its own restores).
+      setRestoreJob({ ...data, mode: restoreMode });
       setRestorePicks([]);
       setNotice(t('Restore started. It keeps running on the server; this page shows each user as it goes.'));
       loadBackupJobs();
@@ -5457,6 +5582,11 @@ function App() {
   }, [isAuthenticated, page, gitAddonInstalled]);
 
   useEffect(() => {
+    if (!isAuthenticated || page !== 'redis' || !redisAddonInstalled) return;
+    loadRedis();
+  }, [isAuthenticated, page, redisAddonInstalled]);
+
+  useEffect(() => {
     if (!currentSite) return;
     const modeMap = { manual: 'manual', cloudflare: 'wildcard', shared: 'shared' };
     setSslMode(modeMap[currentSite.ssl_mode] || 'letsencrypt');
@@ -5476,17 +5606,27 @@ function App() {
 
   // The catalogue reaches out to every S3 bucket, so it is fetched when the
   // tab is opened rather than on every visit to the Backups page.
-  useEffect(() => { if (page === 'backups' && backupTab === 'restore' && isAdmin && restoreSource === 'local') listRestoreSource('local'); }, [backupTab, page]);
+  // Each page's wizard in its own mode: the Restore tab the panel's own
+  // backups, a migration addon's page (once the addon is known to be
+  // installed) that panel's.
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (page === 'backups' && backupTab === 'restore') enterRestoreMode('bpanel');
+    const mode = IMPORT_PAGES[page];
+    if (mode && importAddonsInstalled[mode]) enterRestoreMode(mode);
+  }, [backupTab, page, isAdmin, importAddonsInstalled.directadmin, importAddonsInstalled.cpanel, importAddonsInstalled.fastpanel]);
   useEffect(() => {
     if (!restoreJob?.job_id || !['queued', 'running'].includes(restoreJob.status)) return undefined;
     const timer = setInterval(async () => {
       const data = await request(`/maintenance/backup-jobs/${restoreJob.job_id}`, { silent: true });
       if (!data?.job_id) return;
-      setRestoreJob(data);
+      setRestoreJob(prev => ({ ...data, mode: prev?.mode }));
       if (!['queued', 'running'].includes(data.status)) {
         loadBackupJobs();
         loadUsers();
-        if (restoreListing && restoreListing.source !== 'remote') listRestoreSource(restoreListing.source);
+        // Not another server's, nor an old one's over SSH: listing those
+        // again signs in again, which nobody asked for.
+        if (restoreListing && !['remote', 'ssh'].includes(restoreListing.source)) listRestoreSource(restoreListing.source, restoreListing.mode);
       }
     }, 2000);
     return () => clearInterval(timer);
@@ -5700,13 +5840,17 @@ function App() {
     isAdmin, isReseller, canOpenTerminal, appsFeatureEnabled,
     mailAddonInstalled, dnsAddonInstalled, gitAddonInstalled, mcpAddonInstalled,
     notificationsAddonInstalled, malwareAddonInstalled, limitsOn, wordpressAddonInstalled,
+    // The Migration hub's tabs: one per migration addon installed.
+    directadminImport: importAddonsInstalled.directadmin, cpanelImport: importAddonsInstalled.cpanel,
+    fastpanelImport: importAddonsInstalled.fastpanel,
   };
   navCtxRef.current = navCtx;
   // A hub's own address typed or bookmarked (/server, /settings): its first
-  // tab, once the account is known.
+  // tab, once the account is known - and, for Migration, whose tabs are its
+  // addons, once those are.
   useEffect(() => {
-    if (currentUser && isHubKey(page)) navigateToPage(page, { replace: true });
-  }, [page, currentUser, navigateToPage]);
+    if (currentUser && isHubKey(page) && (page !== 'migration' || addons.loaded)) navigateToPage(page, { replace: true });
+  }, [page, currentUser, navigateToPage, addons.loaded]);
   const sideItems = sidebarItems(navCtx);
   const sidebarPage = sidebarKeyOf(page, navCtx, sideItems);
   const activeHub = hubOf(page, navCtx);
@@ -9181,6 +9325,88 @@ function App() {
   // Git repositories, laid out as SNPanel lays out its lists: the page's
   // header with Refresh and "New repository", one table row a repository
   // (opening it), and the new one made in a side sheet.
+  // An account's own Redis (Redis per account addon, operator 2026-10-27):
+  // the switch, its state, the socket to copy, the memory it may hold and
+  // holds, an Empty button, and how WordPress, PHP and Laravel reach it. An
+  // administrator has no Redis of their own: the page lists the accounts and
+  // says how to turn one on for a customer (log in as the customer).
+  function redisSnippets(socket) {
+    return [
+      [t('WordPress (Redis Object Cache plugin): in wp-config.php'), `define('WP_REDIS_SCHEME', 'unix');\ndefine('WP_REDIS_PATH', '${socket}');`],
+      [t('PHP (phpredis)'), `$redis = new Redis();\n$redis->connect('${socket}');`],
+      // Stock Laravel reads REDIS_HOST and REDIS_PORT only; phpredis takes a
+      // host that starts with / as a socket.
+      [t('Laravel: in .env'), `REDIS_CLIENT=phpredis\nREDIS_HOST=${socket}\nREDIS_PORT=0`],
+    ];
+  }
+
+  function renderRedis() {
+    const info = redisInfo;
+    const header = <PageHeader subtitle={t('A Redis of your own, for object caching in WordPress, Laravel and other PHP apps. It runs as your account, is reached only through its socket, and keeps nothing on disk: a restart empties it.')}
+      onRefresh={loadRedis} refreshDisabled={!!loading}/>;
+    if (!info) return <>{header}<section className="section"><p className="hint">{t('Loading…')}</p></section></>;
+    if (isAdmin) return <>
+      {header}
+      <section className="section">
+        <p className="hint">{t('Each account turns its own Redis on and off on this page; for a customer, log in as the customer. The memory is set on the package, or on an account without one.')}</p>
+        {redisAccounts.length === 0
+          ? <p className="hint">{t('No hosting accounts yet.')}</p>
+          : <div className="dbt redis-table" role="table" aria-label={t('Redis of each account')}>
+            <div className="dbt-row dbt-head" role="row">
+              <span role="columnheader">{t('Account')}</span>
+              <span role="columnheader">{t('Package')}</span>
+              <span role="columnheader">{t('Memory')}</span>
+              <span role="columnheader">{t('State')}</span>
+            </div>
+            {redisAccounts.map(item => <div className="dbt-row" role="row" key={item.id}>
+              <span role="cell" className="dbt-name"><Database size={15} aria-hidden="true"/><strong>{item.username}</strong></span>
+              <span role="cell" data-label={t('Package')}>{item.package_name || t('Custom')}</span>
+              <span role="cell" data-label={t('Memory')}>{item.limit_mb > 0 ? `${item.limit_mb} MB` : t('Not allowed')}</span>
+              <span role="cell" data-label={t('State')}><span className={item.enabled ? 'badge ok' : 'badge'}>{item.enabled ? t('On') : t('Off')}</span></span>
+            </div>)}
+          </div>}
+      </section>
+    </>;
+    if (!info.allowed) return <>{header}<section className="section">
+      <EmptyState icon={Database} message={t('Redis is not part of your package. Ask your provider to add it.')}/>
+    </section></>;
+    const going = redisGoing;
+    const shown = going ?? info.enabled;
+    // Turning it off is never refused; turning it on is, for a suspended account.
+    const blocked = !!info.problem && !info.enabled;
+    const socket = info.socket || '';
+    return <>
+      {header}
+      <section className="section">
+        {info.problem && <div className="info-box"><AlertCircle size={14}/> {t(info.detail || '')}</div>}
+        <div className="redis-status-row">
+          <Switch checked={shown} pending={going !== null} disabled={going !== null || blocked} onChange={setRedisEnabled} label="Redis">
+            <span>{shown ? t('On') : t('Off')}</span>
+          </Switch>
+          <span className={info.running ? 'badge ok' : info.enabled ? 'badge warn' : 'badge'}>
+            {info.running ? t('Running') : info.enabled ? t('Not running') : t('Stopped')}</span>
+          <button type="button" className="secondary-light" disabled={!!loading || !info.running} onClick={flushRedis}>
+            <Trash2 size={14} aria-hidden="true"/> {t('Empty Redis')}</button>
+        </div>
+        <dl className="redis-facts">
+          <div><dt>{t('Memory limit')}</dt><dd>{info.limit_mb} MB</dd></div>
+          <div><dt>{t('In use')}</dt><dd>{info.running ? formatBytes(info.used_bytes) : '—'}</dd></div>
+        </dl>
+        {renderCopyBlock(t('Socket'), socket, { copiedMessage: t('Socket path copied.') })}
+        <p className="hint">{t('When it is full, Redis forgets the keys used least recently, so a full cache keeps working.')}</p>
+      </section>
+      <section className="section">
+        <h2>{t('Use it')}</h2>
+        <p className="hint">{t('Point the app at the socket, with no host, port or password. Your websites run as your account, so they can reach it; no other account can.')}</p>
+        <div className="redis-snippets">
+          {redisSnippets(socket).map(([title, text]) => <React.Fragment key={title}>
+            {renderCopyBlock(title, text, { multiline: true })}
+          </React.Fragment>)}
+        </div>
+      </section>
+    </>;
+  }
+
   function renderGit() {
     if (gitRepo) return renderGitRepo();
     const info = gitInfo || {};
@@ -9847,28 +10073,55 @@ function App() {
     const groups = needle
       ? allGroups.filter(group => `${group.username} ${group.backups.map(item => item.name).join(' ')}`.toLowerCase().includes(needle))
       : allGroups;
-    const pickedGroups = allGroups.filter(group => restorePicks.includes(group.id));
-    const allPicked = groups.length > 0 && groups.every(group => restorePicks.includes(group.id));
-    const somePicked = groups.some(group => restorePicks.includes(group.id));
-    const job = restoreJob;
-    const jobActive = !!job && ['queued', 'running'].includes(job.status);
+    // An archive whose addon is off is listed but not picked.
+    const selectable = groups.filter(group => !chosenRestoreBackup(group).error);
+    const pickedGroups = allGroups.filter(group => restorePicks.includes(group.id) && !chosenRestoreBackup(group).error);
+    const allPicked = selectable.length > 0 && selectable.every(group => restorePicks.includes(group.id));
+    const somePicked = selectable.some(group => restorePicks.includes(group.id));
+    // A restore started on another page is that page's to show; while it
+    // runs, no page starts another.
+    const job = restoreJob && (restoreJob.mode || 'bpanel') === restoreMode ? restoreJob : null;
+    const jobActive = !!restoreJob && ['queued', 'running'].includes(restoreJob.status);
     const remote = restoreRemote;
+    const ssh = restoreSsh;
     const targets = sftpTargets.filter(target => target.is_active !== false);
-    const sources = [
-      ['local', HardDrive, 'This server', 'Backups the panel made, and archives uploaded for restore.'],
-      ['target', Network, 'Backup Destination', 'An S3 or SFTP destination saved under Backup Destination.'],
-      ['remote', Server, 'Another server', 'Pull backups from another server over SFTP, FTP or FTPS.'],
-    ];
-    const restoreStepTwo = { local: 'Backups on this server', target: 'Destination', remote: 'Connection' }[restoreSource];
+    // The panel a migration page imports from; '' on Backups > Restore.
+    const foreign = restoreMode !== 'bpanel' ? RESTORE_KIND_LABELS[restoreMode] : '';
+    const panelOf = { panel: foreign };
+    // FastPanel has no backup to upload: the panel packs the account itself.
+    const packedHere = restoreMode === 'fastpanel';
+    const sourceCards = {
+      local: [HardDrive, 'This server', packedHere ? 'Accounts brought over earlier that were not imported, to try again or delete.'
+        : foreign ? '{panel} backups uploaded here, or put in the SFTP folder.' : 'Backups the panel made, and archives uploaded for restore.'],
+      target: [Network, 'Backup Destination', 'An S3 or SFTP destination saved under Backup Destination.'],
+      remote: [Server, 'Another server', foreign ? 'Pull {panel} backups from a server over SFTP, FTP or FTPS.' : 'Pull backups from another server over SFTP, FTP or FTPS.'],
+      ssh: [KeyRound, '{panel} server', {
+        directadmin: 'Sign in as root over SSH: the server backs up each account you pick and the panel brings it over.',
+        cpanel: 'Sign in as root over SSH: pkgacct packs each account you pick and the panel brings it over.',
+        fastpanel: 'Sign in as root over SSH: the panel packs each account you pick - its sites, databases and certificates - and brings it over.',
+      }[restoreMode] || ''],
+    };
+    const sources = RESTORE_MODES[restoreMode].sources.map(id => [id, ...sourceCards[id]]);
+    const restoreStepTwo = restoreSource === 'ssh' ? 'Connection' : { local: 'Backups on this server', target: 'Destination', remote: 'Connection' }[restoreSource];
     const remoteReady = !!remote.host.trim() && !!remote.username.trim() && !!remote.password;
-    const canUse = !loading && !jobActive && (restoreSource !== 'target' || !!restoreTargetId) && (restoreSource !== 'remote' || remoteReady);
-    const restoreUpload = <label className={`upload-button secondary${canUse ? '' : ' disabled'}`} aria-disabled={!canUse}>
+    const sshReady = !!ssh.host.trim() && (ssh.use_key ? !!ssh.private_key.trim() : !!ssh.password);
+    const canUse = !loading && !jobActive && (restoreSource !== 'target' || !!restoreTargetId) && (restoreSource !== 'remote' || remoteReady)
+      && (restoreSource !== 'ssh' || sshReady);
+    // What each page takes: DirectAdmin writes any tar, cPanel .tar.gz or
+    // .tar, the panel itself .tar.gz.
+    const uploadTypes = { directadmin: '.tar.gz,.tgz,.tar.zst,.tzst,.tar.bz2,.tbz2,.tar.xz,.txz,.tar', cpanel: '.tar.gz,.tgz,.tar' }[restoreMode] || '.tar.gz';
+    const restoreUpload = packedHere ? null : <label className={`upload-button secondary${canUse ? '' : ' disabled'}`} aria-disabled={!canUse}>
       <Upload size={14}/> {t('Upload backups')}
-      <input type="file" multiple accept=".tar.gz,.tgz,.tar.zst,.tzst,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" disabled={!canUse}
+      <input type="file" multiple accept={uploadTypes} disabled={!canUse}
         onChange={e => { uploadRestoreBackups(e.target.files); e.target.value = ''; }} />
     </label>;
     const restoreRefresh = <button className="secondary" disabled={!canUse} onClick={() => listRestoreSource(currentRestoreSource())}><RefreshCw size={14}/> {t('Refresh')}</button>;
-    const rowStatus = { queued: ['Waiting', 'badge'], fetching: ['Downloading', 'badge warn'], restoring: ['Restoring', 'badge warn'], done: ['Restored', 'badge ok'], failed: ['Failed', 'badge bad'] };
+    const rowStatus = { queued: ['Waiting', 'badge'], packing: ['Packing on the old server', 'badge warn'], fetching: ['Downloading', 'badge warn'], restoring: ['Restoring', 'badge warn'], done: ['Restored', 'badge ok'], failed: ['Failed', 'badge bad'] };
+    // What the old server says of an account, in the panel's words.
+    const accountNotes = { suspended: t('Suspended'), admin: t('Administrator'), reseller: t('Reseller') };
+    const noteOf = note => (note || '').split(', ').filter(Boolean)
+      .map(part => accountNotes[part] || (/^\d+ site\(s\)$/.test(part) ? t('{n} site(s)', { n: parseInt(part, 10) }) : part)).join(', ');
+    const kindBadge = kind => kind && kind !== 'bpanel' && <span className="badge restore-kind">{RESTORE_KIND_LABELS[kind] || kind}</span>;
     const restoredCount = (job?.results || []).filter(row => row.status === 'done').length;
 
     return <div className="backup-tab-panel restore-wizard">
@@ -9889,7 +10142,7 @@ function App() {
             onClick={() => chooseRestoreSource(id)}
           >
             <span className="settings-tile-icon"><Icon size={18}/></span>
-            <span className="settings-tile-text"><strong>{t(label)}</strong><small>{t(hint)}</small></span>
+            <span className="settings-tile-text"><strong>{t(label, panelOf)}</strong><small>{t(hint, panelOf)}</small></span>
           </button>)}
         </div>
       </section>
@@ -9898,12 +10151,16 @@ function App() {
         <h4><span className="restore-step-no">2</span>{t(restoreStepTwo)}</h4>
         {restoreSource === 'local' && <>
           <p className="hint">
-            {t('Scheduled and manual backups kept on this server, uploaded ones, and DirectAdmin backups.')}{restoreListing?.location && <> <code>{restoreListing.location}</code></>}
+            {packedHere
+              ? t('Accounts brought over earlier that were not imported, to try again or delete.')
+              : foreign
+                ? t('{panel} backups uploaded here or put in the SFTP folder, and any brought over earlier that were not imported.', panelOf)
+                : t('Scheduled and manual backups kept on this server, and uploaded ones.')}{restoreListing?.location && !foreign && <> <code>{restoreListing.location}</code></>}
           </p>
-          <p className="hint restore-sftp-hint">
+          {!packedHere && <p className="hint restore-sftp-hint">
             {t('Large backups go up over SFTP: sign in as admin on port 22, with the SFTP password set under SFTP accounts.')}<br/>
-            {t('Put them in {folder} (/backups in the SFTP client), panel and DirectAdmin backups alike, then press Refresh once the upload has finished.', { folder: '/home/admin/backups' })}
-          </p>
+            {t('Put them in {folder} (/backups in the SFTP client), then press Refresh once the upload has finished.', { folder: '/home/admin/backups' })}
+          </p>}
           <div className="actions restore-local-actions">{restoreUpload}{restoreRefresh}</div>
         </>}
         {restoreSource === 'target' && <>
@@ -9938,6 +10195,26 @@ function App() {
             <span className="hint">{t('Used for this restore only; nothing here is saved.')}</span>
           </div>
         </form>}
+        {restoreSource === 'ssh' && <form className="restore-remote" onSubmit={e => { e.preventDefault(); if (canUse) listRestoreSource('ssh'); }} autoComplete="off">
+          <p className="hint restore-remote-wide">{restoreMode === 'fastpanel'
+            ? t('The panel signs in to the FastPanel server as root and packs each account you pick: its sites, the databases they use and their certificates. It is packed in a private folder there, which is removed once it has been downloaded.')
+            : t('The panel signs in to the {panel} server as root and has it back up each account you pick, the way {panel} itself does. The backup is made in a private folder there, which is removed once it has been downloaded.', panelOf)}</p>
+          <label className="field"><span className="field-label">{t('Host')}</span><input value={ssh.host} placeholder="203.0.113.10" spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ host: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('SSH port')}</span><input value={ssh.port} inputMode="numeric" placeholder="22" disabled={jobActive} onChange={e => editRestoreSsh({ port: e.target.value.replace(/[^0-9]/g, '') })} /></label>
+          <label className="field"><span className="field-label">{t('Username')}</span><input value={ssh.username} placeholder="root" spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ username: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{ssh.use_key ? t('Key passphrase') : t('Password')}</span><input type="password" value={ssh.password} autoComplete="new-password" disabled={jobActive} onChange={e => editRestoreSsh({ password: e.target.value })} /></label>
+          <label className="schedule-toggle restore-remote-wide">
+            <input type="checkbox" checked={ssh.use_key} disabled={jobActive} onChange={e => editRestoreSsh({ use_key: e.target.checked })} />
+            <span>{t('Sign in with a private key')}</span>
+          </label>
+          {ssh.use_key && <label className="field restore-remote-wide"><span className="field-label">{t('Private key')}</span>
+            <textarea rows={4} value={ssh.private_key} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ private_key: e.target.value })} />
+          </label>}
+          <div className="actions restore-remote-wide">
+            <button type="submit" disabled={!canUse}><Search size={14}/> {t('Connect and list accounts')}</button>
+            <span className="hint">{t('Used for this import only; nothing here is saved.')}</span>
+          </div>
+        </form>}
         {restoreListing?.host_key && <p className="hint">{t('Server key:')} <code>{restoreListing.host_key.type} {restoreListing.host_key.fingerprint}</code></p>}
       </section>
 
@@ -9954,7 +10231,7 @@ function App() {
                 disabled={!!loading || jobActive}
                 ref={box => { if (box) box.indeterminate = somePicked && !allPicked; }}
                 onChange={e => {
-                  const ids = groups.map(group => group.id);
+                  const ids = selectable.map(group => group.id);
                   setRestorePicks(prev => e.target.checked ? [...new Set([...prev, ...ids])] : prev.filter(id => !ids.includes(id)));
                 }}
               />
@@ -9968,12 +10245,18 @@ function App() {
               const chosen = chosenRestoreBackup(group);
               const picked = restorePicks.includes(group.id);
               const exists = !!group.username && (restoreListing.existing || []).includes(group.username);
-              const toggle = () => { if (!loading && !jobActive) toggleRestorePick(group.id); };
-              const detail = [formatBytes(chosen.size), formatIsoTime(chosen.modified),
+              // Its addon is off: listed, saying so, and not restored.
+              const blocked = !!chosen.error;
+              const toggle = () => { if (!loading && !jobActive && !blocked) toggleRestorePick(group.id); };
+              // From an old server over SSH: its main domain and what that
+              // server says of it (suspended, a reseller), not a file.
+              const detail = blocked ? t(chosen.error) : [chosen.where === 'ssh' ? chosen.domain : '', chosen.size ? formatBytes(chosen.size) : '',
+                formatIsoTime(chosen.modified), noteOf(chosen.note),
                 group.username ? '' : t('The user is read from the backup when it is restored')].filter(Boolean).join(' · ');
               return <div
                 key={group.id}
-                className={`restore-account${picked ? ' picked' : ''}`}
+                className={`restore-account${picked ? ' picked' : ''}${blocked ? ' disabled' : ''}`}
+                aria-disabled={blocked || undefined}
                 role="checkbox"
                 aria-checked={picked}
                 tabIndex={0}
@@ -9984,7 +10267,7 @@ function App() {
                 <span className="restore-account-main">
                   <strong>
                     {group.username || chosen.name}
-                    {chosen.kind === 'directadmin' && <span className="badge restore-kind">DirectAdmin</span>}
+                    {kindBadge(chosen.kind)}
                     {chosen.where === 'inbox' && <span className="badge restore-kind" title="/home/admin/backups">SFTP</span>}
                   </strong>
                   <small>{detail}</small>
@@ -9996,9 +10279,9 @@ function App() {
                   ? <select className="restore-version" value={chosen.key} disabled={!!loading || jobActive} aria-label={t('Backup to restore')}
                       onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}
                       onChange={e => setRestoreChoice(prev => ({ ...prev, [group.id]: e.target.value }))}>
-                      {group.backups.map(item => <option key={item.key} value={item.key}>{item.name}{item.kind === 'directadmin' ? ' · DirectAdmin' : ''}{item.modified ? ` · ${formatIsoTime(item.modified)}` : ''}</option>)}
+                      {group.backups.map(item => <option key={item.key} value={item.key}>{item.name}{item.kind !== 'bpanel' ? ` · ${RESTORE_KIND_LABELS[item.kind] || item.kind}` : ''}{item.modified ? ` · ${formatIsoTime(item.modified)}` : ''}</option>)}
                     </select>
-                  : group.username
+                  : group.username && chosen.where !== 'ssh'
                     ? <span className="restore-version-name" title={chosen.key}>{chosen.name}</span>
                     : <span />}
                 {restoreListing.source === 'local' && restoreDeletable(chosen)
@@ -10017,7 +10300,9 @@ function App() {
         <h4><span className="restore-step-no">4</span>{t('Restore')}</h4>
         <div className="actions">
           <button disabled={!!loading || jobActive || pickedGroups.length === 0} onClick={runRestore}>
-            <RotateCcw size={14}/> {pickedGroups.length ? t('Restore {n} account(s)', { n: pickedGroups.length }) : t('Restore')}
+            <RotateCcw size={14}/> {pickedGroups.length
+              ? (foreign ? t('Import {n} account(s)', { n: pickedGroups.length }) : t('Restore {n} account(s)', { n: pickedGroups.length }))
+              : (foreign ? t('Import') : t('Restore'))}
           </button>
           {!pickedGroups.length && !jobActive && <span className="hint">{t('Pick at least one account above.')}</span>}
         </div>
@@ -10040,8 +10325,8 @@ function App() {
             return <div className="backup-item" key={`${row.name}-${index}`}>
               <span>
                 {row.username || row.name}
-                {row.kind === 'directadmin' && <span className="badge restore-kind">DirectAdmin</span>}
-                {(row.status === 'failed' || row.kind === 'directadmin') && row.detail && <small>{row.detail}</small>}
+                {kindBadge(row.kind)}
+                {(row.status === 'failed' || row.kind !== 'bpanel') && row.detail && <small>{t(row.detail)}</small>}
                 {(row.credentials || []).length > 0 && <details className="da-creds-details">
                   <summary>{t('Generated passwords - copy them now, they are not shown again after a restart')}</summary>
                   <pre className="da-credentials">{row.credentials.join('\n')}</pre>
@@ -10053,6 +10338,28 @@ function App() {
         </div>}
       </section>
     </div>;
+  }
+
+  // A migration addon's page, a tab of Migration (operator, 2026-10-27: "bpanel
+  // không có các addon import cpanel, import DirectAdmin, import FastPanel" -
+  // OPanel's pages/Import.jsx): the panel signs in to the old server as root
+  // and brings the accounts picked over, or restores that panel's backups put
+  // here. The Restore wizard, on this addon's kind of archive only.
+  function renderImportPage(panel) {
+    const subtitles = {
+      directadmin: 'Accounts from a DirectAdmin server: straight off it over SSH, or from its user backups.',
+      cpanel: 'Accounts from a cPanel server: straight off it over SSH (pkgacct), or from its cpmove backups.',
+      fastpanel: 'Accounts from a FastPanel server, straight off it over SSH: FastPanel keeps files and databases in separate backups, so the panel packs each account itself.',
+    };
+    if (!isAdmin) return renderAdminOnly();
+    if (!importAddonsInstalled[panel]) return renderAddonMissing(panel);
+    const refresh = restoreSource === 'local' ? () => listRestoreSource('local') : undefined;
+    return <>
+      <PageHeader subtitle={t(subtitles[panel])} onRefresh={refresh} refreshDisabled={!!loading}/>
+      <section className="section backups-page import-page">
+        {restoreMode === panel && renderRestoreWizard()}
+      </section>
+    </>;
   }
 
   // Backups, as SNPanel's (pages/Backups.jsx there): one Refresh in the
@@ -12066,7 +12373,9 @@ function App() {
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" disabled={packaged} value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" disabled={packaged} value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
           {applicationAddonInstalled && <label><span>{t('Applications')}</span><input type="number" min="0" max="100" disabled={packaged || !isAdmin} value={packaged ? (packages.find(item => String(item.id) === String(form.package_id))?.node_apps_limit ?? 0) : (form.node_apps_limit ?? 0)} onChange={set('node_apps_limit')} /></label>}
+          {redisAddonInstalled && <label><span>{t('Redis RAM (MB)')}</span><input type="number" min="0" max="4096" disabled={packaged || !isAdmin} value={packaged ? (packages.find(item => String(item.id) === String(form.package_id))?.redis_memory_mb ?? 64) : (form.redis_memory_mb ?? 64)} onChange={set('redis_memory_mb')} /></label>}
         </div>
+        {redisAddonInstalled && isAdmin && !packaged && <p className="hint">{t('Redis RAM: 0 = not allowed.')}</p>}
         {/* A custom account's own terminal (a package brings its own). */}
         {isAdmin && !packaged && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
       </fieldset>}
@@ -12355,6 +12664,7 @@ function App() {
     if (mailAddonInstalled) chips.push([Mail, t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })]);
     if (limitsOn && item.cpu_percent) chips.push([Cpu, `CPU ${item.cpu_percent}%`]);
     if (limitsOn && item.memory_mb) chips.push([MemoryStick, `RAM ${formatMegabytes(item.memory_mb)}`]);
+    if (redisAddonInstalled) chips.push([Database, Number(item.redis_memory_mb) > 0 ? `Redis ${item.redis_memory_mb} MB` : t('No Redis')]);
     if (item.terminal_enabled) chips.push([TerminalIcon, t('Terminal')]);
     if (item.open_basedir) chips.push([Lock, 'open_basedir']);
     return <div className="plan-chips">{chips.map(([Icon, text]) => <span className="plan-chip" key={text}><Icon size={13}/>{text}</span>)}</div>;
@@ -12373,7 +12683,9 @@ function App() {
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
           {isAdmin && applicationAddonInstalled && <label><span>{t('Applications')}</span><input type="number" min="0" max="100" value={form.node_apps_limit ?? 0} onChange={set('node_apps_limit')} /></label>}
+          {redisAddonInstalled && <label><span>{t('Redis RAM (MB)')}</span><input type="number" min="0" max="4096" value={form.redis_memory_mb ?? 64} onChange={set('redis_memory_mb')} /></label>}
         </div>
+        {redisAddonInstalled && <p className="hint">{t('Redis RAM: 0 = not allowed.')}</p>}
         {canGrantTerminal && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
         {canGrantTerminal && <p className="hint">{t("A shell as the account's own Linux user: it sees its own home and its own processes only, with no root access. Administrators and resellers open it by logging in as the customer.")}</p>}
         <label className="check-line"><input type="checkbox" checked={!!form.open_basedir} onChange={e => setForm(prev => ({ ...prev, open_basedir: e.target.checked }))} /> {t("Fence PHP into each site's folder (open_basedir)")}</label>
@@ -12603,6 +12915,9 @@ function App() {
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
     if (page === 'git') return gitAddonInstalled ? renderGit() : renderAddonMissing('git');
+    if (page === 'redis') return redisAddonInstalled ? renderRedis() : renderAddonMissing('redis-accounts');
+    // The migration addons' pages (2026-10-27), each a tab of Migration.
+    if (IMPORT_PAGES[page]) return renderImportPage(IMPORT_PAGES[page]);
     // The WordPress Manager is a page of its own (pages/WordPress.jsx, OPanel's),
     // reading what it needs from App through PanelContext.
     if (page === 'wordpress') return wordpressAddonInstalled
