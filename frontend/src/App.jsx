@@ -2373,7 +2373,8 @@ function App() {
       if (retryData?.access_token) {
         setNotice(`Logged in as ${user.username}.`);
         await loadCurrentUser();
-        navigateToPage('websites');
+        // The account's Dashboard first, as its owner sees it (operator, 2026-10-27).
+        navigateToPage('dashboard');
         await refreshAll();
       }
       return;
@@ -2381,7 +2382,8 @@ function App() {
     if (data?.access_token) {
       setNotice(`Logged in as ${user.username}.`);
       await loadCurrentUser();
-      navigateToPage('websites');
+      // The account's Dashboard first, as its owner sees it (operator, 2026-10-27).
+      navigateToPage('dashboard');
       await refreshAll();
     }
   }
