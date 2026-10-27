@@ -100,8 +100,9 @@ def test_the_sidebar_holds_what_is_used_every_day():
     keys = re.findall(r"\['([a-z-]+)', ", sidebar)
     # The WordPress Manager is the one addon there, last, while installed
     # (operator, 2026-10-19), as SNPanel has it.
+    # Addons have their own entry (operator, 2026-10-27), not a Settings tab.
     assert keys == ["wordpress", "dashboard", "websites", "ssl", "databases", "cron", "files", "backups",
-                    "users", "server", "security-center", "config", "users"]
+                    "users", "server", "security-center", "addons", "config", "users"]
     assert "const wordpress = ctx.wordpressAddonInstalled ? [['wordpress'," in sidebar
     assert "      ...wordpress,\n    ];" in sidebar and "return [...common, ...wordpress];" in sidebar
     for addon in ("mail", "dns", "git", "mcp", "applications"):
@@ -109,8 +110,10 @@ def test_the_sidebar_holds_what_is_used_every_day():
     hubs = navigation.split("export const HUBS = [")[1].split("\n];")[0]
     tabs = re.findall(r"\{ page: '([a-z-]+)'", hubs)
     for page in ("processes", "ram-usage", "disk-usage", "traffic", "account-resources", "php", "services", "updates",
-                 "firewall", "waf", "access-logs", "malware", "panel-settings", "addons", "notifications"):
+                 "firewall", "waf", "access-logs", "malware", "panel-settings", "notifications"):
         assert page in tabs, page
+    # Account resources first in Server (operator, 2026-10-27).
+    assert tabs.index("account-resources") < tabs.index("processes")
     # The File manager opens in a tab of its own, SFTP and the terminal from
     # the Dashboard (operator, 2026-10-26): no Files hub.
     for page in ("files", "sftp", "terminal"):
@@ -162,7 +165,9 @@ def test_the_create_website_form_is_not_in_front_of_the_list():
     assert "const [createFormOpen, setCreateFormOpen] = useState(false);" in APP
     assert "const createOpen = !createPending && (createFormOpen || websites.length === 0);" in APP
     page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl(")[0]
-    assert "<Drawer open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}" in page
+    # Under the search, not a sheet at the right edge (operator, 2026-10-27).
+    assert "<InlinePanel open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}" in page
+    assert page.index('<div className="website-search">') < page.index("<InlinePanel open={createOpen}") < page.index('<div className="site-grid">')
     assert "action={{ label: t('New website'), icon: Plus, onClick: openCreate }}" in page
 
 

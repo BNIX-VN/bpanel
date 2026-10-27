@@ -48,7 +48,8 @@
 .global-bot-chip code{font-size:var(--text-sm)}
 .global-bot-chip button{padding:2px;min-width:0;width:20px;height:20px;display:grid;place-items:center;border-radius:999px;line-height:0;background:transparent;border:none;color:var(--text-muted)}
 .global-bot-chip button:hover:not(:disabled){background:var(--danger-bg,var(--surface-alt));color:var(--danger,#b91c1c)}
-.global-bots-paste summary{cursor:pointer;font-weight:600;color:var(--text-secondary);margin-bottom:8px}
-.global-bots-paste textarea{width:100%;min-width:0;margin-bottom:8px}
+.global-bots-paste{display:grid;gap:6px;margin-top:4px}
+.global-bots-paste textarea{width:100%;min-width:0}
+.global-bots-paste-add{justify-self:start;margin-bottom:8px}
 .global-bots-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 @media (max-width:760px){.global-bots-add{grid-template-columns:minmax(0,1fr)}}
