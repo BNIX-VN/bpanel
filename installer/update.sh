@@ -1367,32 +1367,22 @@ MYCNF
 
 ensure_panel_runtime_ownership() {
   id -u bpanel >/dev/null 2>&1 || return 0
-  # Everything under backend/ goes to bpanel EXCEPT .venv. This script runs as
-  # root and does `source .venv/bin/activate`, `.venv/bin/pip install` and
-  # `.venv/bin/python -m py_compile` with the cwd set to backend/ - so a
-  # bpanel-owned venv (or a bpanel-writable backend/ that `python -m` picks up
-  # via sys.path) is a file the confined account writes and root executes. That
-  # bypasses every argv check in bpanel-helper, which is the whole point of the
-  # sudo trampoline. Root keeps the venv; the service only reads and executes it.
+  # The panel runs entirely as the bpanel account: bpanel-api and every
+  # scheduler unit are User=bpanel and execute backend/.venv/bin/python, and
+  # this updater builds the venv, runs pip, py_compile, npm install and the
+  # vite build all through `sudo -u bpanel` (see install_backend /
+  # build_frontend). Root never executes anything under backend/ or frontend/,
+  # so the whole tree - the source, the venv and node_modules alike - is owned
+  # by bpanel. That is also what lets the bpanel-run pip/npm write them: a
+  # root-owned .venv would make `sudo -u bpanel pip install` fail the moment a
+  # dependency actually changed. (install.sh builds as root, before the bpanel
+  # account exists, and leaves .venv/node_modules root-owned; the chowns here
+  # hand them over on the first update.)
   if [[ -d "$APP_DIR/backend" ]]; then
-    find "$APP_DIR/backend" -path "$APP_DIR/backend/.venv" -prune \
-      -o -exec chown bpanel:bpanel {} + 2>/dev/null || true
-    # Reclaim it on an upgrade from a build that handed it to bpanel.
-    [[ -d "$APP_DIR/backend/.venv" ]] && chown -R root:root "$APP_DIR/backend/.venv" 2>/dev/null || true
+    chown -R bpanel:bpanel "$APP_DIR/backend" 2>/dev/null || true
   fi
-  # Same rule for the frontend, and this is the call site that matters: this
-  # function runs before build_frontend, so the `npm run build` below executes a
-  # tree this line has already handed over. package.json's "build" is
-  # `vite build`, which npm resolves to node_modules/.bin/vite, so root loads
-  # the whole vite/rolldown/lightningcss graph - two compiled .node addons
-  # included - out of node_modules. The rsync keeps node_modules across updates
-  # (protect filter below), so anything written there stays written. Only this
-  # script ever creates node_modules; bpanel just needs to read it.
   if [[ -d "$APP_DIR/frontend" ]]; then
-    find "$APP_DIR/frontend" -path "$APP_DIR/frontend/node_modules" -prune \
-      -o -exec chown bpanel:bpanel {} + 2>/dev/null || true
-    # Reclaim it on an upgrade from a build that handed it to bpanel.
-    [[ -d "$APP_DIR/frontend/node_modules" ]] && chown -R root:root "$APP_DIR/frontend/node_modules" 2>/dev/null || true
+    chown -R bpanel:bpanel "$APP_DIR/frontend" 2>/dev/null || true
   fi
   [[ -f "$APP_DIR/.my.cnf" ]] && chown -h bpanel:bpanel "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -f "$APP_DIR/.my.cnf" ]] && chmod 0600 "$APP_DIR/.my.cnf" 2>/dev/null || true
