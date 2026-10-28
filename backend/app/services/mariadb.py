@@ -111,7 +111,7 @@ def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, i
         f"{create_clause} {_quote_identifier(db_name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
         f"CREATE USER IF NOT EXISTS {_quote_sql_string(db_user)}@'localhost' IDENTIFIED BY {_quote_sql_string(db_password)};\n"
         f"ALTER USER {_quote_sql_string(db_user)}@'localhost' IDENTIFIED BY {_quote_sql_string(db_password)};\n"
-        f"GRANT ALL PRIVILEGES ON {_quote_identifier(db_name)}.* TO {_quote_sql_string(db_user)}@'localhost';\n"
+        f"GRANT ALL PRIVILEGES ON {_grant_target(db_name)} TO {_quote_sql_string(db_user)}@'localhost';\n"
         "FLUSH PRIVILEGES;\n"
     )
     _run_sql(sql)
@@ -156,7 +156,7 @@ def create_database_credentials(
         # Only a restore sets the password of an account that was already there.
         statements.append(f"ALTER USER {_quote_sql_string(db_user)}@'localhost' {auth};")
     statements += [
-        f"GRANT ALL PRIVILEGES ON {_quote_identifier(db_name)}.* TO {_quote_sql_string(db_user)}@'localhost';",
+        f"GRANT ALL PRIVILEGES ON {_grant_target(db_name)} TO {_quote_sql_string(db_user)}@'localhost';",
         "FLUSH PRIVILEGES;",
     ]
     _run_sql("\n".join(statements) + "\n")
@@ -251,9 +251,11 @@ def _write_sso_state(state: dict) -> None:
 
 
 def _grant_target(db_name: str) -> str:
-    """`db`.* with _ escaped: unescaped, a database-level grant reads _ as a
-    wildcard, so `shop_db` would also cover `shopXdb`."""
-    escaped = _validate_identifier(db_name).replace("_", "\\_")
+    """`db`.* with LIKE wildcards escaped: unescaped, a database-level grant
+    reads _ (and %) as wildcards, so `shop_db` would also cover `shopXdb`.
+    Identifiers are [a-z0-9_]-restricted so only _ occurs in practice; % and \\
+    are escaped too for safety."""
+    escaped = _validate_identifier(db_name).replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%")
     return f"`{escaped}`.*"
 
 
