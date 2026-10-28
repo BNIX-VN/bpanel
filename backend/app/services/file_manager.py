@@ -490,10 +490,14 @@ def read_text_file(website: Website, relative_path: str, allow_sensitive: bool =
     try:
         if website.linux_user:
             root = Path(website.root_path).resolve()
+            # cat of a size-checked regular file is instant; a tenant that swaps
+            # the path for a FIFO would otherwise block this request thread
+            # forever, so cap it.
             return shell.privileged(
                 "terminal-exec",
                 helper_args=[website.linux_user, str(root), "cat", _helper_relative_path(website, target)],
                 fallback=["cat", str(target)],
+                timeout=60,
             ).stdout
         return target.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:

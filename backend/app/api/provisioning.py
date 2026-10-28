@@ -120,11 +120,14 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
 
     if db.query(User).filter(User.username == payload.username).first():
         raise HTTPException(status_code=409, detail="Username already exists")
-    if payload.domain and (
-        db.query(Website).filter(Website.domain == payload.domain).first()
-        or nginx.vhost_exists(payload.domain)
-    ):
-        raise HTTPException(status_code=409, detail="Domain already exists")
+    if payload.domain:
+        # Use the panel's own hostname policy (exact + www. + aliases + the
+        # panel's own hostname), not a bare exact match, so a WHMCS order cannot
+        # claim www.<other site>, another site's alias or the panel tools host.
+        from app.api.websites import _hostname_conflicts
+
+        if _hostname_conflicts(db, payload.domain) or nginx.vhost_exists(payload.domain):
+            raise HTTPException(status_code=409, detail="Domain already exists")
 
     package = db.query(UserPackage).filter(UserPackage.id == payload.package_id, UserPackage.owner_id.is_(None)).first()
     if not package:

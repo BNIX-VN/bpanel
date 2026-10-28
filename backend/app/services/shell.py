@@ -91,6 +91,12 @@ class ShellRunner:
                         the real command output is preserved.
         """
         helper_args = list(helper_args or [])
+        # wp-site runs WP-CLI under the tenant's own PHP, loading a wp-config.php
+        # and plugins the tenant controls and can make block forever; these calls
+        # sit in a request thread of the single API process, so a hang parks a
+        # shared worker. Apply a generous default deadline when a caller gave none.
+        if timeout is None and helper_command == "wp-site":
+            timeout = 900
         if _use_helper():
             argv = ["sudo", "-n", HELPER_PATH, helper_command, *helper_args]
         elif fallback is not None:

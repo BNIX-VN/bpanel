@@ -1,6 +1,7 @@
 import json
 import os
 import secrets
+import stat as _stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,38 @@ from typing import Optional
 TOKEN_TTL_SECONDS = 60
 PANEL_LOGIN_TTL_SECONDS = 300
 TOKEN_DIR = Path("/tmp/bpanel-phpmyadmin-sso")
+
+
+def _ensure_token_dir() -> None:
+    """Make TOKEN_DIR 0700 and refuse a pre-existing entry we do not fully own.
+
+    The directory lives in the bpanel-api unit's PrivateTmp /tmp, wiped on every
+    restart, so a tenant process sharing that namespace could pre-create it -- as
+    a directory it owns, or a symlink -- and list token names or redirect writes.
+    mkdir(exist_ok=True) accepted whatever was there. Create it fresh; if it
+    exists, require a real directory (not a symlink) owned by this process at 0700.
+    """
+    try:
+        os.mkdir(TOKEN_DIR, 0o700)
+        return
+    except FileExistsError:
+        pass
+    st = os.lstat(TOKEN_DIR)
+    if _stat.S_ISLNK(st.st_mode) or not _stat.S_ISDIR(st.st_mode):
+        raise RuntimeError(f"{TOKEN_DIR} is not a directory")
+    if st.st_uid != os.geteuid():
+        raise RuntimeError(f"{TOKEN_DIR} is not owned by this process")
+    if _stat.S_IMODE(st.st_mode) != 0o700:
+        os.chmod(TOKEN_DIR, 0o700)
+
+
+def _token_dir_is_safe() -> bool:
+    try:
+        st = os.lstat(TOKEN_DIR)
+    except FileNotFoundError:
+        return False
+    return (not _stat.S_ISLNK(st.st_mode) and _stat.S_ISDIR(st.st_mode)
+            and st.st_uid == os.geteuid())
 
 
 def create_phpmyadmin_token(db_user: str, db_password: str, db_name: str) -> str:
@@ -25,9 +58,9 @@ def create_panel_login_token(username: str) -> str:
 
 
 def _create_token(data: dict, ttl_seconds: int) -> str:
+    _ensure_token_dir()
     cleanup_expired_tokens()
     token = secrets.token_urlsafe(32)
-    TOKEN_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     token_path = _token_path(token)
     payload_data = dict(data)
     payload_data["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
@@ -63,6 +96,8 @@ def consume_panel_login_token(token: str) -> Optional[dict]:
 
 
 def _consume_token(token: str) -> Optional[dict]:
+    if not _token_dir_is_safe():
+        return None
     cleanup_expired_tokens()
     try:
         token_path = _token_path(token)
@@ -89,7 +124,7 @@ def _consume_token(token: str) -> Optional[dict]:
 
 
 def cleanup_expired_tokens() -> None:
-    if not TOKEN_DIR.exists():
+    if not _token_dir_is_safe():
         return
     now = datetime.now(timezone.utc)
     for token_path in TOKEN_DIR.glob("*.json"):

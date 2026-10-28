@@ -2,6 +2,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from jinja2 import Environment, FileSystemLoader
@@ -207,8 +208,25 @@ def _unique_domains(domains: list[str] | tuple[str, ...]) -> list[str]:
     return unique
 
 
+def _panel_hostnames() -> set[str]:
+    """Hostnames the panel itself serves (the phpMyAdmin tools vhost / SSO).
+
+    A tenant registering one of these as a website or alias gets an exact
+    server_name that nginx prefers over the tools' default_server, so it can
+    receive other accounts' (and admins') phpMyAdmin SSO tokens. Reserve
+    PANEL_DOMAIN and the PANEL_URL host, plus www.
+    """
+    hosts: set[str] = set()
+    for raw in (settings.panel_domain, urlparse(settings.panel_url or "").hostname):
+        host = (raw or "").strip().lower()
+        if host:
+            hosts.add(host)
+            hosts.add(f"www.{host}")
+    return hosts
+
+
 def _reserved_hostnames(db: Session, exclude_website_id: int | None = None, exclude_alias_id: int | None = None) -> set[str]:
-    names: set[str] = set()
+    names: set[str] = set(_panel_hostnames())
     for website in db.query(Website).all():
         if exclude_website_id is not None and website.id == exclude_website_id:
             continue
