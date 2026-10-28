@@ -280,7 +280,20 @@ refresh_tools_nginx() {
   local port cert key domain host api_scheme tools_scheme pma_secure ssl_block php_version
   port="$(env_get PANEL_PORT)"; port="${port:-$DEFAULT_PANEL_PORT}"
   cert="$(env_get PANEL_SSL_CERT)"; key="$(env_get PANEL_SSL_KEY)"
-  domain="$(env_get PANEL_DOMAIN)"; host="${domain:-$(detect_ip)}"
+  domain="$(env_get PANEL_DOMAIN)"
+  # backend/.env is owned by the bpanel account, so these are not trusted input:
+  # both are interpolated into GNU sed program text below (the phpMyAdmin signon
+  # writer), where a value containing the s-command delimiter would change the
+  # program. Validate on read (sanitize, don't deny, so a stale value cannot
+  # brick the tools render): a non-numeric/out-of-range port falls back to the
+  # default and a PANEL_DOMAIN that is neither a domain nor an IPv4 is dropped.
+  if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || (( port < 1 || port > 65535 )); then
+    port="$DEFAULT_PANEL_PORT"
+  fi
+  if [[ -n "$domain" ]] && ! is_domain "$domain" && ! is_ipv4 "$domain"; then
+    domain=""
+  fi
+  host="${domain:-$(detect_ip)}"
   php_version="${PHP_DEFAULT:-8.4}"
   api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
   local v6_http="" v6_https=""
@@ -5929,6 +5942,12 @@ TIMER
 copy_panel_live_certificate() {
   local domain="$1"
   [[ -n "$domain" ]] || return 0
+  # domain comes from the bpanel-owned PANEL_DOMAIN and is joined under
+  # /etc/letsencrypt/live as a path component; without this a value with ../
+  # segments (and a directory of same-named symlinks) made root copy arbitrary
+  # root-only files into the bpanel-readable /etc/bpanel. Require a real domain
+  # (is_domain also rejects slashes and dot-dot).
+  is_domain "$domain" || return 0
   [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]] || return 0
   install -d -o root -g bpanel -m 0750 /etc/bpanel
   install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/fullchain.pem" /etc/bpanel/panel-fullchain.pem

@@ -577,6 +577,16 @@ write_tools_nginx_config() {
   local panel_port panel_domain panel_cert panel_key php_version server_ip host api_scheme tools_scheme pma_secure ssl_block
   panel_port="$(env_get PANEL_PORT)"; panel_port="${panel_port:-2222}"
   panel_domain="$(env_get PANEL_DOMAIN)"
+  # backend/.env is bpanel-owned; both values are spliced into GNU sed program
+  # text below. Validate on read so a value containing the sed delimiter cannot
+  # change the program: non-numeric/out-of-range port -> default, and a domain
+  # with any character outside [a-z0-9.-] is dropped (host falls back to the IP).
+  if ! [[ "$panel_port" =~ ^[0-9]{1,5}$ ]] || (( panel_port < 1 || panel_port > 65535 )); then
+    panel_port=2222
+  fi
+  if [[ -n "$panel_domain" && ! "$panel_domain" =~ ^[a-z0-9.-]+$ ]]; then
+    panel_domain=""
+  fi
   panel_cert="$(env_get PANEL_SSL_CERT)"
   panel_key="$(env_get PANEL_SSL_KEY)"
   php_version="${PHP_DEFAULT:-8.4}"
@@ -1323,6 +1333,13 @@ refresh_bpanel_mariadb_grants() {
         value=$0; sub(/^[^=]*=/, "", value); gsub(/^"|"$/, "", value); print value; exit
       }
     ' "$defaults_file")"
+  fi
+  # .my.cnf is bpanel-owned; a parsed password containing a quote or backslash
+  # would break out of the SQL string literal into the root mysql client (a
+  # client-side \! shell escape). Accept only a safe charset; anything else is
+  # discarded and a fresh password generated below.
+  if [[ -n "$password" && ! "$password" =~ ^[A-Za-z0-9._+/=-]+$ ]]; then
+    password=""
   fi
   if [[ -z "$password" ]]; then
     password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
