@@ -653,7 +653,7 @@ repair_firewall() {
     [[ "$ssh_port" == "22" ]] && continue
     allow_panel_port "$ssh_port"
   done <<<"$seen_ssh_ports"
-  # Re-apply rebuilds the whole chain from /var/lib/bpanel/firewall/rules.tsv,
+  # Re-apply rebuilds the whole chain from /var/lib/bpanel-firewall/rules.tsv,
   # which always includes SSH, the panel port and 80/443/465/587.
   run_firewall_helper firewall-apply >/dev/null
   run_firewall_helper firewall-status || true
