@@ -364,12 +364,18 @@ SSHD
     chmod 0750 /etc/bpanel 2>/dev/null || true
     chmod 0640 /etc/bpanel/* 2>/dev/null || true
   fi
-  chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
+  # Do NOT hand the root-executed trees to bpanel: the updater runs the backend
+  # venv and the frontend node_modules/.bin as root, so .venv and node_modules
+  # must stay root-owned (the installers keep them so). chown -R everything else.
+  find "$APP_DIR/backend" -path "$APP_DIR/backend/.venv" -prune -o -exec chown -h bpanel:bpanel {} + 2>/dev/null || true
+  find "$APP_DIR/frontend" -path "$APP_DIR/frontend/node_modules" -prune -o -exec chown -h bpanel:bpanel {} + 2>/dev/null || true
   chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
   [[ -d /var/lib/bpanel/geoip ]] && chown -R bpanel:bpanel /var/lib/bpanel/geoip 2>/dev/null || true
   [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
   chmod 0640 "$ENV_FILE" 2>/dev/null || true
-  if [[ -d "$APP_DIR/frontend/dist" ]]; then
+  # Only widen a real dist directory. A symlinked dist (bpanel owns frontend/)
+  # would make `chmod -R` follow it and widen an attacker-chosen tree as root.
+  if [[ -d "$APP_DIR/frontend/dist" && ! -L "$APP_DIR/frontend/dist" ]]; then
     chmod o+rX "$APP_DIR" "$APP_DIR/frontend" 2>/dev/null || true
     chmod -R o+rX "$APP_DIR/frontend/dist"
   fi
