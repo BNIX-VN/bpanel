@@ -14,6 +14,7 @@ from app.schemas.schemas import (
     PanelIpv6Toggle,
     PanelSettingsOut,
     PanelSettingsUpdate,
+    PublicPanelSettingsOut,
     PanelSslInstall,
     PanelSslUseDomain,
 )
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/panel-settings", tags=["panel-settings"])
 PUBLIC_SETTING_FIELDS = ("app_name", "logo_url", "favicon_url")
 
 
-@router.get("/public", response_model=PanelSettingsOut)
+@router.get("/public", response_model=PublicPanelSettingsOut)
 def public_panel_settings():
     data = panel_settings.current_settings()
     return {field: data[field] for field in PUBLIC_SETTING_FIELDS if field in data}

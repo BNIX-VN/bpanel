@@ -134,3 +134,35 @@ def test_install_panel_ssl_uses_current_admin_email(monkeypatch):
         "panel_port": 2222,
         "panel_url": None,
     }
+
+
+def test_public_settings_exposes_branding_only(monkeypatch):
+    """The unauthenticated /public route must leak nothing but branding -
+    no panel hostname/port, certificate mode, server IPs or addon status, not
+    even as response-model defaults."""
+    monkeypatch.setattr(
+        panel_settings_api.panel_settings,
+        "current_settings",
+        lambda: {
+            "app_name": "Acme Panel",
+            "logo_url": "/logo.png",
+            "favicon_url": "/favicon.png",
+            "panel_hostname": "secret.internal",
+            "panel_port": 8443,
+            "panel_url": "https://secret.internal:8443",
+            "ssl_mode": "letsencrypt",
+            "server_ipv4": ["203.0.113.9"],
+            "malware_scan_enabled": True,
+        },
+    )
+    raw = panel_settings_api.public_panel_settings()
+    # The handler itself allowlists to branding keys.
+    assert set(raw) <= {"app_name", "logo_url", "favicon_url"}
+    # And the response model carries no privileged fields to pad with.
+    from app.schemas.schemas import PublicPanelSettingsOut
+
+    serialised = PublicPanelSettingsOut(**raw).model_dump()
+    for leaked in ("panel_hostname", "panel_port", "panel_url", "ssl_mode",
+                   "server_ipv4", "ipv6", "malware_scan_enabled", "malware_scan_active"):
+        assert leaked not in serialised
+    assert serialised["app_name"] == "Acme Panel"
