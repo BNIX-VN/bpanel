@@ -855,6 +855,43 @@ def _log_path(domain: str, kind: str) -> Path:
     return Path("/var/log/nginx") / f"{safe_domain}.{safe_kind}.log"
 
 
+def _scrub_nginx_for_analysis(text: str) -> str:
+    """Return text with ``#`` comments removed and quoted-string contents blanked.
+
+    The brace-balance check and the deny-list scan must run on structure only.
+    An nginx ``#`` comment runs to end of line and a ``"..."``/``'...'`` string
+    can hold ``{``, ``}``, ``;`` or ``#``; counted as structure they desync the
+    depth and let a dangerous directive hide where the line-anchored deny-list
+    never sees it. Blank those so only real directives/braces remain. Newlines
+    are preserved so line anchors still line up."""
+    out: list[str] = []
+    i, n, quote = 0, len(text), None
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\" and i + 1 < n:
+                out.append("  ")
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            out.append("\n" if ch == "\n" else " ")
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(" ")
+            i += 1
+            continue
+        if ch == "#":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def validate_custom_nginx(content: Optional[str]) -> str:
     """Sanitize and validate a custom nginx block before rendering it inside a server { } scope."""
     if not content:
@@ -862,9 +899,13 @@ def validate_custom_nginx(content: Optional[str]) -> str:
     text = content.replace("\r\n", "\n").strip()
     if len(text) > 16 * 1024:
         raise ValueError("Custom nginx block is too large")
+    # Analyse structure on a scrubbed copy (comments stripped, quoted strings
+    # blanked) so braces/directives hidden in a comment or string cannot evade
+    # the checks. The original text is what gets stored and rendered.
+    scrubbed = _scrub_nginx_for_analysis(text)
     # Balanced braces only (allow nested blocks inside server scope).
     depth = 0
-    for ch in text:
+    for ch in scrubbed:
         if ch == "{":
             depth += 1
         elif ch == "}":
@@ -873,7 +914,7 @@ def validate_custom_nginx(content: Optional[str]) -> str:
                 raise ValueError("Unbalanced braces in custom nginx block")
     if depth != 0:
         raise ValueError("Unbalanced braces in custom nginx block")
-    if DANGEROUS_BLOCKS.search(text):
+    if DANGEROUS_BLOCKS.search(scrubbed):
         raise ValueError(
             "Custom block must not nest server/http/events/stream/upstream blocks"
         )
@@ -881,7 +922,7 @@ def validate_custom_nginx(content: Optional[str]) -> str:
     # written on the same line as their enclosing block, e.g.
     # ``location /api { proxy_pass http://attacker; }`` would otherwise
     # slip past a plain ``^\s*proxy_pass`` match.
-    normalized = re.sub(r"[{};]", "\n", text)
+    normalized = re.sub(r"[{};]", "\n", scrubbed)
     if DANGEROUS_DIRECTIVES.search(normalized):
         raise ValueError(
             "Custom block must not contain disallowed directives (proxy_pass, alias, "
