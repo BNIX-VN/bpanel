@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
 from app.core.security import create_access_token, hash_password, verify_password
-from app.models.entities import User
+from app.models.entities import SiteApp, User
 from app.services import addons, demo_mode, panel_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -50,7 +50,7 @@ REVIEWED_READS = {
     "/api/fail2ban/banned", "/api/fail2ban/status", "/api/firewall/blocklists", "/api/firewall/status",
     "/api/health", "/api/maintenance/app-files/{app_id}", "/api/maintenance/backup-jobs",
     "/api/maintenance/backup-jobs/{job_id}", "/api/maintenance/backup-schedules",
-    "/api/maintenance/backups/{website_id}", "/api/maintenance/cron/{website_id}",
+    "/api/maintenance/backups/{website_id}",
     "/api/maintenance/da-import/backups", "/api/maintenance/da-import/bulk-jobs/{job_id}",
     "/api/maintenance/da-import/jobs/{job_id}", "/api/maintenance/files/jobs",
     "/api/maintenance/files/jobs/{job_id}", "/api/maintenance/files/{website_id}",
@@ -190,6 +190,8 @@ def test_a_demo_customer_is_held_to_the_same_rule(env):
     "/api/maintenance/files/1/download?path=wp-config.php",
     "/api/databases/1/download",
     "/api/maintenance/backups/1/download?filename=x.tar.gz",
+    # A site's crontab carries whatever the owner scheduled, secrets included.
+    "/api/maintenance/cron/1",
 ])
 def test_reads_that_hand_over_contents_are_refused(env, path):
     env.turn_on()
@@ -331,3 +333,30 @@ def test_the_panel_offers_the_accounts_and_says_it_is_a_demo():
     # OPanel's notice, at the top of the page body (BPanel follows OPanel, 2026-09-29).
     assert '<div className="demo-banner" role="status">' in APP
     assert "addon.slug === 'demo'" in APP
+
+
+def test_demo_apps_list_hides_env_and_compose_secrets(env):
+    """GET /api/site-apps is reviewed-safe, but SiteApp.env and compose_source
+    carry credentials. A demo visitor must get the row without the secrets,
+    while the real administrator still sees them."""
+    env.turn_on()
+    addons.install(addons.APPLICATION)
+    khach = env.user("khachhang")
+    env.db.add(SiteApp(
+        owner_id=khach.id, name="demo-app", kind="compose", port=21000,
+        env="SECRET_KEY=hunter2\nDB_PASSWORD=p@ss",
+        compose_source="services:\n  web:\n    environment:\n      - TOKEN=abc123\n",
+    ))
+    env.db.commit()
+
+    visitor = env.client.get("/api/site-apps", headers=env.as_("khachhang"))
+    assert visitor.status_code == 200
+    item = next(a for a in visitor.json()["items"] if a["name"] == "demo-app")
+    assert item["env"] == "" and item["compose_source"] == ""
+    # The screen still has something to show.
+    assert item["name"] == "demo-app" and item["kind"] == "compose"
+
+    admin = env.client.get("/api/site-apps", headers=env.as_("owner"))
+    admin_item = next(a for a in admin.json()["items"] if a["name"] == "demo-app")
+    assert "hunter2" in admin_item["env"]
+    assert "TOKEN=abc123" in admin_item["compose_source"]
