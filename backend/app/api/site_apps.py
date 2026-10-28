@@ -140,6 +140,7 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
     try:
         site_apps.ensure_app_quota(db, owner, is_admin)
         name = site_apps.validate_name(payload.name)
+        site_apps.ensure_identifier_unique(db, owner, name)
         kind = site_apps.validate_kind(payload.kind)
         memory_limit_mb = site_apps.validate_memory_mb(
             payload.memory_limit_mb,
@@ -271,6 +272,7 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
     try:
         if payload.name is not None:
             app.name = site_apps.validate_name(payload.name)
+            site_apps.ensure_identifier_unique(db, owner, app.name, exclude_app_id=app.id)
         if payload.memory_limit_mb is not None:
             app.memory_limit_mb = site_apps.validate_memory_mb(
                 payload.memory_limit_mb,

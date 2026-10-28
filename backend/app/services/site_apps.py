@@ -316,6 +316,50 @@ def unit_name(app: SiteApp, name: str | None = None) -> str:
     return f"bpanel-app-{owner_linux_user(app)}-{validate_name(name or app.name)}"
 
 
+def _runtime_identity(linux_user: str, name: str) -> str:
+    """The ``<user>-<name>`` stem shared by an app's unit, env/compose file and
+    container name. The helper joins the owner's Linux user and the app name
+    with a hyphen for all four, and both sides may themselves contain hyphens,
+    so the stem is ambiguous: owner ``abc-d`` app ``e`` and owner ``abc`` app
+    ``d-e`` both yield ``abc-d-e``. Two such apps would then share one systemd
+    unit, one root-owned ``.env`` (which holds the app's secrets) and one
+    container across two different tenants."""
+    return f"{linux_user}-{name}"
+
+
+def ensure_identifier_unique(
+    db: Session, owner: User, name: str, exclude_app_id: int | None = None
+) -> None:
+    """Refuse a create/rename whose derived runtime identity already belongs to
+    a *different* owner's app, closing the cross-tenant collision described in
+    ``_runtime_identity``. Same-owner duplicate names are already rejected by the
+    ``(owner_id, name)`` unique constraint."""
+    try:
+        target_user = site_users.linux_user_for_panel_username(owner.username)
+    except ValueError:
+        # No valid Linux user for this owner; the create/rename will fail for
+        # that reason further down. Nothing to compare against here.
+        return
+    target = _runtime_identity(target_user, validate_name(name))
+    query = db.query(SiteApp)
+    if exclude_app_id is not None:
+        query = query.filter(SiteApp.id != exclude_app_id)
+    for other in query.all():
+        other_owner = getattr(other, "owner", None)
+        other_username = getattr(other_owner, "username", "") if other_owner else ""
+        if not other_username:
+            continue
+        try:
+            other_user = site_users.linux_user_for_panel_username(other_username)
+        except ValueError:
+            continue
+        if _runtime_identity(other_user, other.name) == target:
+            raise ValueError(
+                "That application name collides with another account's application "
+                "runtime identity; please choose a different name"
+            )
+
+
 def directory_for(app: SiteApp) -> Path:
     return app_directory(owner_linux_user(app), app.name)
 
