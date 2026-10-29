@@ -172,6 +172,40 @@ def purge_owner_passkeys(db, owner_id: int) -> list[str]:
     return removed
 
 
+def purge_owner_dns_zones(db, owner_id: int) -> list[str]:
+    """DNS zones a deleted account leaves behind.
+
+    The DnsZone row carries owner_id, and SQLite reuses the freed user id, so a
+    surviving row would hand the next account that gets that id edit rights on
+    the old tenant's domain (dns.may_edit grants by DnsZone.owner_id). Remove
+    the rows, and best-effort delete the zones from PowerDNS too so nothing is
+    served for a domain the panel no longer tracks.
+    """
+    from app.models.entities import DnsZone
+
+    rows = db.query(DnsZone).filter(DnsZone.owner_id == owner_id).all()
+    if not rows:
+        return []
+    from app.services import dns
+
+    pdns_up = False
+    try:
+        pdns_up = dns.active()
+    except Exception:  # pragma: no cover - addon/DB probe
+        pdns_up = False
+    removed: list[str] = []
+    for row in rows:
+        if pdns_up:
+            try:
+                dns._request("DELETE", f"/zones/{dns._absolute(row.name)}")
+            except Exception:  # pragma: no cover - best effort; the row still goes
+                pass
+        removed.append(row.name)
+        db.delete(row)
+    db.flush()
+    return removed
+
+
 def purge_owned_resources(db, owner_id: int) -> dict[str, list[str]]:
     """Everything keyed on owner_id that a user deletion has to take with it.
 
@@ -184,4 +218,5 @@ def purge_owned_resources(db, owner_id: int) -> dict[str, list[str]]:
         "applications": purge_owner_apps(db, owner_id),
         "sftp_accounts": purge_owner_sftp_accounts(db, owner_id),
         "passkeys": purge_owner_passkeys(db, owner_id),
+        "dns_zones": purge_owner_dns_zones(db, owner_id),
     }

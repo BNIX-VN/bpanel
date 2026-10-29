@@ -189,6 +189,13 @@ def terminate_account(db: Session, account: ProvisioningAccount, backup: bool = 
         # without this sweep a terminated account left its databases running in
         # MariaDB and its applications wedged the delete with an IntegrityError.
         teardown.purge_owned_resources(db, user.id)
+        # Mail rows are keyed on owner_id and are not covered by
+        # purge_owned_resources; without this, a terminated account leaves its
+        # mail domains, mailboxes and forwarders behind for the reused user id
+        # to inherit (delete_user already does this; termination did not).
+        from app.services import mail
+
+        mail.delete_for_owner(db, user)
 
         site_users.delete_panel_user(user.username)
         db.delete(user)
