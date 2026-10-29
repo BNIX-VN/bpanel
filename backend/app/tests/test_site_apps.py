@@ -761,3 +761,55 @@ def test_a_website_changing_hands_takes_its_app_unless_it_cannot(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         websites_api._app_moving_with(_Db(), site, new_owner)
     assert exc.value.status_code == 409 and "at most 1" in exc.value.detail
+
+
+# --- cross-tenant runtime-identity collision --------------------------------
+
+class _CollisionDb:
+    """A Session whose query(...).filter(...).all() yields a fixed app list."""
+
+    def __init__(self, apps):
+        self._apps = apps
+        self._excluded = None
+
+    def query(self, *_args):
+        return self
+
+    def filter(self, *_args):
+        # ensure_identifier_unique only ever filters out the app being renamed;
+        # the fake apps carry no id match logic, which is fine for these cases.
+        return self
+
+    def all(self):
+        return self._apps
+
+
+def _owned_app(username, name):
+    app = SiteApp(name=name)
+    app.owner = User(id=hash(username) & 0xffff, username=username,
+                     email=f"{username}@example.test", role="end_user")
+    return app
+
+
+def test_identifier_collision_across_owners_is_rejected():
+    # owner "abc" already runs app "d-e" -> unit/env stem "abc-d-e".
+    existing = [_owned_app("abc", "d-e")]
+    db = _CollisionDb(existing)
+    # owner "abc-d" asking for app "e" would resolve to the same "abc-d-e".
+    new_owner = User(id=99, username="abc-d", email="x@example.test", role="end_user")
+    with pytest.raises(ValueError, match="runtime identity"):
+        site_apps.ensure_identifier_unique(db, new_owner, "e")
+
+
+def test_distinct_identifiers_are_allowed():
+    existing = [_owned_app("abc", "d-e")]
+    db = _CollisionDb(existing)
+    owner = User(id=99, username="zed", email="z@example.test", role="end_user")
+    # No collision: "zed-e" != "abc-d-e".
+    site_apps.ensure_identifier_unique(db, owner, "e")
+
+
+def test_runtime_identity_is_ambiguous_without_the_guard():
+    # Documents exactly why the guard exists: two different (user, name) pairs
+    # collapse to one stem.
+    assert site_apps._runtime_identity("abc-d", "e") == site_apps._runtime_identity("abc", "d-e")

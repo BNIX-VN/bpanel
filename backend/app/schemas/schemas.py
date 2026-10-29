@@ -989,6 +989,19 @@ class PanelSettingsOut(BaseModel):
     malware_scan_detail: Optional[str] = None
 
 
+class PublicPanelSettingsOut(BaseModel):
+    """What the unauthenticated login page is allowed to see: branding only.
+
+    Served by /panel-settings/public. Unlike PanelSettingsOut this carries no
+    privileged fields at all, so an anonymous caller is never handed the panel
+    hostname/port, certificate mode, server IPs or addon status - not even as
+    model defaults."""
+
+    app_name: str = "BPanel"
+    logo_url: str = ""
+    favicon_url: str = "/favicon.png"
+
+
 class MalwareScanToggle(BaseModel):
     enabled: bool = False
 

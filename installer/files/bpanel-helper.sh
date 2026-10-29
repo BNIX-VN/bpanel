@@ -75,9 +75,18 @@ SOURCE_DIR="/opt/bpanel-source"
 UPDATE_SCRIPT="/usr/local/sbin/bpanel-update"
 BPANEL_DATA_DIR="/var/lib/bpanel"
 BACKUP_ROOT="/var/backups/bpanel"
-FIREWALL_BLOCKLIST_URLS="${BPANEL_DATA_DIR}/firewall-blocklists.urls"
-FIREWALL_BLOCKLIST_WORK="${BPANEL_DATA_DIR}/firewall-blocklists.current"
-FIREWALL_DIR="${BPANEL_DATA_DIR}/firewall"
+# The firewall state root MUST stay outside BPANEL_DATA_DIR. BPANEL_DATA_DIR is
+# owned by the bpanel account, so the panel process could rename a child or
+# replace a file there with a symlink; every root write/chmod/truncate below
+# (install, ": >", ">>", chmod) would then follow it and hit an arbitrary
+# target (/etc/shadow, /etc/sudoers.d/...) - a bpanel->root escalation. /var/lib
+# is root-owned, so a dedicated root:root dir here cannot be renamed or
+# symlink-swapped by bpanel. Nothing but the root helper ever reads or writes
+# these files, so the account loses nothing by the move.
+FIREWALL_STATE_DIR="/var/lib/bpanel-firewall"
+FIREWALL_BLOCKLIST_URLS="${FIREWALL_STATE_DIR}/blocklists.urls"
+FIREWALL_BLOCKLIST_WORK="${FIREWALL_STATE_DIR}/blocklists.current"
+FIREWALL_DIR="${FIREWALL_STATE_DIR}"
 FIREWALL_RULES_FILE="${FIREWALL_DIR}/rules.tsv"
 FIREWALL_STATE_FILE="${FIREWALL_DIR}/state"
 FIREWALL_CHAIN="BPANEL-INPUT"
@@ -280,7 +289,20 @@ refresh_tools_nginx() {
   local port cert key domain host api_scheme tools_scheme pma_secure ssl_block php_version
   port="$(env_get PANEL_PORT)"; port="${port:-$DEFAULT_PANEL_PORT}"
   cert="$(env_get PANEL_SSL_CERT)"; key="$(env_get PANEL_SSL_KEY)"
-  domain="$(env_get PANEL_DOMAIN)"; host="${domain:-$(detect_ip)}"
+  domain="$(env_get PANEL_DOMAIN)"
+  # backend/.env is owned by the bpanel account, so these are not trusted input:
+  # both are interpolated into GNU sed program text below (the phpMyAdmin signon
+  # writer), where a value containing the s-command delimiter would change the
+  # program. Validate on read (sanitize, don't deny, so a stale value cannot
+  # brick the tools render): a non-numeric/out-of-range port falls back to the
+  # default and a PANEL_DOMAIN that is neither a domain nor an IPv4 is dropped.
+  if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || (( port < 1 || port > 65535 )); then
+    port="$DEFAULT_PANEL_PORT"
+  fi
+  if [[ -n "$domain" ]] && ! is_domain "$domain" && ! is_ipv4 "$domain"; then
+    domain=""
+  fi
+  host="${domain:-$(detect_ip)}"
   php_version="${PHP_DEFAULT:-8.4}"
   api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
   local v6_http="" v6_https=""
@@ -4928,9 +4950,49 @@ firewall_has_ipv6() {
   command -v ip6tables >/dev/null 2>&1 && ip6tables -S INPUT >/dev/null 2>&1
 }
 
+migrate_legacy_firewall_state() {
+  # The firewall state used to live under /var/lib/bpanel (bpanel-owned); it now
+  # lives in the root-owned FIREWALL_STATE_DIR. Carry the existing rules and
+  # blocklist across once, then drop the old copies so the bpanel-writable paths
+  # stop existing. Only move a real regular file / directory, never follow a
+  # symlink the account may have planted in the old location.
+  local legacy_dir="${BPANEL_DATA_DIR}/firewall"
+  local legacy_urls="${BPANEL_DATA_DIR}/firewall-blocklists.urls"
+  local legacy_work="${BPANEL_DATA_DIR}/firewall-blocklists.current"
+  local src dst
+  for pair in \
+    "${legacy_dir}/rules.tsv:${FIREWALL_RULES_FILE}" \
+    "${legacy_dir}/state:${FIREWALL_STATE_FILE}" \
+    "${legacy_urls}:${FIREWALL_BLOCKLIST_URLS}" \
+    "${legacy_work}:${FIREWALL_BLOCKLIST_WORK}"; do
+    src="${pair%%:*}"; dst="${pair##*:}"
+    if [[ -f "$src" && ! -L "$src" && ! -e "$dst" ]]; then
+      install -m 0640 -o root -g root "$src" "$dst" 2>/dev/null || true
+    fi
+  done
+  if [[ -d "${legacy_dir}/addon-ports" && ! -L "${legacy_dir}/addon-ports" && ! -e "$FIREWALL_ADDON_PORTS_DIR" ]]; then
+    install -d -o root -g root -m 0750 "$FIREWALL_ADDON_PORTS_DIR"
+    find "${legacy_dir}/addon-ports" -maxdepth 1 -type f -exec install -m 0640 -o root -g root {} "$FIREWALL_ADDON_PORTS_DIR"/ \; 2>/dev/null || true
+  fi
+  # Remove the old bpanel-owned paths outright (rm never follows a symlink
+  # target, so a planted link is simply unlinked).
+  rm -rf "$legacy_dir" 2>/dev/null || true
+  rm -f "$legacy_urls" "$legacy_work" 2>/dev/null || true
+}
+
 ensure_firewall_dir() {
-  ensure_bpanel_data_dir
-  install -d -o root -g root -m 0750 "$FIREWALL_DIR"
+  # Defence in depth: if anything at the state path is a symlink or a
+  # non-directory, unlink it (rm does not follow) before (re)creating the
+  # root-owned directory. Under /var/lib this should never trigger, but it keeps
+  # the invariant local to the one place that creates the tree.
+  if [[ -L "$FIREWALL_STATE_DIR" || ( -e "$FIREWALL_STATE_DIR" && ! -d "$FIREWALL_STATE_DIR" ) ]]; then
+    rm -f "$FIREWALL_STATE_DIR"
+  fi
+  install -d -o root -g root -m 0750 "$FIREWALL_STATE_DIR"
+  migrate_legacy_firewall_state
+  for leaf in "$FIREWALL_RULES_FILE" "$FIREWALL_STATE_FILE"; do
+    [[ ! -L "$leaf" ]] || rm -f "$leaf"
+  done
   [[ -f "$FIREWALL_RULES_FILE" ]] || { : >"$FIREWALL_RULES_FILE"; chmod 0640 "$FIREWALL_RULES_FILE"; }
   [[ -f "$FIREWALL_STATE_FILE" ]] || printf 'enabled\n' >"$FIREWALL_STATE_FILE"
 }
@@ -5601,7 +5663,7 @@ require_url() {
 }
 
 firewall_blocklist_urls() {
-  ensure_bpanel_data_dir
+  ensure_firewall_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_URLS" | sort -u
 }
@@ -5715,7 +5777,7 @@ CONF
 }
 
 firewall_blocklist_status() {
-  ensure_bpanel_data_dir
+  ensure_firewall_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   echo "URLs:"
   if [[ -s "$FIREWALL_BLOCKLIST_URLS" ]]; then
@@ -5812,7 +5874,6 @@ PY
 }
 
 firewall_blocklist_run() {
-  ensure_bpanel_data_dir
   ensure_firewall_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   local tmp fetched count url failed=0 previous=0
@@ -5878,7 +5939,7 @@ PY
 firewall_blocklist_add_url() {
   local url="$1"
   require_url "$url"
-  ensure_bpanel_data_dir
+  ensure_firewall_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   if ! grep -Fxq -- "$url" "$FIREWALL_BLOCKLIST_URLS"; then
     printf '%s\n' "$url" >>"$FIREWALL_BLOCKLIST_URLS"
@@ -5891,7 +5952,7 @@ firewall_blocklist_add_url() {
 firewall_blocklist_delete_url() {
   local url="$1"
   require_url "$url"
-  ensure_bpanel_data_dir
+  ensure_firewall_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   grep -Fxv -- "$url" "$FIREWALL_BLOCKLIST_URLS" >"${FIREWALL_BLOCKLIST_URLS}.tmp" || true
   mv -f "${FIREWALL_BLOCKLIST_URLS}.tmp" "$FIREWALL_BLOCKLIST_URLS"
@@ -5929,6 +5990,12 @@ TIMER
 copy_panel_live_certificate() {
   local domain="$1"
   [[ -n "$domain" ]] || return 0
+  # domain comes from the bpanel-owned PANEL_DOMAIN and is joined under
+  # /etc/letsencrypt/live as a path component; without this a value with ../
+  # segments (and a directory of same-named symlinks) made root copy arbitrary
+  # root-only files into the bpanel-readable /etc/bpanel. Require a real domain
+  # (is_domain also rejects slashes and dot-dot).
+  is_domain "$domain" || return 0
   [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]] || return 0
   install -d -o root -g bpanel -m 0750 /etc/bpanel
   install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/fullchain.pem" /etc/bpanel/panel-fullchain.pem

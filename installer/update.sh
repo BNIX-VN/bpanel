@@ -400,7 +400,7 @@ elif status in {"completed", "failed"}:
 path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
   if id -u bpanel >/dev/null 2>&1; then
-    chown bpanel:bpanel "$UPDATE_STATE_FILE" 2>/dev/null || true
+    chown -h bpanel:bpanel "$UPDATE_STATE_FILE" 2>/dev/null || true
   fi
   chmod 0640 "$UPDATE_STATE_FILE" 2>/dev/null || true
 }
@@ -432,7 +432,7 @@ if message:
 path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
   if id -u bpanel >/dev/null 2>&1; then
-    chown bpanel:bpanel "$UPDATE_STATE_FILE" 2>/dev/null || true
+    chown -h bpanel:bpanel "$UPDATE_STATE_FILE" 2>/dev/null || true
   fi
   chmod 0640 "$UPDATE_STATE_FILE" 2>/dev/null || true
 }
@@ -577,6 +577,16 @@ write_tools_nginx_config() {
   local panel_port panel_domain panel_cert panel_key php_version server_ip host api_scheme tools_scheme pma_secure ssl_block
   panel_port="$(env_get PANEL_PORT)"; panel_port="${panel_port:-2222}"
   panel_domain="$(env_get PANEL_DOMAIN)"
+  # backend/.env is bpanel-owned; both values are spliced into GNU sed program
+  # text below. Validate on read so a value containing the sed delimiter cannot
+  # change the program: non-numeric/out-of-range port -> default, and a domain
+  # with any character outside [a-z0-9.-] is dropped (host falls back to the IP).
+  if ! [[ "$panel_port" =~ ^[0-9]{1,5}$ ]] || (( panel_port < 1 || panel_port > 65535 )); then
+    panel_port=2222
+  fi
+  if [[ -n "$panel_domain" && ! "$panel_domain" =~ ^[a-z0-9.-]+$ ]]; then
+    panel_domain=""
+  fi
   panel_cert="$(env_get PANEL_SSL_CERT)"
   panel_key="$(env_get PANEL_SSL_KEY)"
   php_version="${PHP_DEFAULT:-8.4}"
@@ -1324,6 +1334,13 @@ refresh_bpanel_mariadb_grants() {
       }
     ' "$defaults_file")"
   fi
+  # .my.cnf is bpanel-owned; a parsed password containing a quote or backslash
+  # would break out of the SQL string literal into the root mysql client (a
+  # client-side \! shell escape). Accept only a safe charset; anything else is
+  # discarded and a fresh password generated below.
+  if [[ -n "$password" && ! "$password" =~ ^[A-Za-z0-9._+/=-]+$ ]]; then
+    password=""
+  fi
   if [[ -z "$password" ]]; then
     password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
   fi
@@ -1344,45 +1361,43 @@ user=bpanel
 password="${password}"
 host=localhost
 MYCNF
-  chown bpanel:bpanel "$defaults_file"
+  chown -h bpanel:bpanel "$defaults_file"
   chmod 0600 "$defaults_file"
 }
 
 ensure_panel_runtime_ownership() {
   id -u bpanel >/dev/null 2>&1 || return 0
-  # Everything under backend/ goes to bpanel EXCEPT .venv. This script runs as
-  # root and does `source .venv/bin/activate`, `.venv/bin/pip install` and
-  # `.venv/bin/python -m py_compile` with the cwd set to backend/ - so a
-  # bpanel-owned venv (or a bpanel-writable backend/ that `python -m` picks up
-  # via sys.path) is a file the confined account writes and root executes. That
-  # bypasses every argv check in bpanel-helper, which is the whole point of the
-  # sudo trampoline. Root keeps the venv; the service only reads and executes it.
+  # The panel runs entirely as the bpanel account: bpanel-api and every
+  # scheduler unit are User=bpanel and execute backend/.venv/bin/python, and
+  # this updater builds the venv, runs pip, py_compile, npm install and the
+  # vite build all through `sudo -u bpanel` (see install_backend /
+  # build_frontend). Root never executes anything under backend/ or frontend/,
+  # so the whole tree - the source, the venv and node_modules alike - is owned
+  # by bpanel. That is also what lets the bpanel-run pip/npm write them: a
+  # root-owned .venv would make `sudo -u bpanel pip install` fail the moment a
+  # dependency actually changed. (install.sh builds as root, before the bpanel
+  # account exists, and leaves .venv/node_modules root-owned; the chowns here
+  # hand them over on the first update.)
   if [[ -d "$APP_DIR/backend" ]]; then
-    find "$APP_DIR/backend" -path "$APP_DIR/backend/.venv" -prune \
-      -o -exec chown bpanel:bpanel {} + 2>/dev/null || true
-    # Reclaim it on an upgrade from a build that handed it to bpanel.
-    [[ -d "$APP_DIR/backend/.venv" ]] && chown -R root:root "$APP_DIR/backend/.venv" 2>/dev/null || true
+    chown -R bpanel:bpanel "$APP_DIR/backend" 2>/dev/null || true
   fi
-  # Same rule for the frontend, and this is the call site that matters: this
-  # function runs before build_frontend, so the `npm run build` below executes a
-  # tree this line has already handed over. package.json's "build" is
-  # `vite build`, which npm resolves to node_modules/.bin/vite, so root loads
-  # the whole vite/rolldown/lightningcss graph - two compiled .node addons
-  # included - out of node_modules. The rsync keeps node_modules across updates
-  # (protect filter below), so anything written there stays written. Only this
-  # script ever creates node_modules; bpanel just needs to read it.
   if [[ -d "$APP_DIR/frontend" ]]; then
-    find "$APP_DIR/frontend" -path "$APP_DIR/frontend/node_modules" -prune \
-      -o -exec chown bpanel:bpanel {} + 2>/dev/null || true
-    # Reclaim it on an upgrade from a build that handed it to bpanel.
-    [[ -d "$APP_DIR/frontend/node_modules" ]] && chown -R root:root "$APP_DIR/frontend/node_modules" 2>/dev/null || true
+    chown -R bpanel:bpanel "$APP_DIR/frontend" 2>/dev/null || true
   fi
-  [[ -f "$APP_DIR/.my.cnf" ]] && chown bpanel:bpanel "$APP_DIR/.my.cnf" 2>/dev/null || true
+  [[ -f "$APP_DIR/.my.cnf" ]] && chown -h bpanel:bpanel "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -f "$APP_DIR/.my.cnf" ]] && chmod 0600 "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -d /var/lib/bpanel ]] && chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
   [[ -d /var/lib/bpanel/geoip ]] && chown -R bpanel:bpanel /var/lib/bpanel/geoip 2>/dev/null || true
   [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
   [[ -f "$APP_DIR/backend/.env" ]] && chmod 0640 "$APP_DIR/backend/.env"
+  # rsync -a brings backend/ over at the source tree's 0755, which left
+  # /opt/bpanel/backend world-traversable and bpanel.db world-readable, so a
+  # tenant uid could read every account's password hashes and the git webhook
+  # tokens. Keep backend/ private and the SQLite db + its journals 0600.
+  [[ -d "$APP_DIR/backend" ]] && chmod 0750 "$APP_DIR/backend" 2>/dev/null || true
+  for dbf in "$APP_DIR/backend/bpanel.db" "$APP_DIR/backend/bpanel.db-wal" "$APP_DIR/backend/bpanel.db-shm" "$APP_DIR/backend/bpanel.db-journal"; do
+    [[ -f "$dbf" ]] && chmod 0600 "$dbf" 2>/dev/null || true
+  done
 }
 
 # --- Snapshot the SQLite DB before doing anything ---------------------------
@@ -1394,7 +1409,7 @@ backup_db() {
   local snap_dir="${BACKUP_ROOT:-/var/backups/bpanel}/db-snapshots"
   install -d -m 0750 "$snap_dir"
   if id -u bpanel >/dev/null 2>&1; then
-    chown bpanel:bpanel "$snap_dir" 2>/dev/null || true
+    chown -h bpanel:bpanel "$snap_dir" 2>/dev/null || true
   fi
   local stamp
   stamp=$(date -u +%Y%m%d-%H%M%S)
@@ -1593,7 +1608,8 @@ fi
 if [[ "$venv_needs_recreate" == "true" ]]; then
   log "Recreating Python virtualenv (missing or stale path)"
   rm -rf "$APP_DIR/backend/.venv"
-  python3 -m venv "$APP_DIR/backend/.venv"
+  # Create as bpanel so root never owns or later executes the venv.
+  sudo -u bpanel python3 -m venv "$APP_DIR/backend/.venv"
 fi
 
 # --- Refresh helper + sudoers (idempotent) ---------------------------------
@@ -1782,16 +1798,18 @@ fi
 log "Updating backend dependencies"
 update_progress 55 "backend" "Updating backend dependencies"
 cd "$APP_DIR/backend"
+# Run the venv and pip as the bpanel account, not root. backend/ and its .venv
+# are bpanel-owned, so a root `pip` / `source activate` executes setup hooks and
+# an interpreter the lower-trust bpanel account could have edited, bypassing the
+# bpanel-helper boundary. bpanel owns the tree, so it can populate the venv.
 if [[ ! -d .venv ]]; then
-  python3 -m venv .venv
+  sudo -u bpanel python3 -m venv .venv
 fi
-# shellcheck disable=SC1091
-source .venv/bin/activate
 # pip resolves the whole requirements file on every run even when nothing moved;
 # skip it unless requirements.txt changed or the venv was just rebuilt.
 if [[ "$venv_needs_recreate" == "true" ]] || step_inputs_changed backend-deps requirements.txt; then
-  pip install --upgrade pip
-  pip install -r requirements.txt
+  sudo -u bpanel env HOME="$APP_DIR" .venv/bin/pip install --upgrade pip
+  sudo -u bpanel env HOME="$APP_DIR" .venv/bin/pip install -r requirements.txt
   step_mark_done backend-deps requirements.txt
 else
   log "Backend dependencies unchanged since last update; skipping pip install"
@@ -2021,7 +2039,7 @@ for php_ini_dir in /etc/php/*/; do
 done
 
 log "Compiling backend modules"
-python -m py_compile \
+sudo -u bpanel env HOME="$APP_DIR" .venv/bin/python -I -m py_compile \
   app/main.py \
   app/api/auth.py \
   app/api/users.py \
@@ -2052,7 +2070,6 @@ python -m py_compile \
   app/services/php.py \
   app/schemas/schemas.py \
   app/seed.py
-deactivate
 
 log "Restarting bpanel-api"
 mkdir -p /etc/systemd/system/bpanel-api.service.d
@@ -2104,11 +2121,14 @@ else
   if [[ ! -d node_modules ]] || step_inputs_changed frontend-deps package.json; then
     log "Installing npm dependencies..."
     rm -rf node_modules package-lock.json
-    npm install
+    # npm install scripts and the build execute node_modules/.bin code; run them
+    # as bpanel (which owns frontend/) so root never executes a tree the
+    # lower-trust account controls.
+    sudo -u bpanel env HOME="$APP_DIR" npm install
     step_mark_done frontend-deps package.json
   fi
   log "Building frontend with VITE_API_URL=/api..."
-  VITE_API_URL=/api npm run build 2>&1 || { log "BUILD FAILED"; exit 1; }
+  sudo -u bpanel env HOME="$APP_DIR" VITE_API_URL=/api npm run build 2>&1 || { log "BUILD FAILED"; exit 1; }
 
   [[ -f dist/index.html ]] || fail "Frontend build failed: dist/index.html missing"
   HASHED=$(grep -oE 'index-[a-zA-Z0-9_-]+\.js' dist/index.html | head -n1 || true)

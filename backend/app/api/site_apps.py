@@ -25,7 +25,7 @@ from app.schemas.schemas import (
     SiteAppOut,
     SiteAppUpdate,
 )
-from app.services import addons, site_apps
+from app.services import addons, demo_mode, site_apps
 from app.services.audit import log_action
 
 # The whole feature is an addon, so nothing here answers on a panel that has not
@@ -63,8 +63,16 @@ def _resolve_owner(db: Session, current_user: User, owner_id: int | None) -> Use
     return owner
 
 
-def _app_out(app: SiteApp) -> dict:
+def _app_out(app: SiteApp, redact_secrets: bool = False) -> dict:
     payload = SiteAppOut.model_validate(app).model_dump()
+    if redact_secrets:
+        # A demo visitor signs in with a password printed on the login page, so
+        # treat these as secret: env holds the app's environment variables and
+        # compose_source its whole compose file, both of which routinely carry
+        # credentials. Demo mode means to withhold stored secrets; the rest of
+        # the row (name, kind, port, status) is what the screen shows anyway.
+        payload["env"] = ""
+        payload["compose_source"] = ""
     # Where the customer uploads code. Their SFTP is chrooted to their home, so
     # the path is reachable without going through the panel.
     try:
@@ -92,8 +100,9 @@ def list_site_apps(
     else:
         query = scope_owner(query, SiteApp.owner_id, db, current_user)
     apps = query.order_by(SiteApp.id).all()
+    redact = demo_mode.is_demo_user(current_user)
     return {
-        "items": [_app_out(app) for app in apps],
+        "items": [_app_out(app, redact_secrets=redact) for app in apps],
         "limit": site_apps.app_limit_for(current_user),
         "used": site_apps.count_apps_for_owner(db, current_user.id),
         "memory_ceiling_mb": site_apps.memory_ceiling_for(current_user),
@@ -140,6 +149,7 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
     try:
         site_apps.ensure_app_quota(db, owner, is_admin)
         name = site_apps.validate_name(payload.name)
+        site_apps.ensure_identifier_unique(db, owner, name)
         kind = site_apps.validate_kind(payload.kind)
         memory_limit_mb = site_apps.validate_memory_mb(
             payload.memory_limit_mb,
@@ -271,6 +281,7 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
     try:
         if payload.name is not None:
             app.name = site_apps.validate_name(payload.name)
+            site_apps.ensure_identifier_unique(db, owner, app.name, exclude_app_id=app.id)
         if payload.memory_limit_mb is not None:
             app.memory_limit_mb = site_apps.validate_memory_mb(
                 payload.memory_limit_mb,

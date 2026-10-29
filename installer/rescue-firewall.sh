@@ -13,8 +13,14 @@ set -euo pipefail
 ts="$(date +%Y%m%d-%H%M%S)"
 backup_dir="/root/bpanel-firewall-rescue-${ts}"
 env_file="/opt/bpanel/backend/.env"
-rules_file="/var/lib/bpanel/firewall/rules.tsv"
-blocklist_file="/var/lib/bpanel/firewall-blocklists.current"
+# Root-owned state (see bpanel-helper FIREWALL_STATE_DIR). It MUST live under
+# /var/lib, not /var/lib/bpanel: /var/lib/bpanel is owned by the bpanel account,
+# which could rename a child or drop a symlink there and aim the truncate/chmod/
+# write below at an arbitrary file. /var/lib is root-owned, so these paths
+# cannot be symlink-swapped by the account.
+fw_dir="/var/lib/bpanel-firewall"
+rules_file="${fw_dir}/rules.tsv"
+blocklist_file="${fw_dir}/blocklists.current"
 
 mkdir -p "$backup_dir"
 iptables-save  >"${backup_dir}/iptables-save.txt"  2>&1 || true
@@ -61,13 +67,24 @@ if command -v ipset >/dev/null 2>&1; then
 fi
 
 echo "Clearing the URL blocklist cache ..."
+# Rebuild the state dir as a real root-owned directory first; unlink anything
+# that is a symlink or not a directory (rm never follows the link target). On a
+# healthy host this is a no-op.
+if [[ -L "$fw_dir" || ( -e "$fw_dir" && ! -d "$fw_dir" ) ]]; then
+  rm -f "$fw_dir"
+fi
+mkdir -p "$fw_dir"
+chown root:root "$fw_dir"
+chmod 0750 "$fw_dir"
+for leaf in "$blocklist_file" "$rules_file" "${fw_dir}/state"; do
+  [[ ! -L "$leaf" ]] || rm -f "$leaf"
+done
 : >"$blocklist_file" 2>/dev/null || true
 
 echo "Resetting BPanel rules to protected ports only ..."
-mkdir -p "$(dirname "$rules_file")"
 : >"$rules_file"
 chmod 0640 "$rules_file"
-printf 'enabled\n' >"$(dirname "$rules_file")/state"
+printf 'enabled\n' >"${fw_dir}/state"
 
 if command -v ipset >/dev/null 2>&1 && [[ -x /usr/local/sbin/bpanel-helper ]]; then
   echo "Reapplying the BPanel firewall ..."

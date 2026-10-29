@@ -68,6 +68,18 @@ VOLUME_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_SERVICES = 8
 MAX_SOURCE_BYTES = 64 * 1024
+
+
+class _NoAliasLoader(yaml.SafeLoader):
+    """SafeLoader that refuses YAML aliases. A small source can reference an
+    anchor many times so each level multiplies the next (a "billion laughs"),
+    expanding to gigabytes in the API process. We never need aliases in a
+    compose file, so forbid them rather than let analyse() amplify tenant input."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.events.AliasEvent):
+            raise yaml.YAMLError("YAML aliases are not allowed")
+        return super().compose_node(parent, index)
 # The minimum an image needs to drop from root to its own account at startup —
 # what the official Postgres and MySQL entrypoints do through gosu. Without
 # these the container cannot initialise its data directory.
@@ -353,7 +365,11 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
     user = raw.get("user")
     if user is not None:
         text = str(user).strip()
-        if text in {"root", "0", "0:0"} or text.startswith("0:"):
+        # Reject uid 0 in every spelling: the uid is the part before any ':', so
+        # `root`, `root:anything`, `0`, `00`, `0:0`, `0:group` all mean root. The
+        # old set/startswith check let `root:root` and `00` through.
+        uid_part = text.split(":", 1)[0]
+        if uid_part == "root" or re.fullmatch(r"0+", uid_part):
             issues.append(Issue(name, "a service may not run as root"))
         elif not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", text):
             issues.append(Issue(name, f"not a valid user value: {text[:30]}"))
@@ -373,7 +389,7 @@ def analyse(source: str, web_service: str = "", enforce_registry: bool = True,
         plan.issues.append(Issue("", "the compose file is too large"))
         return plan
     try:
-        document = yaml.safe_load(source)
+        document = yaml.load(source, Loader=_NoAliasLoader)
     except yaml.YAMLError as exc:
         plan.issues.append(Issue("", f"invalid YAML: {str(exc).splitlines()[0][:120]}"))
         return plan

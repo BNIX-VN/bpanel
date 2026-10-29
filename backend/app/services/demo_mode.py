@@ -70,6 +70,9 @@ BLOCKED_READS = frozenset({
     # top -c: every process's command line, and a command line can carry a
     # password (mysqldump -p..., a cron job's curl with a token).
     "/api/system/processes",
+    # The very command lines the process list is blocked for, at rest: a site's
+    # crontab holds whatever the owner scheduled, passwords and tokens included.
+    "/api/maintenance/cron/{website_id}",
 })
 
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

@@ -178,6 +178,10 @@ refresh_phpmyadmin_api_base() {
   local signon="/usr/share/phpmyadmin/bpanel-signon.php"
   [[ -f "$signon" ]] || return 0
   local scheme="$1" port="$2"
+  # port reaches GNU sed program text; a sed-delimiter in it would change the
+  # program. It must be numeric -- refuse anything else rather than splice it.
+  [[ "$scheme" == "http" || "$scheme" == "https" ]] || return 0
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( port >= 1 && port <= 65535 )) || return 0
   sed -i -E "/api\/databases\/phpmyadmin-sso/s#'[^']+/api/databases/phpmyadmin-sso/'#'${scheme}://127.0.0.1:${port}/api/databases/phpmyadmin-sso/'#" "$signon" || true
 }
 
@@ -185,7 +189,18 @@ refresh_tools_nginx() {
   local port cert key domain host api_scheme tools_scheme pma_secure ssl_block php_version
   port="$(env_get PANEL_PORT)"; port="${port:-$DEFAULT_PANEL_PORT}"
   cert="$(env_get PANEL_SSL_CERT)"; key="$(env_get PANEL_SSL_KEY)"
-  domain="$(env_get PANEL_DOMAIN)"; host="${domain:-$(detect_ip)}"
+  domain="$(env_get PANEL_DOMAIN)"
+  # backend/.env is bpanel-owned; both values go into GNU sed program text below.
+  # Validate on read so a sed-delimiter in the value cannot change the program:
+  # non-numeric/out-of-range port -> default, domain with any char outside
+  # [a-z0-9.-] dropped (host falls back to the detected IP).
+  if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || (( port < 1 || port > 65535 )); then
+    port="$DEFAULT_PANEL_PORT"
+  fi
+  if [[ -n "$domain" && ! "$domain" =~ ^[a-z0-9.-]+$ ]]; then
+    domain=""
+  fi
+  host="${domain:-$(detect_ip)}"
   php_version="${PHP_DEFAULT:-8.3}"
   api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
   if [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
@@ -349,12 +364,18 @@ SSHD
     chmod 0750 /etc/bpanel 2>/dev/null || true
     chmod 0640 /etc/bpanel/* 2>/dev/null || true
   fi
-  chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
+  # Do NOT hand the root-executed trees to bpanel: the updater runs the backend
+  # venv and the frontend node_modules/.bin as root, so .venv and node_modules
+  # must stay root-owned (the installers keep them so). chown -R everything else.
+  find "$APP_DIR/backend" -path "$APP_DIR/backend/.venv" -prune -o -exec chown -h bpanel:bpanel {} + 2>/dev/null || true
+  find "$APP_DIR/frontend" -path "$APP_DIR/frontend/node_modules" -prune -o -exec chown -h bpanel:bpanel {} + 2>/dev/null || true
   chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
   [[ -d /var/lib/bpanel/geoip ]] && chown -R bpanel:bpanel /var/lib/bpanel/geoip 2>/dev/null || true
   [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
   chmod 0640 "$ENV_FILE" 2>/dev/null || true
-  if [[ -d "$APP_DIR/frontend/dist" ]]; then
+  # Only widen a real dist directory. A symlinked dist (bpanel owns frontend/)
+  # would make `chmod -R` follow it and widen an attacker-chosen tree as root.
+  if [[ -d "$APP_DIR/frontend/dist" && ! -L "$APP_DIR/frontend/dist" ]]; then
     chmod o+rX "$APP_DIR" "$APP_DIR/frontend" 2>/dev/null || true
     chmod -R o+rX "$APP_DIR/frontend/dist"
   fi
@@ -632,7 +653,7 @@ repair_firewall() {
     [[ "$ssh_port" == "22" ]] && continue
     allow_panel_port "$ssh_port"
   done <<<"$seen_ssh_ports"
-  # Re-apply rebuilds the whole chain from /var/lib/bpanel/firewall/rules.tsv,
+  # Re-apply rebuilds the whole chain from /var/lib/bpanel-firewall/rules.tsv,
   # which always includes SSH, the panel port and 80/443/465/587.
   run_firewall_helper firewall-apply >/dev/null
   run_firewall_helper firewall-status || true
