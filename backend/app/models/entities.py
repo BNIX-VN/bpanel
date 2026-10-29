@@ -416,17 +416,26 @@ class McpToken(Base):
 
 
 class CloudflareCredential(Base):
-    """A Cloudflare API token (Zone.DNS Edit), one per zone, stored encrypted.
+    """A Cloudflare API token (Zone.DNS Edit), stored encrypted, per account.
 
     Used for DNS-01 wildcard issuance and kept so certbot can auto-renew the
     wildcard cert unattended. The plaintext token only ever leaves here to be
     handed to the privileged helper on stdin.
+
+    A token is one account's secret, so it is scoped by owner_id - never global.
+    A lookup for a website uses the website owner's row only, so one tenant can
+    never spend another's token. The same zone may be saved by two accounts, so
+    uniqueness is (owner_id, zone). Legacy rows (owner_id NULL, from before this
+    was per-owner) match no owner and must be re-saved.
     """
 
     __tablename__ = "cloudflare_credentials"
+    __table_args__ = (UniqueConstraint("owner_id", "zone", name="uq_cloudflare_owner_zone"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    zone: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    owner_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    zone: Mapped[str] = mapped_column(String(253), index=True)
     api_token: Mapped[str] = mapped_column(Text)  # Fernet ciphertext
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

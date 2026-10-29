@@ -206,6 +206,20 @@ def purge_owner_dns_zones(db, owner_id: int) -> list[str]:
     return removed
 
 
+def purge_owner_cloudflare_credentials(db, owner_id: int) -> list[str]:
+    """Cloudflare API tokens an account saved. The row is now keyed on owner_id
+    and holds a live secret; a surviving row would hand the reused user id
+    another tenant's token."""
+    from app.models.entities import CloudflareCredential
+
+    rows = db.query(CloudflareCredential).filter(CloudflareCredential.owner_id == owner_id).all()
+    removed = [row.zone for row in rows]
+    for row in rows:
+        db.delete(row)
+    db.flush()
+    return removed
+
+
 def purge_owned_resources(db, owner_id: int) -> dict[str, list[str]]:
     """Everything keyed on owner_id that a user deletion has to take with it.
 
@@ -219,4 +233,5 @@ def purge_owned_resources(db, owner_id: int) -> dict[str, list[str]]:
         "sftp_accounts": purge_owner_sftp_accounts(db, owner_id),
         "passkeys": purge_owner_passkeys(db, owner_id),
         "dns_zones": purge_owner_dns_zones(db, owner_id),
+        "cloudflare_credentials": purge_owner_cloudflare_credentials(db, owner_id),
     }
