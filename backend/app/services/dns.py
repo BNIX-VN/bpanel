@@ -488,9 +488,16 @@ def may_edit(db: Session, user: User, zone_name: str) -> str:
     row = _row(db, zone)
     if row is None:
         raise DnsError("There is no such zone.", status=404)
-    if not can_access_owner(db, user, row.owner_id) and zone not in _domains_of(db, user.id):
-        raise DnsError("There is no such zone.", status=404)
-    return zone
+    if can_access_owner(db, user, row.owner_id):
+        return zone
+    # A zone the panel never assigned an owner (owner_id NULL) may be edited by
+    # the account whose website or alias has exactly that name. A zone owned by
+    # someone else is theirs alone: hosting a subdomain of it, or a like-named
+    # site, must not grant edit rights on their records (that let one tenant
+    # rewrite another's zone - e.g. a child zone shadowing the parent's MX).
+    if row.owner_id is None and zone in _domains_of(db, user.id):
+        return zone
+    raise DnsError("There is no such zone.", status=404)
 
 
 def _domains_of(db: Session, user_id: int) -> set[str]:
@@ -499,6 +506,19 @@ def _domains_of(db: Session, user_id: int) -> set[str]:
     names |= {alias.domain.lower() for alias in db.query(WebsiteAlias).join(Website)
               .filter(Website.owner_id == user_id)}
     return names
+
+
+def reassign_zone_owner(db: Session, hostnames, new_owner_id: int | None) -> None:
+    """Move the DNS zones named after these exact hostnames to a new owner.
+
+    Called when a website changes owner: without it the zone row keeps the old
+    owner_id, so the former owner still passes may_edit and can rewrite the
+    domain's DNS after it has moved to another tenant."""
+    names = {normalize_zone(h) for h in hostnames if h}
+    if not names:
+        return
+    for row in db.query(DnsZone).filter(DnsZone.name.in_(names)).all():
+        row.owner_id = new_owner_id
 
 
 def list_zones(db: Session, user: User) -> list[dict]:
@@ -741,6 +761,12 @@ def provision_domain(db: Session, domain: str, owner_id: int | None, config: dic
         add_record(parent.name, {"name": label, "type": "A", "ttl": config["ttl"],
                                  "content": config["zone_ip"]}, admin=True)
         return ("record", parent.name)
+    if parent is not None and parent.owner_id is not None and parent.owner_id != owner_id:
+        # The containing zone belongs to another account. Giving this caller a
+        # child zone here would let them serve authoritative records for a name
+        # under the real owner's domain (e.g. a mail.<domain> MX), shadowing the
+        # owner's zone. Decline; only the parent zone's owner may delegate it.
+        return None
     try:
         return ("zone", create_zone(db, domain, owner_id, claim_existing=False))
     except DnsError as exc:
@@ -917,6 +943,13 @@ def restore_defaults(db: Session, zone: str) -> None:
     if mail.active():
         for row in db.query(MailDomain).all():
             if row.domain == zone or row.domain.endswith("." + zone):
+                # Only (re)publish a mail domain's records when THIS zone is the
+                # one that actually holds them. If a more specific zone exists
+                # (e.g. sub.<zone> owned by another tenant), its records live
+                # there - restoring defaults on <zone> must not reach into it.
+                hosted = mail._hosted_zone(db, row)
+                if hosted is None or hosted.name != zone:
+                    continue
                 try:
                     mail.publish_dns(db, row, replace=True)
                 except mail.MailError as exc:

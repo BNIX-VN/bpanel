@@ -345,7 +345,24 @@ def test_a_zone_belongs_to_whoever_owns_the_website(env):
 
 
 def test_a_customer_edits_the_dns_of_every_domain_in_their_account(env):
+    dns.create_zone(env.db, "shop.vn", env.user("khach").id)
+    _website(env, "shop.vn", "khach")
+    assert dns.may_edit(env.db, env.user("khach"), "shop.vn") == "shop.vn"
+
+
+def test_a_customer_cannot_edit_a_zone_owned_by_another_user(env):
+    # Owning a like-named website must not grant edit rights on a zone another
+    # user owns (that let one tenant rewrite another's DNS).
     dns.create_zone(env.db, "shop.vn", env.user("other").id)
+    _website(env, "shop.vn", "khach")
+    with pytest.raises(dns.DnsError):
+        dns.may_edit(env.db, env.user("khach"), "shop.vn")
+
+
+def test_a_customer_edits_an_unowned_zone_matching_their_site(env):
+    # A zone PowerDNS serves that the panel never assigned an owner, matching
+    # the customer's exact site name, stays editable by them.
+    dns.create_zone(env.db, "shop.vn", None)
     _website(env, "shop.vn", "khach")
     assert dns.may_edit(env.db, env.user("khach"), "shop.vn") == "shop.vn"
 
@@ -402,9 +419,14 @@ def test_a_subdomain_of_your_own_zone_is_a_record_in_it(env):
     assert "blog.shop.vn." not in env.fake.zones
 
 
-def test_a_subdomain_of_someone_elses_zone_gets_its_own(env):
+def test_a_subdomain_of_someone_elses_zone_gets_no_zone(env):
     dns.zone_for_new_website(env.db, _site("shop.vn", env.user("khach")))
-    assert dns.zone_for_new_website(env.db, _site("blog.shop.vn", env.user("other"))) == "blog.shop.vn"
+    # A subdomain of another tenant's zone must NOT get its own authoritative
+    # child zone: that child would shadow the parent owner's records for the
+    # subtree (e.g. mail.<domain> MX). No zone, and nothing written into the
+    # parent's zone either.
+    assert dns.zone_for_new_website(env.db, _site("blog.shop.vn", env.user("other"))) is None
+    assert "blog.shop.vn." not in env.fake.zones
     assert env.fake.rrset("shop.vn", "blog.shop.vn.", "A") is None
 
 

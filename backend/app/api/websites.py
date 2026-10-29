@@ -1010,6 +1010,14 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     ) from exc
             for item in own_databases + app_databases:
                 item.owner_id = owner.id
+            # The DNS zone(s) for this domain follow it to the new owner, or the
+            # former owner keeps editing its records (dns.may_edit grants by
+            # DnsZone.owner_id).
+            dns.reassign_zone_owner(
+                db,
+                {website.domain, *(alias.domain for alias in website.aliases or [])},
+                owner.id,
+            )
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
         try:
