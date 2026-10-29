@@ -715,6 +715,12 @@ def restore_user_backup(backup_file: str, db) -> dict:
             website = db.query(Website).filter(Website.domain == domain).first()
             created_site = False
             if website is None:
+                # The exact-domain lookup above misses a name another tenant
+                # already serves as a www. or an alias; the alias loop below
+                # uses _hostname_conflicts but the primary domain never did, so
+                # a restore could claim such a name and collide with its vhost.
+                if _hostname_conflicts(db, domain):
+                    raise ValueError(f"Domain already belongs to another website: {domain}")
                 website = Website(
                     domain=domain,
                     owner_id=user.id,
@@ -747,6 +753,8 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 # archive's user and rewrote the vhost to serve their files.
                 if website.owner_id != user.id:
                     raise ValueError(f"Domain already belongs to another user: {domain}")
+                if _hostname_conflicts(db, domain, exclude_website_id=website.id):
+                    raise ValueError(f"Domain already belongs to another website: {domain}")
                 website.root_path = root_path
                 website.document_root = document_root
                 website.linux_user = linux_user
@@ -789,6 +797,16 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 ).first()
                 if conflict:
                     raise ValueError(f"Database name already belongs to another website: {db_name}")
+                # db_user, like db_name, has to belong to this website. Without
+                # this check a restore with allow_existing_user=True would ALTER
+                # USER another account's MariaDB user to the archive's password,
+                # taking it over.
+                user_conflict = db.query(DatabaseAccount).filter(
+                    DatabaseAccount.db_user == db_user,
+                    DatabaseAccount.website_id != website.id,
+                ).first()
+                if user_conflict:
+                    raise ValueError(f"Database user already belongs to another website: {db_user}")
                 # A restore recreates the account this archive already owned.
                 mariadb.create_database_credentials(
                     db_name, db_user, db_password, allow_existing_user=True
