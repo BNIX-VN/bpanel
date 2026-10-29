@@ -8,6 +8,7 @@ from pathlib import Path
 import posixpath
 import re
 import secrets
+import shutil
 import tarfile
 import tempfile
 from typing import List, Optional
@@ -614,7 +615,14 @@ def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -
         return target
 
 
-def restore_user_backup(backup_file: str, db) -> dict:
+def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False) -> dict:
+    # Some manifest values set site settings whose REST write path is admin-only
+    # (custom nginx, custom ModSecurity rules, an http-flood profile, a proxy
+    # upstream to any address, and the account's quotas). The archive is
+    # untrusted input, so these are applied only when the operator running the
+    # restore is an administrator; under any lesser authority they are dropped
+    # and the restored account's own (end_user) authority stands. Default False
+    # is the safe choice for any caller that does not state the operator's role.
     archive = user_backup_path(backup_file)
     manifest = read_backup_manifest(str(archive))
     if manifest.get("kind") not in RESTORABLE_BACKUP_KINDS:
@@ -651,9 +659,13 @@ def restore_user_backup(backup_file: str, db) -> dict:
             hashed_password=hash_password(generated_password),
             role=Role.end_user.value,
             is_active=bool(user_info.get("is_active", True)),
-            website_limit=int(user_info.get("website_limit") or 5),
+            # Quotas are admin-only; a non-admin restore gets the defaults, not
+            # whatever limits the archive claims.
+            website_limit=(int(user_info.get("website_limit") or 5) if operator_is_admin else 5),
             # 0 is unlimited, not "missing": `or 1024` turned it into 1 GB.
-            storage_limit_mb=int(user_info["storage_limit_mb"]) if user_info.get("storage_limit_mb") is not None else 1024,
+            storage_limit_mb=(
+                (int(user_info["storage_limit_mb"]) if user_info.get("storage_limit_mb") is not None else 1024)
+                if operator_is_admin else 1024),
             # Its own SFTP secret, like every other creation path. Leaving this
             # NULL would claim the Linux password is the panel password, which
             # is not true here - and NULL is what tells the panel an account is
@@ -683,11 +695,16 @@ def restore_user_backup(backup_file: str, db) -> dict:
             app_type = site_info.get("app_type") or "wordpress"
             proxy_url = ""
             if app_type == "proxy":
-                # Restored by the administrator, who may name any address.
-                try:
-                    proxy_url = nginx.validate_proxy_url(site_info.get("proxy_url"))
-                except ValueError:
+                if not operator_is_admin:
+                    # A proxy upstream may name any address, so it is admin-only:
+                    # a non-admin restore cannot point the site at an arbitrary
+                    # (e.g. internal) host. Fall back to a static site.
                     app_type = "static"
+                else:
+                    try:
+                        proxy_url = nginx.validate_proxy_url(site_info.get("proxy_url"))
+                    except ValueError:
+                        app_type = "static"
             if app_type not in {"wordpress", "php", "static", "proxy"}:
                 app_type = "wordpress"
             nginx_rewrite_mode = site_info.get("nginx_rewrite_mode")
@@ -712,6 +729,18 @@ def restore_user_backup(backup_file: str, db) -> dict:
             site_users.ensure_site_runtime(domain, root_path, runtime_php_version, linux_user)
             site_users.ensure_document_root(root_path, document_root, linux_user)
 
+            # Admin-only site settings: honoured only for an admin operator, so
+            # an untrusted archive cannot carry them in under a non-admin restore.
+            if operator_is_admin:
+                nginx_custom = site_info.get("nginx_custom") or ""
+                waf_default_rules = site_info.get("waf_default_rules") or ""
+                waf_custom_rules = site_info.get("waf_custom_rules") or ""
+                http_flood_enabled = bool(site_info.get("http_flood_enabled", False))
+                http_flood_config = site_info.get("http_flood_config") or ""
+            else:
+                nginx_custom = waf_default_rules = waf_custom_rules = http_flood_config = ""
+                http_flood_enabled = False
+
             website = db.query(Website).filter(Website.domain == domain).first()
             created_site = False
             if website is None:
@@ -733,14 +762,14 @@ def restore_user_backup(backup_file: str, db) -> dict:
                     proxy_preserve_host=site_info.get("proxy_preserve_host", True) is not False,
                     ssl_enabled=False,
                     status=site_info.get("status") or "active",
-                    nginx_custom=site_info.get("nginx_custom") or "",
+                    nginx_custom=nginx_custom,
                     nginx_config_mode="managed",
                     nginx_rewrite_mode=nginx_rewrite_mode,
                     waf_enabled=bool(site_info.get("waf_enabled", True)),
-                    waf_default_rules=site_info.get("waf_default_rules") or "",
-                    waf_custom_rules=site_info.get("waf_custom_rules") or "",
-                    http_flood_enabled=bool(site_info.get("http_flood_enabled", False)),
-                    http_flood_config=site_info.get("http_flood_config") or "",
+                    waf_default_rules=waf_default_rules,
+                    waf_custom_rules=waf_custom_rules,
+                    http_flood_enabled=http_flood_enabled,
+                    http_flood_config=http_flood_config,
                 )
                 db.add(website)
                 db.flush()
@@ -763,14 +792,14 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 website.proxy_url = proxy_url
                 website.proxy_preserve_host = site_info.get("proxy_preserve_host", True) is not False
                 website.status = site_info.get("status") or "active"
-                website.nginx_custom = site_info.get("nginx_custom") or ""
+                website.nginx_custom = nginx_custom
                 website.nginx_config_mode = "managed"
                 website.nginx_rewrite_mode = nginx_rewrite_mode
                 website.waf_enabled = bool(site_info.get("waf_enabled", True))
-                website.waf_default_rules = site_info.get("waf_default_rules") or ""
-                website.waf_custom_rules = site_info.get("waf_custom_rules") or ""
-                website.http_flood_enabled = bool(site_info.get("http_flood_enabled", False))
-                website.http_flood_config = site_info.get("http_flood_config") or ""
+                website.waf_default_rules = waf_default_rules
+                website.waf_custom_rules = waf_custom_rules
+                website.http_flood_enabled = http_flood_enabled
+                website.http_flood_config = http_flood_config
                 db.flush()
 
             existing_aliases = {
@@ -1011,47 +1040,67 @@ def save_uploaded_user_backup(filename: str, source_file) -> str:
     return str(target)
 
 
+def _stage_site_tree(archive: Path, stage: Path, has_site_prefix: bool) -> None:
+    """Extract a per-site backup's file tree into a panel-owned staging dir,
+    skipping database/ members and (when present) stripping the site/ prefix.
+
+    Extraction targets the staging area, never the site root, so the site's
+    Linux user cannot race the tarfile path filter (TOCTOU)."""
+    stage.mkdir(parents=True, exist_ok=True)
+
+    def safe_filter(member: tarfile.TarInfo, dest_path: str):
+        # Hard-links inside backups are uncommon and risky; refuse outright.
+        if member.islnk():
+            return None
+        return tarfile.data_filter(member, dest_path)
+
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar.getmembers():
+            name = member.name
+            if member.islnk() or name == "database" or name.startswith("database/"):
+                continue
+            if has_site_prefix:
+                if name == "site" or not name.startswith("site/"):
+                    continue
+                member.name = name[len("site/"):]
+            if not member.name:
+                continue
+            try:
+                tar.extract(member, path=str(stage), filter=safe_filter)
+            except TypeError:
+                # Older Python (<3.12): manual path/symlink safety check.
+                member_path = (stage / member.name).resolve()
+                if stage != member_path and stage not in member_path.parents:
+                    raise ValueError("Backup archive contains unsafe paths")
+                if member.issym():
+                    link_path = (member_path.parent / member.linkname).resolve()
+                    if stage != link_path and stage not in link_path.parents:
+                        raise ValueError("Backup archive contains unsafe links")
+                tar.extract(member, str(stage))
+
+
 def restore_backup(website: Website, backup_file: str) -> str:
     archive = backup_path(website.domain, backup_file)
     destination = Path(website.root_path).resolve()
-
-    # Single-pass extraction with PEP 706 data filter (Python 3.12+).
-    # The data filter rejects path traversal, absolute paths, and unsafe
-    # symlinks at the tarfile layer itself.
+    if not website.linux_user:
+        raise ValueError("This website has no Linux user to restore into")
+    # Stage into a panel-owned directory, then let the privileged helper copy it
+    # into the site root as root. The site root belongs to the customer's Linux
+    # user, and this route is owner-callable, so extracting straight into it (as
+    # the panel account) let that user race the tarfile path filter and redirect
+    # a write outside their jail. The staging area under IMPORT_STAGE_BASE is
+    # panel-owned, so nothing lower-trust can race the extraction. site-populate
+    # wipes the root before copying, so this restores the site to the archived
+    # state (a replace, not an overlay on whatever is there now).
     with tarfile.open(archive, "r:gz") as tar:
-        members = list(tar.getmembers())
-        has_site_prefix = any(m.name == "site" or m.name.startswith("site/") for m in members)
-
-        def safe_filter(member: tarfile.TarInfo, dest_path: str):
-            # Hard-links inside backups are uncommon and risky; refuse outright.
-            if member.islnk():
-                return None
-            if member.name.startswith("database/"):
-                return None
-            if has_site_prefix:
-                if member.name == "site":
-                    return None
-                if not member.name.startswith("site/"):
-                    return None
-                member.name = member.name[len("site/"):]
-            return tarfile.data_filter(member, dest_path)
-
-        try:
-            tar.extractall(path=str(destination), filter=safe_filter)
-        except TypeError:
-            # Older Python (<3.12) without the filter parameter — fall back to
-            # manual extraction with the existing safety check.
-            _ensure_safe_tar(archive, destination)
-            for member in members:
-                if member.name.startswith("database/"):
-                    continue
-                if has_site_prefix:
-                    if member.name == "site":
-                        continue
-                    if not member.name.startswith("site/"):
-                        continue
-                    member.name = member.name[len("site/"):]
-                tar.extract(member, str(destination))
+        has_site_prefix = any(m.name == "site" or m.name.startswith("site/") for m in tar.getmembers())
+    site_users.IMPORT_STAGE_BASE.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix="bpanel-site-restore-", dir=str(site_users.IMPORT_STAGE_BASE)))
+    try:
+        _stage_site_tree(archive, stage, has_site_prefix)
+        site_users.import_site_files(str(destination), website.linux_user, str(stage))
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
     return str(destination)
 
 

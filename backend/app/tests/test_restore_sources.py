@@ -212,7 +212,7 @@ def test_each_account_is_reported_and_a_downloaded_copy_goes_once_restored(backu
                "/backups/user-b-1.tar.gz": (str(backups.make("restore/user-b-1-def456.tar.gz")), True)}
     monkeypatch.setattr(restore_sources, "fetch", lambda source, key, size, db: fetched[key])
 
-    def restore(path, db):
+    def restore(path, db, operator_is_admin=False):
         if "user-b" in path:
             raise ValueError("This is not a bpanel or opanel user backup")
         return {"username": "a", "message": "Restored a"}

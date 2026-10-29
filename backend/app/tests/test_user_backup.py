@@ -65,3 +65,48 @@ def test_restore_refuses_a_non_user_archive(tmp_path, monkeypatch):
         assert "opanel" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("restore_user_backup accepted a non-user archive")
+
+
+def test_per_site_restore_stages_into_a_panel_dir_not_the_site_root(tmp_path, monkeypatch):
+    """restore_backup must extract into the panel-owned staging area and hand
+    the tree to the site user via the helper - never extract as the panel
+    account straight into the (customer-owned) site root, which the customer
+    could race (TOCTOU)."""
+    import io
+    from pathlib import Path
+    from types import SimpleNamespace
+    from app.services import site_users
+
+    monkeypatch.setattr(backup.settings, "backup_root", str(tmp_path / "backups"))
+    monkeypatch.setattr(site_users, "IMPORT_STAGE_BASE", tmp_path / "stage")
+    domain = "shop.vn"
+    bdir = tmp_path / "backups" / domain
+    bdir.mkdir(parents=True)
+    archive = bdir / "b.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        blob = b"<?php echo 1;"
+        info = tarfile.TarInfo("site/public_html/index.php")
+        info.size = len(blob)
+        tar.addfile(info, io.BytesIO(blob))
+
+    captured = {}
+
+    def fake_import(root_path, linux_user, staged):
+        captured["root_path"] = root_path
+        captured["linux_user"] = linux_user
+        captured["staged"] = staged
+        captured["files"] = sorted(p.name for p in Path(staged).rglob("*.php"))
+
+    monkeypatch.setattr(site_users, "import_site_files", fake_import)
+    site_root = tmp_path / "home" / "khach" / domain
+    website = SimpleNamespace(domain=domain, root_path=str(site_root), linux_user="khach")
+
+    backup.restore_backup(website, str(archive))
+
+    assert captured["linux_user"] == "khach"
+    assert captured["root_path"] == str(Path(site_root).resolve())
+    # Extraction landed in the panel-owned staging area, with the site/ prefix
+    # stripped, and never in the real site root.
+    assert str(site_users.IMPORT_STAGE_BASE) in captured["staged"]
+    assert captured["files"] == ["index.php"]
+    assert not any(site_root.rglob("*.php"))

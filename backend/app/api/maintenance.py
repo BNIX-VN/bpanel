@@ -809,7 +809,8 @@ def upload_user_backup(file: UploadFile = File(...), db: Session = Depends(get_d
 def restore_user_backup(payload: UserRestoreBackup, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
     try:
-        result = backup.restore_user_backup(payload.backup_file, db)
+        result = backup.restore_user_backup(payload.backup_file, db,
+                                            operator_is_admin=is_admin_role(current_user.role))
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_action(db, current_user.id, "restore_user", result.get("username", "user"), payload.backup_file, request=request)
@@ -1176,7 +1177,8 @@ def _da_import_busy() -> bool:
     return da_import.detached_import_status()["status"] == "running"
 
 
-def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: list[dict]) -> None:
+def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: list[dict],
+                     operator_is_admin: bool = False) -> None:
     with _restore_run_lock:
         _set_backup_job(job_id, status="running", started_at=_now_iso(), message="Restoring")
         db = SessionLocal()
@@ -1210,7 +1212,7 @@ def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: lis
                         log_action(db, request_user_id, f"{kind}_import", Path(path).name,
                                    restore_sources.describe(source, db))
                     else:
-                        outcome = backup.restore_user_backup(path, db)
+                        outcome = backup.restore_user_backup(path, db, operator_is_admin=operator_is_admin)
                     username = outcome.get("username", "") if isinstance(outcome, dict) else ""
                     _set_restore_result(job_id, index, status="done", username=username or item.get("username", ""),
                                         detail=outcome.get("message", "") if isinstance(outcome, dict) else "",
@@ -1266,7 +1268,8 @@ def restore_run(payload: RestoreRunRequest, request: Request, db: Session = Depe
     # included - goes to the worker only; it is never kept in the job the page
     # can read, nor written anywhere.
     _backup_job_executor.submit(_run_restore_job, job["job_id"], current_user.id, source,
-                                [item.model_dump() for item in payload.items])
+                                [item.model_dump() for item in payload.items],
+                                is_admin_role(current_user.role))
     log_action(db, current_user.id, "queue_restore_users", restore_sources.describe(source, db),
                f"{len(results)} backup(s)", request=request)
     return job
