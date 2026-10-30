@@ -48,14 +48,29 @@ def test_verify_token_rejects_a_non_active_token(monkeypatch):
 
 def test_the_token_is_stored_encrypted_and_round_trips():
     db = _db()
-    cloudflare.save_credential(db, "Example.com", "cf-secret-token-value")
+    cloudflare.save_credential(db, "Example.com", "cf-secret-token-value", owner_id=1)
 
     row = db.query(CloudflareCredential).filter_by(zone="example.com").one()
     assert "cf-secret-token-value" not in row.api_token  # ciphertext, not plaintext
     assert row.api_token.startswith("fernet:")
-    assert cloudflare.get_token(db, "example.com") == "cf-secret-token-value"
-    assert cloudflare.has_token(db, "example.com") is True
+    assert row.owner_id == 1
+    assert cloudflare.get_token(db, "example.com", 1) == "cf-secret-token-value"
+    assert cloudflare.has_token(db, "example.com", 1) is True
 
-    cloudflare.save_credential(db, "example.com", "rotated-token")
-    assert cloudflare.get_token(db, "example.com") == "rotated-token"
+    cloudflare.save_credential(db, "example.com", "rotated-token", owner_id=1)
+    assert cloudflare.get_token(db, "example.com", 1) == "rotated-token"
     assert db.query(CloudflareCredential).count() == 1
+
+
+def test_tokens_are_scoped_per_owner():
+    db = _db()
+    cloudflare.save_credential(db, "example.com", "owner-A-token", owner_id=1)
+    cloudflare.save_credential(db, "example.com", "owner-B-token", owner_id=2)
+    # Same zone, two owners -> two independent rows ((owner_id, zone) unique).
+    assert db.query(CloudflareCredential).count() == 2
+    assert cloudflare.get_token(db, "example.com", 1) == "owner-A-token"
+    assert cloudflare.get_token(db, "example.com", 2) == "owner-B-token"
+    # An account that saved no token gets nothing, even when another owner has
+    # one for the zone - no borrowing another tenant's secret.
+    assert cloudflare.get_token(db, "example.com", 3) is None
+    assert cloudflare.has_token(db, "example.com", 3) is False

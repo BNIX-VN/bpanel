@@ -40,6 +40,10 @@ import { PAGE_TITLES, hubLanding, hubOf, isHubKey, sidebarItems, sidebarKeyOf } 
 import { FeatureIcon } from './icons/feature/index.js';
 import { TILES, dashboardSections, tileLabel, tileVisible } from './lib/features.jsx';
 import { ADDON_META, addonFeatureIcon, addonLabel } from './lib/addons.jsx';
+
+// Addons that create data a plain uninstall keeps (so they also offer a
+// "remove and delete data" action). The others clean up fully on uninstall.
+const PURGEABLE_ADDONS = new Set(['dns', 'mail', 'application', 'wordpress', 'fail2ban', 'malware']);
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './shared/style.css';
 import './shared/brand.css';
@@ -3411,19 +3415,26 @@ function App() {
     if (data) setDemoSettings(data);
   }
 
-  async function setAddonInstalled(slug, install) {
+  async function setAddonInstalled(slug, install, purge = false) {
     const addon = addons.items.find(item => item.slug === slug);
     const label = addon?.name || slug;
     if (!install) {
       // Removing an addon takes what it does away, so the admin types its
-      // name rather than clicking through a generic confirm.
+      // name rather than clicking through a generic confirm. Deleting its data
+      // is irreversible, so that path says so plainly.
       const ok = await confirmDialog({
-        title: t('Remove {name}?', { name: t(label) }), subject: t(label), danger: true, confirmLabel: t('Remove'),
-        message: t('It stops what it is doing.'), typeToConfirm: t(label),
+        title: purge ? t('Remove {name} and delete its data?', { name: t(label) }) : t('Remove {name}?', { name: t(label) }),
+        subject: t(label), danger: true,
+        confirmLabel: purge ? t('Remove and delete data') : t('Remove'),
+        message: purge
+          ? t('This permanently deletes everything this addon created — mail, DNS zones, application files, and so on. It cannot be undone.')
+          : t('It stops what it is doing; its data is kept and comes back if you install it again.'),
+        typeToConfirm: t(label),
       });
       if (!ok) return;
     }
-    const data = await request(`/addons/${slug}/${install ? 'install' : 'uninstall'}`, { method: 'POST' },
+    const path = `/addons/${slug}/${install ? 'install' : 'uninstall'}${!install && purge ? '?purge=true' : ''}`;
+    const data = await request(path, { method: 'POST' },
       install ? t('Installing {name}...', { name: t(label) }) : t('Removing {name}...', { name: t(label) }));
     if (data) {
       // Each addon says in its own words what it stopped and what it kept;
@@ -7943,6 +7954,9 @@ function App() {
                         && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => navigateToPage(ADDON_META[addon.slug].page)}>{t('Open')}</button>}
                       <button type="button" className="secondary-light danger-hover" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}
                         aria-label={t('Uninstall {name}', { name: label })} title={t('Uninstall {name}', { name: label })}><Trash2 size={14} aria-hidden="true"/> <span className="addon-row-label">{t('Uninstall')}</span></button>
+                      {PURGEABLE_ADDONS.has(addon.slug)
+                        && <button type="button" className="secondary-light danger-hover" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false, true)}
+                          aria-label={t('Uninstall {name} and delete its data', { name: label })} title={t('Uninstall {name} and delete its data', { name: label })}><Trash2 size={14} aria-hidden="true"/> <span className="addon-row-label">{t('Uninstall + delete data')}</span></button>}
                     </>
                     : <button type="button" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14} aria-hidden="true"/> {t('Install')}</button>}
                 </div>

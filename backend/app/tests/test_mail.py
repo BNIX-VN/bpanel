@@ -647,6 +647,20 @@ def test_a_backup_cannot_take_someone_elses_domain_or_carry_a_clear_password(env
             {"local_part": "info", "domain": "khach.vn", "password_hash": "plaintext"}]}, lambda d, l: None)
 
 
+def test_restore_cannot_forward_on_another_users_mail_domain(env):
+    # A forwarder has no owner column; its domain must be a mail domain the
+    # restoring user owns, or an archive could overwrite another tenant's mail.
+    _domain(env, "other", "other.vn")
+    with pytest.raises(ValueError):
+        mail.restore_manifest(
+            env.db,
+            env.user("khach"),
+            {"forwarders": [{"local_part": "sales", "domain": "other.vn",
+                             "destinations": ["x@gmail.com"]}]},
+            lambda d, l: None,
+        )
+
+
 def test_deleting_a_user_takes_their_mail_domains(env, monkeypatch):
     from app.services import site_users, teardown
 

@@ -400,6 +400,19 @@ def forget_website(db: Session, website_id: int) -> None:
     db.query(WpInstall).filter(WpInstall.website_id == website_id).delete(synchronize_session=False)
 
 
+def purge_data(db: Session) -> list[str]:
+    """Forget every WordPress the panel scanned and its task history.
+
+    For removing the WordPress Manager addon with "delete data": the inventory
+    (WpInstall) and the job log (WpJob) go. The WordPress sites themselves are
+    not touched - their files stay in place, as they are the customer's."""
+    names = [row.path for row in db.query(WpInstall).all()]
+    db.query(WpJob).delete(synchronize_session=False)
+    db.query(WpInstall).delete(synchronize_session=False)
+    db.commit()
+    return names
+
+
 # --- Tasks --------------------------------------------------------------------------------
 
 def _factory():

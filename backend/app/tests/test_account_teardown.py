@@ -146,6 +146,19 @@ def test_deleting_the_user_afterwards_no_longer_raises(db, monkeypatch):
     assert db.query(DatabaseAccount).count() == 0
 
 
+def test_dns_zones_are_purged_with_their_owner(db):
+    # A DnsZone row carries owner_id and SQLite reuses the freed user id, so a
+    # surviving zone would hand the next account edit rights on the old domain.
+    from app.models.entities import DnsZone
+
+    user = _user(db)
+    db.add(DnsZone(name="tenant.vn", owner_id=user.id))
+    db.flush()
+    result = teardown.purge_owned_resources(db, user.id)
+    assert "tenant.vn" in result["dns_zones"]
+    assert db.query(DnsZone).filter_by(owner_id=user.id).count() == 0
+
+
 def test_all_three_deletion_paths_use_the_shared_sweep():
     """They drifted once. One implementation is what stops it happening again."""
     root = Path(__file__).resolve().parents[3] / "backend" / "app"

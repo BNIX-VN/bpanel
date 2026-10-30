@@ -98,23 +98,32 @@ def zone_for_domain(token: str, domain: str) -> str:
     )
 
 
-def get_token(db: Session, zone: str) -> str | None:
-    row = db.query(CloudflareCredential).filter(CloudflareCredential.zone == zone.lower()).first()
+def get_token(db: Session, zone: str, owner_id: int) -> str | None:
+    row = (db.query(CloudflareCredential)
+           .filter(CloudflareCredential.zone == zone.lower(),
+                   CloudflareCredential.owner_id == owner_id)
+           .first())
     if not row:
         return None
     return decrypt(row.api_token)
 
 
-def has_token(db: Session, zone: str) -> bool:
-    return db.query(CloudflareCredential.id).filter(CloudflareCredential.zone == zone.lower()).first() is not None
+def has_token(db: Session, zone: str, owner_id: int) -> bool:
+    return (db.query(CloudflareCredential.id)
+            .filter(CloudflareCredential.zone == zone.lower(),
+                    CloudflareCredential.owner_id == owner_id)
+            .first() is not None)
 
 
-def save_credential(db: Session, zone: str, token: str) -> None:
+def save_credential(db: Session, zone: str, token: str, owner_id: int) -> None:
     zone = zone.lower()
-    row = db.query(CloudflareCredential).filter(CloudflareCredential.zone == zone).first()
+    row = (db.query(CloudflareCredential)
+           .filter(CloudflareCredential.zone == zone,
+                   CloudflareCredential.owner_id == owner_id)
+           .first())
     if row:
         row.api_token = encrypt(token.strip())
         row.updated_at = datetime.utcnow()
     else:
-        db.add(CloudflareCredential(zone=zone, api_token=encrypt(token.strip())))
+        db.add(CloudflareCredential(zone=zone, api_token=encrypt(token.strip()), owner_id=owner_id))
     db.commit()

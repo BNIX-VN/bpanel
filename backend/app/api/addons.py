@@ -12,7 +12,8 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.services import addons, demo_mode, dns, fail2ban, mail, panel_settings, redis_accounts, resource_limits, site_apps
+from app.services import (addons, demo_mode, dns, fail2ban, mail, malware_scan, panel_settings,
+                          redis_accounts, resource_limits, site_apps, wp_manager)
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -197,13 +198,19 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
 
 
 @router.post("/{slug}/uninstall")
-def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Turn an addon off. Nothing it created is deleted.
+def uninstall_addon(slug: str, purge: bool = False, db: Session = Depends(get_db),
+                    current_user: User = Depends(get_current_user)):
+    """Turn an addon off, and with ``purge=true`` also delete the data it created.
 
-    The units are stopped, because a panel that no longer shows a feature should
-    not keep running it where nobody can see or manage it. Everything else — the
-    files, the volumes, the rows — stays exactly where it is, so installing the
-    addon again brings it all back.
+    Without purge the units are stopped and disabled (a panel that no longer
+    shows a feature should not keep running it) but the files, volumes, rows and
+    packages stay, so installing again brings everything back.
+
+    With purge the addon's data is deleted too - destructive and not reversible:
+    DNS zones, mail (mailboxes, forwarders, DKIM and the mail on disk),
+    application files/volumes, the WordPress inventory, fail2ban's config/history
+    and package, and the malware scan reports/schedule. The shared scan engine
+    (ClamAV/LMD) is left in place.
     """
     ensure_role(current_user.role, Role.admin)
     entry = addons.known(slug)
@@ -270,13 +277,45 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         # Before the flag goes: once it has, these are ordinary accounts, and
         # their passwords are on the sign-in page and in every screenshot.
         retired = demo_mode.switch_off(db)
+    purged: list[str] = []
+    if purge:
+        # The service is already stopped above; now delete the data it created.
+        # Destructive and not reversible - the UI gates this behind an explicit
+        # confirmation.
+        try:
+            if slug == addons.DNS:
+                purged = dns.purge_data(db)
+            elif slug == addons.MAIL:
+                purged = mail.purge_data(db)
+            elif slug == addons.APPLICATION:
+                purged = site_apps.purge_data(db)
+            elif slug == addons.WORDPRESS:
+                purged = wp_manager.purge_data(db)
+            elif slug == addons.FAIL2BAN:
+                fail2ban.purge_data()
+            elif slug == addons.MALWARE:
+                malware_scan.purge_data()
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     addons.uninstall(slug)
     if slug == addons.SHARED_BLOCKLIST:
         # The list off the firewall and the key forgotten, now.
         from app.services import shared_blocklist
 
         shared_blocklist.reconcile_in_background()
-    log_action(db, current_user.id, "uninstall_addon", slug, f"stopped {len(stopped)} revoked {revoked}")
+    log_action(db, current_user.id, "uninstall_addon", slug,
+               f"stopped {len(stopped)} revoked {revoked} purged {len(purged)}{' (delete data)' if purge else ''}")
+    if purge:
+        return {
+            "slug": slug,
+            "name": entry["name"],
+            "installed": False,
+            "stopped": stopped,
+            "could_not_stop": failed,
+            "revoked_tokens": revoked,
+            "purged": purged,
+            "kept": "The data this addon created has been deleted. The shared scan engine (ClamAV/LMD), if any, was left in place.",
+        }
     return {
         "slug": slug,
         "name": entry["name"],
@@ -284,6 +323,7 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         "stopped": stopped,
         "could_not_stop": failed,
         "revoked_tokens": revoked,
+        "purged": purged,
         "kept": ("The demo accounts now have random passwords, so the public ones no longer work. Installing the addon again restores them."  # noqa: E501
                  if retired else "No demo accounts were set.")
         if slug == addons.DEMO
