@@ -471,6 +471,30 @@ def delete_for_owner(db: Session, owner: User) -> list[str]:
     return names
 
 
+def purge_data(db: Session) -> list[str]:
+    """Delete every mail domain, mailbox and forwarder, and wipe the mailboxes'
+    mail on disk.
+
+    For removing the Mail addon with "delete data". Destructive and not
+    reversible: every account's mail, mailboxes, forwarders and DKIM keys go."""
+    rows = db.query(MailDomain).all()
+    names: list[str] = []
+    for row in rows:
+        owner = db.query(User).filter(User.id == row.owner_id).first()
+        if row.webmail_host:
+            shell.privileged("mail-webmail-host-remove", helper_args=[row.domain], check=False, fallback=["true"])
+        if owner is not None:
+            # Wipes the ~/Maildir trees for this domain's mailboxes.
+            shell.privileged("mail-purge-domain", helper_args=[linux_user_of(owner), row.domain],
+                             check=False, fallback=["true"], timeout=600)
+        db.query(MailForwarder).filter(MailForwarder.domain == row.domain).delete(synchronize_session=False)
+        names.append(row.domain)
+        db.delete(row)
+    db.query(MailAccount).delete(synchronize_session=False)
+    db.commit()
+    return names
+
+
 def set_catch_all(db: Session, actor: User, domain_id: int, target: str) -> MailDomain:
     row = get_domain(db, actor, domain_id)
     value = (target or "").strip()

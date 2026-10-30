@@ -2123,6 +2123,19 @@ remove_fail2ban() {
   echo "fail2ban stopped and disabled. Config and ban history kept."
 }
 
+remove_fail2ban_purge() {
+  # Full removal for "remove addon + delete data": the service, the jail
+  # config, the ban history and the package all go.
+  systemctl disable --now fail2ban >/dev/null 2>&1 || true
+  rm -f /etc/fail2ban/jail.local
+  rm -f /var/lib/fail2ban/fail2ban.sqlite3 /var/lib/fail2ban/fail2ban.sqlite3-* 2>/dev/null || true
+  if pkg_installed fail2ban; then
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y fail2ban >/dev/null 2>&1 \
+      || DEBIAN_FRONTEND=noninteractive apt-get remove -y fail2ban >/dev/null 2>&1 || true
+  fi
+  echo "fail2ban removed: service, jail config, ban history and package all gone."
+}
+
 # ---- DNS Manager (PowerDNS, optional) -----------------------------------------
 # The panel edits zones through PowerDNS's HTTP API on loopback, with the key in
 # PDNS_API_KEY_FILE (root:bpanel 0640): no call to this helper per record.
@@ -9339,6 +9352,10 @@ case "$cmd" in
     [[ $# -eq 0 ]] || deny "usage: fail2ban-remove"
     remove_fail2ban
     ;;
+  fail2ban-purge)
+    [[ $# -eq 0 ]] || deny "usage: fail2ban-purge"
+    remove_fail2ban_purge
+    ;;
 
   fail2ban-status)
     [[ $# -eq 0 ]] || deny "usage: fail2ban-status"
@@ -9563,6 +9580,16 @@ case "$cmd" in
       running=0
     fi
     echo "installed=${installed} running=${running} $(clamav_filter_status)"
+    ;;
+
+  malware-purge-reports)
+    # "Remove addon + delete data": drop the scan reports. The engine (ClamAV,
+    # LMD, signatures) is shared base tooling and is left alone.
+    [[ $# -eq 0 ]] || deny "usage: malware-purge-reports"
+    if [[ -d "$MALWARE_JOBS_DIR" ]]; then
+      find "$MALWARE_JOBS_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
+    fi
+    echo "malware scan reports cleared."
     ;;
 
   clamav-filter)

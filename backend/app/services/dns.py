@@ -582,6 +582,21 @@ def delete_zone(db: Session, zone: str) -> None:
         db.commit()
 
 
+def purge_data(db: Session) -> list[str]:
+    """Remove every zone the panel serves, from PowerDNS and the database.
+
+    For removing the DNS addon with "delete data": the zones are gone, not just
+    left unserved. Destructive and not reversible."""
+    removed: list[str] = []
+    for row in db.query(DnsZone).all():
+        try:
+            delete_zone(db, row.name)
+        except DnsError:
+            pass
+        removed.append(row.name)
+    return removed
+
+
 def _zone_data(zone: str) -> dict:
     return _request("GET", f"/zones/{_absolute(zone)}")
 
