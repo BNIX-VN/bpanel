@@ -1261,6 +1261,12 @@ WantedBy=multi-user.target
 SERVICE
   systemctl daemon-reload
   systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
+  # The unit above has just been rewritten correct. A box that last ran autotune
+  # while the unit was still broken (pre-Aug-2026, missing SUDO_USER) keeps that
+  # failed status in `systemctl --failed` forever, because autotune is a oneshot
+  # that only reruns at boot. Clear the stale failure now so the fixed unit does
+  # not keep flagging an error it can no longer produce; it runs clean next boot.
+  systemctl reset-failed bpanel-autotune.service >/dev/null 2>&1 || true
   # Keep the clock honest for TOTP: the bpanel-timesync timer steps the clock
   # from an HTTPS Date header when UDP 123 is blocked. An update never changes
   # the server timezone - that stays the operator's call (PANEL_TIMEZONE at
