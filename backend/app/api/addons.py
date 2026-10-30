@@ -5,7 +5,7 @@ Every other user is told what exists so they know what to ask for, without being
 able to turn it on.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -198,7 +198,7 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
 
 
 @router.post("/{slug}/uninstall")
-def uninstall_addon(slug: str, purge: bool = Query(False), db: Session = Depends(get_db),
+def uninstall_addon(slug: str, purge: bool = False, db: Session = Depends(get_db),
                     current_user: User = Depends(get_current_user)):
     """Turn an addon off, and with ``purge=true`` also delete the data it created.
 
