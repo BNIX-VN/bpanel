@@ -715,6 +715,24 @@ def delete_runtime(app: SiteApp, name: str | None = None) -> None:
     )
 
 
+def purge_data(db: Session) -> list[str]:
+    """Delete every application: its unit, container, volumes, env/compose file
+    and database row.
+
+    For removing the Application addon with "delete data". Destructive and not
+    reversible. site-app-delete removes the directory and volumes too."""
+    removed: list[str] = []
+    for app in db.query(SiteApp).all():
+        try:
+            delete_runtime(app)
+        except (RuntimeError, ValueError):
+            pass
+        removed.append(app.name)
+        db.delete(app)
+    db.commit()
+    return removed
+
+
 def move_to_owner(app: SiteApp, new_owner: User, check_only: bool = False) -> None:
     """Hand an application to another account, with its files and its unit.
 

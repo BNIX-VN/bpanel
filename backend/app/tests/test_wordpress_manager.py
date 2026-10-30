@@ -498,3 +498,25 @@ def test_core_checksum_parse_clean():
 
     r = _parse_core_checksums("Success: WordPress installation verifies against checksums.")
     assert r["count"] == 0 and not r["modified"] and not r["missing"] and not r["extra"]
+
+
+def test_purge_data_clears_the_wordpress_inventory_and_jobs():
+    """Removing the WordPress Manager addon with 'delete data' forgets every
+    scanned WordPress and its task log; the sites themselves are untouched."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.core.database import Base
+    from app.models.entities import WpInstall, WpJob
+    from app.services import wp_manager
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    db = sessionmaker(bind=engine)()
+    db.add(WpInstall(website_id=1, owner_id=1, rel_path="", path="/home/a/site/public_html"))
+    db.add(WpJob(kind="scan", status="completed"))
+    db.commit()
+
+    removed = wp_manager.purge_data(db)
+    assert removed == ["/home/a/site/public_html"]
+    assert db.query(WpInstall).count() == 0
+    assert db.query(WpJob).count() == 0

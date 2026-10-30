@@ -101,6 +101,13 @@ def stop() -> dict:
     return status()
 
 
+def purge_data() -> dict:
+    """Remove fail2ban entirely: the service, the jail config, the ban history
+    and the package. For removing the addon with "delete data"."""
+    shell.privileged("fail2ban-purge", fallback=["true"], timeout=300)
+    return status()
+
+
 def banned(jail: str = "sshd", limit: int = 50, offset: int = 0) -> dict:
     """A page of the ban list, plus how many there are.
 
