@@ -270,3 +270,33 @@ def test_the_confinement_flag_is_not_echoed_back_to_the_customer(site, monkeypat
     # and the round trip still renders, rather than raising
     again = cron.add_cron(_website(site), "*/5 * * * *", parsed["command"])
     assert "-d open_basedir=" in again
+
+
+def test_system_wp_cron_adds_the_wp_cli_due_now_command(site, captured_crontab):
+    """Disabling WP-Cron installs a system cron that runs WordPress's due
+    events via the allow-listed `wp cron event run --due-now`."""
+    assert cron.set_system_wp_cron(_website(site), True) is True
+    writes = [c for c in captured_crontab if c[0] == "cron-write"]
+    assert writes, "no crontab was written"
+    assert "cron event run --due-now" in (writes[-1][2] or "")
+
+
+def test_system_wp_cron_removes_only_the_wp_cron_line(site, monkeypatch):
+    """Re-enabling WP-Cron drops the wp-cron line and keeps the site's others."""
+    marker = "# bpanel:example.test"
+    existing = (
+        f"*/5 * * * * cd /x && php /usr/local/bin/wp cron event run --due-now --allow-root {marker}\n"
+        f"0 3 * * * cd /x && php /usr/local/bin/wp plugin list {marker}\n"
+    )
+    written = {}
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        out = existing if helper_command == "cron-list" else ""
+        if helper_command == "cron-write":
+            written["input"] = kwargs.get("input")
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+    monkeypatch.setattr(cron.shell, "privileged", fake_privileged)
+    assert cron.set_system_wp_cron(_website(site), False) is False
+    assert "cron event run --due-now" not in written["input"]
+    assert "wp plugin list" in written["input"]
