@@ -1010,6 +1010,14 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     ) from exc
             for item in own_databases + app_databases:
                 item.owner_id = owner.id
+            # The DNS zone(s) for this domain follow it to the new owner, or the
+            # former owner keeps editing its records (dns.may_edit grants by
+            # DnsZone.owner_id).
+            dns.reassign_zone_owner(
+                db,
+                {website.domain, *(alias.domain for alias in website.aliases or [])},
+                owner.id,
+            )
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
         try:
@@ -1483,11 +1491,13 @@ def _resync_shared_dependents(db: Session, source_domain: str) -> None:
             pass
 
 
-def _cloudflare_zone_for(db: Session, domain: str) -> tuple[str | None, str | None]:
-    """(zone, token) for ``domain``, resolved from a saved Cloudflare credential.
-    Tries each saved zone that is a suffix of the domain, longest first."""
+def _cloudflare_zone_for(db: Session, domain: str, owner_id: int | None) -> tuple[str | None, str | None]:
+    """(zone, token) for ``domain``, from a Cloudflare credential THIS owner saved.
+    Tries each of the owner's saved zones that is a suffix of the domain,
+    longest first. A token saved by another account is never considered, so
+    passing the website's ownership check does not grant use of their secret."""
     domain = domain.strip().lower()
-    rows = db.query(CloudflareCredential).all()
+    rows = db.query(CloudflareCredential).filter(CloudflareCredential.owner_id == owner_id).all()
     matches = [
         r for r in rows
         if domain == r.zone or domain.endswith("." + r.zone)
@@ -1495,13 +1505,13 @@ def _cloudflare_zone_for(db: Session, domain: str) -> tuple[str | None, str | No
     if not matches:
         return None, None
     best = max(matches, key=lambda r: len(r.zone))
-    return best.zone, cloudflare.get_token(db, best.zone)
+    return best.zone, cloudflare.get_token(db, best.zone, owner_id)
 
 
 @router.get("/{website_id}/ssl/cloudflare-zone", response_model=CloudflareZoneOut)
 def cloudflare_zone(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = _get_authorized_website(db, website_id, current_user)
-    zone, _token = _cloudflare_zone_for(db, website.domain)
+    zone, _token = _cloudflare_zone_for(db, website.domain, website.owner_id)
     return CloudflareZoneOut(zone=zone, has_token=zone is not None)
 
 
@@ -1522,9 +1532,9 @@ def install_wildcard_ssl(
             zone = cloudflare.zone_for_domain(token, website.domain)
         except cloudflare.CloudflareError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        cloudflare.save_credential(db, zone, token)
+        cloudflare.save_credential(db, zone, token, website.owner_id)
     else:
-        zone, token = _cloudflare_zone_for(db, website.domain)
+        zone, token = _cloudflare_zone_for(db, website.domain, website.owner_id)
         if not token:
             raise HTTPException(
                 status_code=409,

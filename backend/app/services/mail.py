@@ -1885,6 +1885,12 @@ def restore_manifest(db: Session, user: User, section, stage_mail) -> list[str]:
             targets = normalize_destinations(entry.get("destinations") or [], own_address=f"{local}@{domain}")
         except MailError as exc:
             raise ValueError(f"Invalid forwarder in backup: {exc.message}") from exc
+        # A forwarder has no owner column of its own; its domain must be a mail
+        # domain this user owns. Without this an archive could name another
+        # tenant's domain and create or overwrite a forwarder on their mail.
+        domain_row = _domain_row(db, domain)
+        if domain_row is None or domain_row.owner_id != user.id:
+            raise ValueError(f"Forwarder names a mail domain that is not yours: {local}@{domain}")
         row = db.query(MailForwarder).filter(MailForwarder.domain == domain, MailForwarder.local_part == local).first()
         if row is None:
             db.add(MailForwarder(domain=domain, local_part=local, destinations="\n".join(targets)))
