@@ -657,6 +657,11 @@ function Security({ detail, base, post, busy }) {
             {item.id === 'salts' && <small>{t('New keys sign everyone out of this WordPress, attackers included.')}</small>}
             {item.detail?.error && <small>{item.detail.error}</small>}
             {files.length > 0 && <details><summary>{t('{count} file(s)', { count: item.count ?? files.length })}</summary><ul className="wpm-files">{files.slice(0, 50).map((f) => <li key={f}><code>{f}</code></li>)}</ul></details>}
+            {item.id === 'core_checksums' && ((item.detail?.missing?.length || 0) > 0 || (item.detail?.extra?.length || 0) > 0) && <>
+              <small>{t('{missing} missing and {extra} unexpected file(s) vs wordpress.org — usually a library WordPress bundles whose checksums differ for this version, not a change to your site.', { missing: item.detail.missing?.length || 0, extra: item.detail.extra?.length || 0 })}</small>
+              {(item.detail.missing?.length || 0) > 0 && <details><summary>{t('{count} missing', { count: item.detail.missing.length })}</summary><ul className="wpm-files">{item.detail.missing.slice(0, 50).map((f) => <li key={f}><code>{f}</code></li>)}</ul></details>}
+              {(item.detail.extra?.length || 0) > 0 && <details><summary>{t('{count} unexpected', { count: item.detail.extra.length })}</summary><ul className="wpm-files">{item.detail.extra.slice(0, 50).map((f) => <li key={f}><code>{f}</code></li>)}</ul></details>}
+            </>}
           </div>
           <div className="wpm-row-actions">
             {item.apply && !['salts', 'wp_cron'].includes(item.id) && <button type="button" className="mini" disabled={busy} onClick={() => apply(item, false)}>{t('Apply')}</button>}
