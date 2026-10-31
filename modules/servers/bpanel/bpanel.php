@@ -34,14 +34,10 @@ function bpanel_ConfigOptions()
             'Options' => '8.4,8.3,8.2,8.1,8.0,7.4,5.6',
             'Default' => '8.4',
         ],
-        'Install WordPress' => [
-            'Type' => 'yesno',
-            'Description' => 'Install WordPress during provisioning',
-        ],
-        'Auto SSL' => [
-            'Type' => 'yesno',
-            'Description' => 'Request Let\'s Encrypt SSL after provisioning',
-        ],
+        // WHMCS provisioning deliberately only creates the account and attaches
+        // the domain. It never pre-installs WordPress or requests SSL - the
+        // customer does that from the panel afterwards. So there is no "Install
+        // WordPress" or "Auto SSL" product option here.
     ];
 }
 
@@ -66,6 +62,8 @@ function bpanel_CreateAccount($params)
     $domain = bpanel_domain($params);
     $username = bpanel_provision_username($params);
     $password = bpanel_password($params);
+    // Create the account and attach the domain only. WordPress and SSL are
+    // never provisioned from WHMCS - the customer sets those up in the panel.
     $payload = [
         'external_id' => bpanel_external_id($params),
         'username' => $username,
@@ -73,19 +71,10 @@ function bpanel_CreateAccount($params)
         'package_id' => (int) bpanel_config($params, 1, '1'),
         'php_version' => bpanel_config($params, 3, '8.4'),
         'app_type' => $domain === '' ? 'php' : bpanel_config($params, 2, 'php'),
-        'install_wordpress' => bpanel_yesno(bpanel_config($params, 4, '')),
-        'enable_ssl' => bpanel_yesno(bpanel_config($params, 5, '')),
     ];
 
     if ($domain !== '') {
         $payload['domain'] = $domain;
-    }
-
-    if ($payload['install_wordpress']) {
-        $payload['app_type'] = 'wordpress';
-    }
-    if ($domain === '' && ($payload['install_wordpress'] || $payload['enable_ssl'])) {
-        return 'A domain is required when Install WordPress or Auto SSL is enabled';
     }
 
     $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts', $payload);
@@ -123,7 +112,24 @@ function bpanel_ChangePassword($params)
 {
     $payload = ['password' => bpanel_password($params)];
     $result = bpanel_request($params, 'PATCH', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/password', $payload);
-    return $result['ok'] ? 'success' : $result['error'];
+    if (!$result['ok']) {
+        return $result['error'];
+    }
+
+    // The panel may rotate the SFTP password and return it exactly once (the
+    // only time it is ever readable). Dropping it silently breaks the
+    // customer's SFTP login with no replacement delivered, so persist it onto
+    // the WHMCS service (merged with the current account snapshot so the other
+    // note fields survive) for an admin to forward.
+    $data = $result['data'];
+    if (is_array($data) && !empty($data['sftp_password'])) {
+        $snapshot = bpanel_request($params, 'GET', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)));
+        $record = ($snapshot['ok'] && is_array($snapshot['data'])) ? $snapshot['data'] : [];
+        $record['sftp_password'] = (string) $data['sftp_password'];
+        bpanel_save_service_record($params, $record);
+    }
+
+    return 'success';
 }
 
 function bpanel_ChangePackage($params)
@@ -157,23 +163,53 @@ function bpanel_LoginLink($params)
 function bpanel_ClientArea($params)
 {
     $account = [];
+    $usage = [];
     if (!empty($params['serviceid'])) {
-        $result = bpanel_request($params, 'GET', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)));
+        $ext = rawurlencode(bpanel_external_id($params));
+        $result = bpanel_request($params, 'GET', '/api/provisioning/v1/accounts/' . $ext);
         if ($result['ok']) {
             $account = $result['data'];
         }
+        // Disk/usage lives on a separate endpoint on BPanel (the account GET
+        // does not carry storage), so fetch it too for the host details.
+        $usageResult = bpanel_request($params, 'GET', '/api/provisioning/v1/accounts/' . $ext . '/usage');
+        if ($usageResult['ok'] && is_array($usageResult['data'])) {
+            $usage = $usageResult['data'];
+        }
+    }
+
+    // Prefer the panel's authoritative username over the one rebuilt from
+    // WHMCS params, which can drift if the create-time write-back failed.
+    $username = trim((string) ($account['username'] ?? ''));
+    if ($username === '') {
+        $username = bpanel_username($params);
+    }
+
+    $storageUsed = isset($usage['storage_used_bytes']) ? (int) $usage['storage_used_bytes'] : null;
+    $storageLimit = isset($usage['storage_limit_bytes']) ? (int) $usage['storage_limit_bytes'] : null;
+    $diskPercent = -1; // -1 = unknown; the template hides the usage bar.
+    if (isset($usage['storage_percent']) && is_numeric($usage['storage_percent']) && $storageLimit) {
+        $diskPercent = (int) min(100, max(0, round((float) $usage['storage_percent'])));
+    } elseif ($storageUsed !== null && $storageLimit !== null && $storageLimit > 0) {
+        $diskPercent = (int) min(100, max(0, round($storageUsed / $storageLimit * 100)));
     }
 
     return [
         'templatefile' => 'clientarea',
         'vars' => [
-            'panelUrl' => bpanel_base_url($params),
             'loginUrl' => bpanel_sso_url($params),
-            'username' => bpanel_username($params),
+            'username' => $username,
             'serviceLabel' => bpanel_service_label($params, $account),
             'packageName' => trim((string) ($account['package_name'] ?? '')),
             'domain' => trim((string) ($account['domain'] ?? '')),
             'status' => trim((string) ($account['status'] ?? '')),
+            // Host details (disk + counts from /usage, created from the account).
+            'diskUsed' => $storageUsed !== null ? bpanel_format_bytes($storageUsed) : '',
+            'diskLimit' => $storageLimit === null ? '' : ($storageLimit > 0 ? bpanel_format_bytes($storageLimit) : 'Unlimited'),
+            'diskPercent' => $diskPercent,
+            'websites' => isset($usage['website_count']) ? (string) (int) $usage['website_count'] : '',
+            'databases' => isset($usage['database_count']) ? (string) (int) $usage['database_count'] : '',
+            'createdAt' => bpanel_format_date((string) ($account['created_at'] ?? '')),
         ],
     ];
 }
@@ -332,6 +368,33 @@ function bpanel_yesno($value)
     return in_array(strtolower(trim($value)), ['on', 'yes', 'true', '1'], true);
 }
 
+function bpanel_format_bytes($bytes)
+{
+    $bytes = max(0, (int) $bytes);
+    $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    $i = 0;
+    $value = (float) $bytes;
+    while ($value >= 1024 && $i < count($units) - 1) {
+        $value /= 1024;
+        $i++;
+    }
+    $decimals = $i >= 2 ? 1 : 0;
+    return number_format($value, $decimals) . ' ' . $units[$i];
+}
+
+function bpanel_format_date($value)
+{
+    $value = trim((string) $value);
+    if ($value === '') {
+        return '';
+    }
+    $timestamp = strtotime($value);
+    if ($timestamp === false) {
+        return $value;
+    }
+    return date('Y-m-d', $timestamp);
+}
+
 function bpanel_package_options($packages)
 {
     if (!is_array($packages)) {
@@ -411,7 +474,7 @@ function bpanel_save_service_record($params, $data, $username = '', $password = 
     }
 
     $lines = ['BPanel'];
-    foreach (['service_label', 'external_id', 'username', 'email', 'domain', 'status', 'package_id', 'package_name', 'storage_used_bytes', 'storage_limit_bytes', 'storage_percent'] as $key) {
+    foreach (['service_label', 'external_id', 'username', 'email', 'domain', 'status', 'package_id', 'package_name', 'storage_used_bytes', 'storage_limit_bytes', 'storage_percent', 'sftp_password'] as $key) {
         if (array_key_exists($key, $data)) {
             $lines[] = $key . ': ' . (is_scalar($data[$key]) ? $data[$key] : json_encode($data[$key]));
         }
