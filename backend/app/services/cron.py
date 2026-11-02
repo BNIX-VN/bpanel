@@ -354,6 +354,56 @@ def list_cron(domain: str, cron_user: str = "www-data") -> str:
 def list_cron_entries(domain: str, cron_user: str = "www-data") -> list[dict]:
     return [_parse_cron_line(index, line) for index, line in enumerate(list_cron(domain, cron_user).splitlines())]
 
+def remove_website_cron(domain: str, cron_user: str) -> int:
+    """A website is being deleted: drop the cron lines the panel wrote for it.
+
+    Only lines ending in this site's exact `# bpanel:<domain>` marker go, so
+    a.com never takes a.com.vn's jobs with it, and anything else in the
+    user's crontab stays. Without this the deleted site's jobs kept firing
+    into a folder that no longer exists. Returns how many lines went.
+    """
+    safe_domain = _validate_domain(domain)
+    pattern = re.compile(rf"#\s*bpanel:{re.escape(safe_domain)}\s*$", re.IGNORECASE)
+    lines = list_cron_all(cron_user).splitlines()
+    keep = [line for line in lines if not pattern.search(line)]
+    removed = len(lines) - len(keep)
+    if removed:
+        shell.privileged(
+            "cron-write",
+            helper_args=[cron_user],
+            input="\n".join(keep) + ("\n" if keep else ""),
+            fallback=["bash", "-lc", "crontab -"],
+        )
+    return removed
+
+
+def rewrite_website_domain(old_domain: str, new_domain: str, old_root: str, new_root: str, cron_user: str) -> bool:
+    """Re-point a renamed website's cron lines: swap its `# bpanel:<domain>`
+    marker and the old site root path to the new ones. Only this site's lines
+    are touched (matched by the old marker or the old root), so other domains
+    owned by the same Linux user keep their jobs. Returns whether anything
+    changed."""
+    if cron_user != "www-data":
+        site_users.validate_linux_user(cron_user)
+    old_marker = f"# bpanel:{old_domain}"
+    new_marker = f"# bpanel:{new_domain}"
+    existing = list_cron_all(cron_user)
+    if not existing.strip():
+        return False
+    changed = False
+    lines = []
+    for line in existing.splitlines():
+        if old_marker in line or (old_root and old_root in line):
+            line = line.replace(old_root, new_root).replace(old_marker, new_marker)
+            changed = True
+        lines.append(line)
+    if not changed:
+        return False
+    content = "\n".join(lines).rstrip() + "\n"
+    shell.privileged("cron-write", helper_args=[cron_user], input=content,
+                     fallback=["bash", "-lc", "crontab -"])
+    return True
+
 
 # --- WordPress's own scheduled tasks ---------------------------------------
 # When a site disables WP-Cron (which otherwise fires on page loads), a real

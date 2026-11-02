@@ -133,6 +133,25 @@ def ensure_account(owner_linux_user: str, linux_user: str, site_root: str) -> st
     return chroot_path_for(sub)
 
 
+def repoint_account(owner_linux_user: str, linux_user: str, new_site_root: str) -> str:
+    """Re-aim a sub-account's chroot at a website whose folder moved.
+
+    When a website is renamed its home folder moves (old -> new), so the old
+    bind mount in the chroot points at a path that no longer exists. This tears
+    the old mount down and binds the new site root in, keeping the same Linux
+    user and password. Idempotent.
+    """
+    owner = site_users.validate_linux_user(owner_linux_user)
+    sub = require_sub_user(linux_user)
+    shell.privileged(
+        "sftp-account-repoint",
+        helper_args=[owner, sub, new_site_root],
+        check=False,
+        fallback=["true"],
+    )
+    return chroot_path_for(sub)
+
+
 def set_password(linux_user: str, password: str) -> None:
     sub = require_sub_user(linux_user)
     value = validate_password(password)

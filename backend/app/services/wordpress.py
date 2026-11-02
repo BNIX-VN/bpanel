@@ -217,6 +217,35 @@ def wp_update(path: str, action: str, linux_user: str | None = None, php_version
     )
 
 
+def rename_site_url(path: str, linux_user: str | None, old_domain: str, new_domain: str, https: bool = True, php_version: str | None = None):
+    """Point a WordPress install at a renamed domain.
+
+    Runs `wp search-replace //old //new` (scheme-agnostic - catches http://,
+    https:// and protocol-relative URLs) across all tables except guid, then
+    sets home/siteurl. As the site user via the wp-site helper, like wp_update.
+    """
+    site_user = _site_user_for_path(path, linux_user)
+    scheme = "https" if https else "http"
+    new_url = f"{scheme}://{new_domain}"
+    search = shell.privileged(
+        "wp-site",
+        helper_args=[site_user, *_wp_php_flag(php_version), "search-replace", f"//{old_domain}", f"//{new_domain}",
+                     f"--path={path}", "--all-tables", "--skip-columns=guid",
+                     "--report-changed-only", "--allow-root"],
+        fallback=["wp", "search-replace", f"//{old_domain}", f"//{new_domain}",
+                  f"--path={path}", "--all-tables", "--skip-columns=guid", "--allow-root"],
+        timeout=900,
+    )
+    for option in ("home", "siteurl"):
+        shell.privileged(
+            "wp-site",
+            helper_args=[site_user, *_wp_php_flag(php_version), "option", "update", option, new_url, f"--path={path}", "--allow-root"],
+            fallback=["wp", "option", "update", option, new_url, f"--path={path}", "--allow-root"],
+            timeout=120,
+        )
+    return search
+
+
 def reset_admin_password(path: str, user: str, password: str, linux_user: str | None = None, php_version: str | None = None):
     safe_user = _safe_value(user, WP_USER_RE, "WordPress username")
     if not isinstance(password, str) or len(password) < 10 or "\x00" in password:

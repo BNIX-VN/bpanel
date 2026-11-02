@@ -4108,6 +4108,30 @@ mail_purge_domain() {
   echo "mail data removed: ${domain}"
 }
 
+# Move a domain's maildirs when a website's domain is renamed. BPanel keeps mail
+# in the owner's home, /home/<user>/mail/<domain>/<local>, so moving the whole
+# domain dir carries every mailbox's mail across; mv preserves the per-mailbox
+# ownership inside. The panel re-creates the DB rows (same password hashes) and
+# a fresh DKIM key for the new name.
+mail_move_domain() {
+  local user="$1" old="$2" new="$3" src dst
+  require_linux_user "$user"
+  require_domain "$old"
+  require_domain "$new"
+  [[ "$old" != "$new" ]] || deny "old and new domain are the same"
+  src="/home/${user}/mail/${old}"
+  dst="/home/${user}/mail/${new}"
+  # mail/ and mail/<domain>/ are root's, so neither path can be redirected
+  # through a symlink.
+  [[ ! -L "$src" && ! -L "$dst" ]] || deny "refusing a symlinked mail path"
+  [[ ! -e "$dst" ]] || deny "mail data for ${new} already exists"
+  if [[ -d "$src" ]]; then
+    install -d -o root -g bpanel -m 0751 "/home/${user}/mail"
+    mv -T -- "$src" "$dst"
+  fi
+  echo "mail data moved: ${old} -> ${new}"
+}
+
 mail_rspamd_answers() {
   local key
   key="$(tr -d '[:space:]' <"$MAIL_RSPAMD_KEY_FILE" 2>/dev/null)"
@@ -7689,6 +7713,30 @@ UNIT
   mountpoint -q "$where" || deny "SFTP chroot bind mount is not active for $sub"
 }
 
+# Re-aim a sub-account's chroot at a website whose folder moved (a domain
+# rename). Detach every bind mount in the chroot (the old site folder, whose
+# path is now gone) and bind the new site root in, keeping the same Linux user
+# and password. ensure_sftp_account does the new bind and re-converges the user.
+repoint_sftp_account() {
+  local owner="$1" sub="$2" site_path="$3" chroot where unit
+  require_linux_user "$owner"
+  require_sftp_sub_user "$sub"
+  id -u "$sub" >/dev/null 2>&1 || deny "SFTP sub-account does not exist: $sub"
+  chroot=$(sftp_account_chroot "$sub")
+  if [[ -d "$chroot" ]]; then
+    for where in "$chroot"/*; do
+      [[ -d "$where" ]] || continue
+      unit=$(sftp_account_mount_unit "$where")
+      systemctl disable --now "$unit" >/dev/null 2>&1 || true
+      rm -f "/etc/systemd/system/$unit"
+      mountpoint -q "$where" && { umount "$where" 2>/dev/null || umount -l "$where" 2>/dev/null || true; }
+      rmdir "$where" 2>/dev/null || true
+    done
+    systemctl daemon-reload
+  fi
+  ensure_sftp_account "$owner" "$sub" "$site_path"
+}
+
 set_sftp_account_password() {
   local sub="$1" password
   require_sftp_sub_user "$sub"
@@ -9533,6 +9581,11 @@ case "$cmd" in
     mail_purge_domain "$1" "$2"
     ;;
 
+  mail-move-domain)
+    [[ $# -eq 3 ]] || deny "usage: mail-move-domain <site-user> <old-domain> <new-domain>"
+    mail_move_domain "$1" "$2" "$3"
+    ;;
+
   mail-relay-test)
     [[ $# -eq 1 ]] || deny "usage: mail-relay-test <address>"
     mail_relay_test "$1"
@@ -10761,6 +10814,11 @@ PY
   sftp-account-ensure)
     [[ $# -eq 3 ]] || deny "usage: sftp-account-ensure <panel-user> <sub-account> <site-path>"
     ensure_sftp_account "$1" "$2" "$3"
+    ;;
+
+  sftp-account-repoint)
+    [[ $# -eq 3 ]] || deny "usage: sftp-account-repoint <panel-user> <sub-account> <site-path>"
+    repoint_sftp_account "$1" "$2" "$3"
     ;;
 
   sftp-account-password)
