@@ -1300,6 +1300,11 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
     # names were ours.
     ssl_note = ssl.release_site_certificates(db, website.domain, exclude_website_id=website.id)
     waf.remove_site_rules(website.domain)
+    cron_note = ""
+    try:
+        cron.remove_website_cron(website.domain, cron.cron_user_for_website(website))
+    except (RuntimeError, ValueError) as exc:
+        cron_note = f"Its cron jobs were not removed: {exc}"
     if delete_files:
         if website.linux_user:
             site_users.delete_site_runtime(website.root_path, website.linux_user)
@@ -1331,6 +1336,8 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
     message = f"Deleted {domain}."
     if ssl_note:
         message = f"{message} {ssl_note[0].upper()}{ssl_note[1:]}"
+    if cron_note:
+        message = f"{message} {cron_note}"
     return {"ok": True, "message": message}
 
 
