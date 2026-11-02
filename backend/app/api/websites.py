@@ -17,7 +17,7 @@ from app.core.database import get_db
 from app.core.access import ensure_owner_access, managed_user_ids, scope_owner
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
-from app.models.entities import CloudflareCredential, DatabaseAccount, SiteApp, User, Website, WebsiteAlias
+from app.models.entities import CloudflareCredential, DatabaseAccount, GitRepository, SftpAccount, SiteApp, User, Website, WebsiteAlias
 from app.schemas.schemas import (
     CloudflareZoneOut,
     SharedSslRequest,
@@ -30,11 +30,13 @@ from app.schemas.schemas import (
     WebsiteNginxConfig,
     WebsiteNginxCustom,
     WebsiteOut,
+    WebsiteRename,
     WebsiteUpdate,
     WebsiteWafUpdate,
     WebsiteWordPressInstall,
     WildcardSslRequest,
 )
+from app.services import sftp_accounts
 from pydantic import BaseModel
 
 from app.services import addons, cloudflare, cron, dns, file_manager, mariadb, nginx, page_cache, php_isolation, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
@@ -1330,6 +1332,167 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
     if ssl_note:
         message = f"{message} {ssl_note[0].upper()}{ssl_note[1:]}"
     return {"ok": True, "message": message}
+
+
+@router.post("/{website_id}/rename")
+def rename_website(website_id: int, payload: WebsiteRename, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Rename a website's primary domain, DirectAdmin-style.
+
+    The domain is baked into the site's home folder, vhost, certificate, DNS
+    zone, mailboxes, WordPress site URL, cron markers and SFTP/Git paths, so a
+    rename touches all of them. The file move + vhost rewrite + record flip is
+    the atomic-ish core: once that succeeds the site serves under the new name
+    and the call does not fail. Certificate, DNS, WordPress, mail, cron and
+    SFTP/Git fix-ups are best effort and reported as warnings.
+    """
+    website = _get_authorized_website(db, website_id, current_user)
+    _block_if_source(db, website)
+    old_domain = website.domain
+    new_domain = payload.new_domain  # schema has stripped, lowercased, DOMAIN_RE-checked it
+    if new_domain == old_domain:
+        raise HTTPException(status_code=400, detail="The new domain is the same as the current one")
+    if _hostname_conflicts(db, new_domain, exclude_website_id=website.id) or nginx.vhost_exists(new_domain):
+        raise HTTPException(status_code=409, detail=f"{new_domain} is already in use on this server")
+    if (website.app_type or "") == "proxy":
+        raise HTTPException(status_code=400, detail="A proxy website has no files to rename; recreate it under the new domain instead")
+
+    owner = website.owner
+    old_root = website.root_path
+    new_root = site_users.site_root_for_panel_user(owner.username, new_domain)
+    runtime_php = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
+    old_ssl_mode = getattr(website, "ssl_mode", "none") or "none"
+    had_ssl = bool(website.ssl_enabled)
+    wp_was_installed = _has_wordpress_install(website)
+    warnings: list[str] = []
+
+    # --- critical core: move the folder, rewrite the vhost, flip the record ---
+    try:
+        site_users.move_site_runtime(old_root, new_root, website.linux_user, runtime_php)
+    except (RuntimeError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=f"Cannot move the website folder: {exc}") from exc
+
+    website.domain = new_domain
+    website.root_path = new_root
+    # Reissue SSL below; until then serve the new name over plain HTTP so the
+    # old certificate (issued for the old domain) is not presented under it.
+    website.ssl_enabled = False
+    try:
+        result = waf.sync_website_rules(website)
+        if result.returncode != 0:
+            raise RuntimeError(_command_error(result))
+        if website.http_flood_enabled:
+            _sync_http_flood_zones(db)
+        _rewrite_website_vhost(
+            website,
+            root_path=new_root,
+            app_type=website.app_type or "wordpress",
+            php_version=website.php_version,
+            include_ssl=False,
+        )
+    except (RuntimeError, ValueError, OSError) as exc:
+        # Roll the folder and record back so the site is left as it was found.
+        try:
+            site_users.move_site_runtime(new_root, old_root, website.linux_user, runtime_php)
+        except (RuntimeError, ValueError, OSError):
+            pass
+        website.domain = old_domain
+        website.root_path = old_root
+        website.ssl_enabled = had_ssl
+        try:
+            _rewrite_website_vhost(website)
+        except (RuntimeError, ValueError, OSError):
+            pass
+        raise HTTPException(status_code=400, detail=f"Cannot rewrite the Nginx config: {exc}") from exc
+
+    # The site now serves under the new name; drop the old server_name vhost.
+    try:
+        nginx.delete_wordpress_vhost(old_domain)
+    except (RuntimeError, ValueError) as exc:
+        warnings.append(f"The old Nginx config for {old_domain} was left in place: {exc}")
+    waf.remove_site_rules(old_domain)
+    db.commit()
+    db.refresh(website)
+
+    # --- best effort from here: the site is already moved and serving ---
+    # Certificate: the old cert was for the old name. Let's Encrypt can be
+    # reissued for the new one; other modes (manual upload, shared, Cloudflare)
+    # need the operator to re-point them, so we only release the old cert.
+    try:
+        ssl.release_site_certificates(db, old_domain, exclude_website_id=website.id)
+    except (RuntimeError, ValueError) as exc:
+        warnings.append(f"The old certificate for {old_domain} was left in place: {exc}")
+    if old_ssl_mode == "letsencrypt" and payload.reissue_ssl:
+        result = ssl.issue_ssl(new_domain, _ssl_domains(website))
+        if result.returncode == 0:
+            website.ssl_enabled = True
+            website.ssl_mode = "letsencrypt"
+            website.ssl_updated_at = datetime.utcnow()
+            website.ssl_cert_path = None
+            website.ssl_key_path = None
+            website.ssl_ca_path = None
+            website.ssl_source_domain = None
+            try:
+                _rewrite_website_vhost(website)
+            except (RuntimeError, ValueError):
+                pass
+            db.commit()
+            db.refresh(website)
+        else:
+            warnings.append(f"HTTPS was not reissued for {new_domain}; the site is on HTTP until a certificate is installed: {_command_error(result)}")
+    elif had_ssl:
+        warnings.append(f"The {old_ssl_mode} certificate did not follow the rename; reinstall HTTPS for {new_domain}.")
+
+    # DNS: seed the new name's zone (BPanel leaves the old zone, as delete does).
+    try:
+        dns.zone_for_new_domain(db, new_domain, website.owner_id)
+    except Exception as exc:  # noqa: BLE001 - DNS must never fail a rename
+        warnings.append(f"DNS for {new_domain} was not set up: {exc}")
+
+    # WordPress: rewrite the stored site/home URL and search-replace the tables.
+    if wp_was_installed:
+        try:
+            wordpress.rename_site_url(new_root, website.linux_user, old_domain, new_domain, https=True, php_version=website.php_version)
+        except (RuntimeError, ValueError, OSError) as exc:
+            warnings.append(f"WordPress URLs were not updated; run a search-replace from {old_domain} to {new_domain}: {exc}")
+        from app.services import wp_manager
+
+        wp_manager.forget_website(db, website.id)
+
+    # Cron: re-point this site's lines (its marker and old root path).
+    if website.linux_user:
+        try:
+            cron.rewrite_website_domain(old_domain, new_domain, old_root, new_root, website.linux_user)
+        except (RuntimeError, ValueError, OSError) as exc:
+            warnings.append(f"Cron jobs for {old_domain} were not re-pointed: {exc}")
+
+    # SFTP logins pinned to this website: re-aim their chroot at the moved folder.
+    for account in db.query(SftpAccount).filter(SftpAccount.website_id == website.id).all():
+        try:
+            sftp_accounts.repoint_account(owner.username, account.linux_user, new_root)
+        except (RuntimeError, ValueError, OSError) as exc:
+            warnings.append(f"SFTP login {account.label} was not re-pointed; check its folder: {exc}")
+
+    # Git repositories whose path sat inside the moved folder.
+    old_prefix = old_root.rstrip("/")
+    for repo in db.query(GitRepository).filter(GitRepository.owner_id == website.owner_id).all():
+        repo_path = repo.path or ""
+        if repo_path == old_prefix:
+            repo.path = new_root.rstrip("/")
+        elif repo_path.startswith(old_prefix + "/"):
+            repo.path = new_root.rstrip("/") + repo_path[len(old_prefix):]
+
+    # Mail: move the whole mail domain (mailboxes, forwarders, maildirs, DNS).
+    from app.services import mail
+
+    try:
+        mail.migrate_domain(db, old_domain, new_domain, owner_id=website.owner_id)
+    except mail.MailError as exc:
+        warnings.append(f"Mail for {old_domain} was not moved: {exc}")
+
+    db.commit()
+    db.refresh(website)
+    log_action(db, current_user.id, "rename_website", old_domain, new_domain, request=request)
+    return {"ok": True, "domain": new_domain, "root_path": new_root, "warnings": warnings}
 
 
 @router.post("/{website_id}/fix-nginx-security")

@@ -1041,6 +1041,7 @@ function App() {
   const [forwarderForm, setForwarderForm] = useState({ domain_id: '', local_part: '', destinations: '' });
   const [mailboxEdit, setMailboxEdit] = useState(null);
   const [forwarderEdit, setForwarderEdit] = useState(null);
+  const [renameSite, setRenameSite] = useState(null);
   const [mailDomainForm, setMailDomainForm] = useState({ domain: '', owner_id: '' });
   // Turn on email: a domain typed by hand instead of picked from the list.
   const [mailDomainOther, setMailDomainOther] = useState(false);
@@ -2856,6 +2857,24 @@ function App() {
         const nextSite = prev.site || site;
         return { ...prev, site: { ...nextSite, aliases: (nextSite.aliases || []).filter(item => item.id !== alias.id) } };
       });
+      await refreshAll();
+    }
+  }
+
+  async function renameWebsite() {
+    if (!renameSite) return;
+    const site = renameSite.site;
+    const next = String(renameSite.newDomain || '').trim().toLowerCase();
+    if (!next || next === site.domain) { setError(t('Enter a new domain.')); return; }
+    const data = await request(`/websites/${site.id}/rename`, {
+      method: 'POST',
+      body: JSON.stringify({ new_domain: next, reissue_ssl: renameSite.reissueSsl !== false }),
+    }, `Renaming ${site.domain} to ${next}...`);
+    if (data) {
+      const extra = (data.warnings || []).length ? ' ' + data.warnings.join(' ') : '';
+      setNotice(`Renamed ${site.domain} to ${data.domain || next}.` + extra);
+      setRenameSite(null);
+      setNginxCustomEditing(prev => (prev && prev.id === site.id) ? null : prev);
       await refreshAll();
     }
   }
@@ -7800,6 +7819,29 @@ function App() {
 
   function renderMailModals() {
     return <>
+      {renameSite && <div className="modal-overlay" onClick={() => setRenameSite(null)}>
+        <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <h3>{t('Rename domain')}</h3>
+            <button className="secondary-light" onClick={() => setRenameSite(null)} aria-label={t('Close')}><X size={16}/></button>
+          </div>
+          <div className="modal-body">
+            <p className="hint">{t('Changes the main domain of {0}: its folder, web server, certificate, DNS, mail, WordPress address and cron all move to the new name.', renameSite.site.domain)}</p>
+            <label className="field"><span className="field-label">{t('New domain')}</span>
+              <input value={renameSite.newDomain} autoCapitalize="none" spellCheck={false} autoComplete="off"
+                placeholder="example.com" onChange={e => setRenameSite(prev => ({ ...prev, newDomain: e.target.value }))}/>
+            </label>
+            <label className="checkbox-row"><input type="checkbox" checked={renameSite.reissueSsl !== false}
+              onChange={e => setRenameSite(prev => ({ ...prev, reissueSsl: e.target.checked }))}/>
+              <span>{t('Reissue the HTTPS certificate for the new domain')}</span></label>
+            <p className="hint">{t("Point the new domain's DNS at this server first, or HTTPS can only be issued once it resolves here.")}</p>
+          </div>
+          <div className="modal-actions">
+            <button className="secondary-light" onClick={() => setRenameSite(null)}>{t('Cancel')}</button>
+            <button disabled={!!loading || !String(renameSite.newDomain || '').trim() || String(renameSite.newDomain || '').trim().toLowerCase() === renameSite.site.domain} onClick={renameWebsite}><Save size={14}/> {t('Rename')}</button>
+          </div>
+        </div>
+      </div>}
       {mailboxEdit && <div className="modal-overlay" onClick={() => setMailboxEdit(null)}>
         <div className="modal-card" onClick={e => e.stopPropagation()}>
           <div className="modal-header">
@@ -8812,7 +8854,10 @@ function App() {
     return <section className="section">
       <PageHeader title={t('Domains')} subtitle={t('Alias serves the same app. Redirect sends visitors to {domain}.', { domain: site.domain })}/>
       <ul className="wsd-domain-list">
-        <li><Globe size={14} aria-hidden="true"/><strong>{site.domain}</strong><span className="badge ok">{t('Main')}</span></li>
+        <li><Globe size={14} aria-hidden="true"/><strong>{site.domain}</strong><span className="badge ok">{t('Main')}</span>
+          <button type="button" className="mini secondary-light" disabled={!!loading}
+            onClick={() => setRenameSite({ site, newDomain: '', reissueSsl: true })}
+            aria-label={t('Rename {domain}', { domain: site.domain })}><Pencil size={13} aria-hidden="true"/> {t('Rename')}</button></li>
         {aliases.map(alias => <li key={alias.id}>
           <Globe size={14} aria-hidden="true"/><strong>{alias.domain}</strong>
           <span className="badge">{alias.mode === 'redirect' ? t('Redirect') : t('Alias')}</span>

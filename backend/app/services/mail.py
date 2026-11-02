@@ -457,6 +457,65 @@ def delete_domain(db: Session, actor: User, domain_id: int) -> str:
     return name
 
 
+def migrate_domain(db: Session, old_domain: str, new_domain: str, owner_id: int | None = None) -> MailDomain | None:
+    """Move a mail domain when a website is renamed old -> new.
+
+    Recreates the MailDomain, its mailboxes (same stored password hashes, so
+    logins keep working) and forwarders under the new name, moves the maildirs
+    on disk (BPanel keeps mail in the owner's home, /home/<user>/mail/<domain>/
+    <local>), re-points mail DNS and webmail, and drops the old domain. No-op
+    (returns None) when the old domain has no mail or the Email addon is off.
+    Call AFTER the website's domain has been flipped.
+    """
+    if not active():
+        return None
+    old = normalize_domain(old_domain)
+    new = normalize_domain(new_domain)
+    if old == new:
+        return None
+    src = _domain_row(db, old)
+    if src is None:
+        return None
+    if _domain_row(db, new) is not None:
+        raise MailError(f"Email is already on for {new}.", status=409)
+    owner = db.query(User).filter(User.id == src.owner_id).first()
+    if owner is None:
+        return None
+    had_webmail = bool(src.webmail_host)
+    dst = MailDomain(
+        domain=new,
+        owner_id=owner_id or src.owner_id,
+        catch_all=(src.catch_all or "").replace(f"@{old}", f"@{new}"),
+        webmail_host=had_webmail,
+        relay=src.relay,
+        dkim_public=_dkim_public(new),
+    )
+    db.add(dst)
+    db.flush()
+    for acct in db.query(MailAccount).filter(MailAccount.domain == old).all():
+        db.add(MailAccount(owner_id=acct.owner_id, domain=new, local_part=acct.local_part,
+                           password_hash=acct.password_hash, quota_mb=acct.quota_mb, enabled=acct.enabled))
+    for fw in db.query(MailForwarder).filter(MailForwarder.domain == old).all():
+        db.add(MailForwarder(domain=new, local_part=fw.local_part, destinations=fw.destinations))
+    # Move the maildirs BEFORE the old record goes away, so nothing deletes the
+    # mail we just carried across. BPanel keeps them in the owner's home.
+    shell.privileged("mail-move-domain", helper_args=[linux_user_of(owner), old, new], check=False)
+    db.delete(src)
+    db.commit()
+    sync(db)
+    publish_dns_quietly(db, dst)
+    if had_webmail:
+        shell.privileged("mail-webmail-host-remove", helper_args=[old], check=False, fallback=["true"])
+        args = [new]
+        if app_settings.ssl_email:
+            args.append(app_settings.ssl_email)
+        try:
+            _helper("mail-webmail-host", *args, timeout=300)
+        except MailError:
+            pass
+    return dst
+
+
 def delete_for_owner(db: Session, owner: User) -> list[str]:
     """An account is being deleted: its mail goes with its home. The caller commits."""
     rows = db.query(MailDomain).filter(MailDomain.owner_id == owner.id).all()
