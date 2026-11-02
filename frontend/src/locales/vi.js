@@ -2382,6 +2382,7 @@ export const vi = {
   "The website's owner": "Chủ sở hữu website",
   "The zone's own name cannot be a CNAME; use an A record.": "Chính tên của zone không thể là CNAME; hãy dùng bản ghi A.",
   "The {name} addon is not installed. Install it on the Addons page.": "Addon {name} chưa được cài. Hãy cài ở trang Tiện ích.",
+  "The {name} addon is not installed. Install it on the server, as root:": "Addon {name} chưa được cài. Cài trên server bằng quyền root:",
   "There is no such forwarder.": "Không có chuyển tiếp này.",
   "There is no such mail domain.": "Không có tên miền email này.",
   "There is no such mailbox.": "Không có hộp thư này.",

@@ -44,6 +44,8 @@ import { ADDON_META, addonFeatureIcon, addonLabel } from './lib/addons.jsx';
 // Addons that create data a plain uninstall keeps (so they also offer a
 // "remove and delete data" action). The others clean up fully on uninstall.
 const PURGEABLE_ADDONS = new Set(['dns', 'mail', 'application', 'wordpress', 'fail2ban', 'malware']);
+// Addons installed only with `bpanel addon install <slug>` (operator, 2026-11-02): slug -> name.
+const SHELL_ONLY_ADDONS = { mail: 'Email', limits: 'Resource limits' };
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './shared/style.css';
 import './shared/brand.css';
@@ -6980,7 +6982,10 @@ function App() {
   // missing, and for an administrator the way to the addon's row.
   function renderAddonMissing(slug = 'application') {
     const addon = addons.items.find(item => item.slug === slug);
-    const name = addon ? addonLabel(addon, t) : t('Application');
+    // Email and Resource limits are installed from the shell only, and are not
+    // in the list until they are (operator, 2026-11-02).
+    const shellOnly = SHELL_ONLY_ADDONS[slug];
+    const name = addon ? addonLabel(addon, t) : shellOnly ? t(shellOnly) : t('Application');
     const installed = !!addon?.installed;
     // Until the list is in, which addon is missing is not known yet.
     if (!addons.loaded) return <section className="section"><p className="hint">{t('Loading…')}</p></section>;
@@ -6988,9 +6993,11 @@ function App() {
       <EmptyState icon={Boxes}
         message={slug === 'application' && installed
           ? t('Your package does not include Applications. Contact an administrator to upgrade.')
-          : isAdmin ? t('The {name} addon is not installed. Install it on the Addons page.', { name })
-            : t('{name} is not available on this server.', { name })}
-        action={isAdmin && !installed
+          : isAdmin && shellOnly
+            ? <>{t('The {name} addon is not installed. Install it on the server, as root:', { name })} <code>{`bpanel addon install ${slug}`}</code></>
+            : isAdmin ? t('The {name} addon is not installed. Install it on the Addons page.', { name })
+              : t('{name} is not available on this server.', { name })}
+        action={isAdmin && !installed && !shellOnly
           ? { label: t('Go to Addons'), icon: Boxes, disabled: !!loading, onClick: () => { navigateToPage('addons'); setTimeout(() => document.getElementById(`addon-${slug}`)?.scrollIntoView({ block: 'center' }), 300); } }
           : undefined}/>
     </section>;
