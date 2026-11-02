@@ -746,3 +746,30 @@ def test_the_email_page_opens_the_webmail_tab_on_the_click_itself():
     block = APP_JSX.split("async function openWebmail(box)")[1].split("async function ")[0]
     assert block.index("window.open(") < block.index("await request(")
     assert "opener = null" in block
+
+
+# --- a website renamed: its mail domain moves with it ------------------------------------------
+
+def test_renaming_moves_mail_and_leaves_nothing_under_the_old_name(env):
+    domain_id = _domain(env, "khach", "khach.vn").json()["id"]
+    assert _box(env, "khach", domain_id, "info").status_code == 200
+    admin = env.user("owner")
+    mail.create_forwarder(env.db, admin, domain_id, "sales", ["info@khach.vn", "x@gmail.com", "y@khach.vn.com"])
+    mail.set_catch_all(env.db, admin, domain_id, "info@khach.vn")
+    password_hash = env.db.query(MailAccount).filter(MailAccount.domain == "khach.vn").one().password_hash
+    env.helper.calls.clear()
+
+    moved = mail.migrate_domain(env.db, "khach.vn", "khach-new.vn")
+
+    env.db.expire_all()
+    # Nothing is left under the old name: no domain, no mailbox, no forwarder
+    # that would keep the old address alive.
+    assert env.db.query(MailDomain).filter(MailDomain.domain == "khach.vn").first() is None
+    assert env.db.query(MailAccount).filter(MailAccount.domain == "khach.vn").count() == 0
+    assert env.db.query(MailForwarder).filter(MailForwarder.domain == "khach.vn").count() == 0
+    assert moved.domain == "khach-new.vn" and moved.catch_all == "info@khach-new.vn"
+    (box,) = env.db.query(MailAccount).filter(MailAccount.domain == "khach-new.vn").all()
+    assert (box.local_part, box.password_hash) == ("info", password_hash)
+    (forwarder,) = env.db.query(MailForwarder).filter(MailForwarder.domain == "khach-new.vn").all()
+    assert forwarder.destinations.splitlines() == ["info@khach-new.vn", "x@gmail.com", "y@khach.vn.com"]
+    assert ("mail-move-domain", ["khach", "khach.vn", "khach-new.vn"]) in [(c[0], c[1]) for c in env.helper.calls]
