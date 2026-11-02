@@ -1469,7 +1469,9 @@ def rename_website(website_id: int, payload: WebsiteRename, request: Request, db
     # SFTP logins pinned to this website: re-aim their chroot at the moved folder.
     for account in db.query(SftpAccount).filter(SftpAccount.website_id == website.id).all():
         try:
-            sftp_accounts.repoint_account(owner.username, account.linux_user, new_root)
+            # Same owner user as the create route: the site's own Linux user.
+            sftp_accounts.repoint_account(website.linux_user or site_users.linux_user_for_panel_username(owner.username),
+                                          account.linux_user, new_root)
         except (RuntimeError, ValueError, OSError) as exc:
             warnings.append(f"SFTP login {account.label} was not re-pointed; check its folder: {exc}")
 
