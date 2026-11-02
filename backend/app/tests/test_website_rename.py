@@ -217,3 +217,24 @@ def test_rename_rolls_back_when_the_vhost_fails(monkeypatch):
     assert website.domain == "old.test"
     assert website.root_path == "/home/alice/old.test"
     assert calls["move"][-1] == ("/home/alice/new.test", "/home/alice/old.test", "alice", None)
+
+
+def test_rename_runs_wordpress_search_replace_in_the_document_root(monkeypatch):
+    # wp-cli needs the folder holding wp-config.php (public_html), not the site
+    # root above it: on a real box the root gave "not a WordPress installation".
+    from pathlib import Path
+
+    from app.schemas.schemas import WebsiteRename
+
+    website = _site(app_type="wordpress")
+    db = _Db(website)
+    calls = {}
+    _patch_services(monkeypatch, calls)
+    monkeypatch.setattr(websites, "_has_wordpress_install", lambda website: True)
+
+    websites.rename_website(1, WebsiteRename(new_domain="new.test"), request=None, db=db,
+                            current_user=User(id=9, role="admin"))
+
+    args, _ = calls["wp"][0]
+    assert (Path(args[0]).parent.name, Path(args[0]).name) == ("new.test", "public_html")
+    assert args[2:4] == ("old.test", "new.test")
