@@ -91,6 +91,7 @@ CATALOGUE: dict[str, dict] = {
     },
     LIMITS: {
         "name": "Resource limits",
+        "cli_only": True,
         "version": "1.0.0",
         "summary": "CPU, memory, processes and disk I/O limits for each hosting account.",
         "details": [
@@ -213,6 +214,7 @@ CATALOGUE: dict[str, dict] = {
     },
     MAIL: {
         "name": "Email",
+        "cli_only": True,
         "version": "1.0.0",
         "summary": "Mailboxes on your domains, with a webmail your customers open from the panel without a password.",
         "details": [
@@ -326,6 +328,21 @@ CATALOGUE: dict[str, dict] = {
 }
 
 
+# Addons the panel no longer offers (operator, 2026-11-02: "Muốn cài sẽ dùng
+# lệnh để cài vào"). They are left out of the Addons page until installed,
+# and only `bpanel addon install <slug>` on the server installs them. Once
+# installed they are listed and managed as before.
+INSTALL_COMMAND = "bpanel addon install {slug}"
+
+
+def is_cli_only(slug: str) -> bool:
+    return bool(CATALOGUE.get(slug, {}).get("cli_only"))
+
+
+def install_command(slug: str) -> str:
+    return INSTALL_COMMAND.format(slug=slug) if is_cli_only(slug) else ""
+
+
 def _read() -> dict:
     try:
         with ADDONS_FILE.open(encoding="utf-8") as handle:
@@ -369,11 +386,18 @@ def state() -> list[dict]:
         entries.append({
             "slug": slug,
             **entry,
+            "cli_only": bool(entry.get("cli_only")),
+            "install_command": install_command(slug),
             "installed": bool(record.get("installed")),
             "installed_version": record.get("version") or "",
             "installed_at": record.get("installed_at") or "",
         })
     return entries
+
+
+def listed() -> list[dict]:
+    """What the Addons page shows: a shell-only addon only once it is installed."""
+    return [entry for entry in state() if not entry["cli_only"] or entry["installed"]]
 
 
 def install(slug: str) -> dict:
@@ -430,9 +454,11 @@ def require(slug: str) -> None:
     """Refuse an API call that belongs to an addon nobody installed."""
     entry = known(slug)   # a slug that is not in the catalogue is a bug, not a 409
     if not is_installed(slug):
+        where = (f"An administrator installs it on the server with: {install_command(slug)}"
+                 if is_cli_only(slug) else "Install it from the Addons page first.")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"The {entry['name']} addon is not installed. Install it from the Addons page first.",
+            detail=f"The {entry['name']} addon is not installed. {where}",
         )
 
 

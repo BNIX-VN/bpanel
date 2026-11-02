@@ -68,7 +68,8 @@ def list_addons(current_user: User = Depends(get_current_user)):
     worse than one that says which feature is missing.
     """
     ensure_role(current_user.role, Role.end_user)
-    entries = addons.state()
+    # Email and Resource limits are not offered until installed from the shell.
+    entries = addons.listed()
     if not is_admin_role(current_user.role):
         # A customer has no business knowing how the server is put together.
         for entry in entries:
@@ -79,6 +80,21 @@ def list_addons(current_user: User = Depends(get_current_user)):
 @router.post("/{slug}/install")
 def install_addon(slug: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
+    entry = addons.known(slug)
+    if addons.is_cli_only(slug):
+        # Email and Resource limits: not offered by the panel any more.
+        raise HTTPException(status_code=403, detail=(
+            f"{entry['name']} is installed from the server's shell: {addons.install_command(slug)}"))
+    return perform_install(slug, db, current_user.id)
+
+
+def perform_install(slug: str, db: Session, actor_id: int | None) -> dict:
+    """An addon installed and recorded, with the work that follows it.
+
+    The page's install and `bpanel addon install` (app/addon_cli) both come
+    here, so a shell install is the same as one from the page. It runs to the
+    end before returning; an HTTPException says why it did not.
+    """
     entry = addons.known(slug)
     if slug == addons.FAIL2BAN:
         # Unlike Application, there is nothing to configure afterwards: this
@@ -159,7 +175,7 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
         from app.services import shared_blocklist
 
         shared_blocklist.reconcile_in_background()
-    log_action(db, current_user.id, "install_addon", slug, record.get("version", ""))
+    log_action(db, actor_id, "install_addon", slug, record.get("version", ""))
     return {
         "slug": slug,
         "name": entry["name"],
@@ -200,6 +216,11 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
 @router.post("/{slug}/uninstall")
 def uninstall_addon(slug: str, purge: bool = False, db: Session = Depends(get_db),
                     current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    return perform_uninstall(slug, db, current_user.id, purge=purge)
+
+
+def perform_uninstall(slug: str, db: Session, actor_id: int | None, purge: bool = False) -> dict:
     """Turn an addon off, and with ``purge=true`` also delete the data it created.
 
     Without purge the units are stopped and disabled (a panel that no longer
@@ -212,7 +233,6 @@ def uninstall_addon(slug: str, purge: bool = False, db: Session = Depends(get_db
     and package, and the malware scan reports/schedule. The shared scan engine
     (ClamAV/LMD) is left in place.
     """
-    ensure_role(current_user.role, Role.admin)
     entry = addons.known(slug)
     stopped: list[str] = []
     failed: list[str] = []
@@ -303,7 +323,7 @@ def uninstall_addon(slug: str, purge: bool = False, db: Session = Depends(get_db
         from app.services import shared_blocklist
 
         shared_blocklist.reconcile_in_background()
-    log_action(db, current_user.id, "uninstall_addon", slug,
+    log_action(db, actor_id, "uninstall_addon", slug,
                f"stopped {len(stopped)} revoked {revoked} purged {len(purged)}{' (delete data)' if purge else ''}")
     if purge:
         return {
