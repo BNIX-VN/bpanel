@@ -159,15 +159,6 @@ tính năng, không xoá dữ liệu nó đã tạo.
 
 Tiện ích có trang riêng sẽ hiện trên menu bên trái khi được bật.
 
-**Email** và **Giới hạn tài nguyên** không có trong Cài đặt → Tiện ích. Muốn dùng
-thì cài trên server bằng root; cài xong chúng hiện ở Tiện ích như các tiện ích khác:
-
-```bash
-bpanel addon install mail      # Email: Exim, Dovecot, Rspamd, webmail
-bpanel addon install limits    # Giới hạn CPU, RAM, tiến trình, I/O cho từng tài khoản
-bpanel addon list              # Xem trạng thái mọi tiện ích
-```
-
 ## Yêu cầu hệ thống
 
 - Ubuntu 24.04 LTS, nên là máy mới cài.
