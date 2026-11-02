@@ -457,6 +457,17 @@ def delete_domain(db: Session, actor: User, domain_id: int) -> str:
     return name
 
 
+def _readdress(text: str, old: str, new: str) -> str:
+    """Addresses at exactly `old` re-pointed at `new`, one per line; the rest
+    as they were (a@old.vn is not a@old). For a renamed domain's forwarders
+    and catch-all, which would otherwise send mail to a name that is gone."""
+    lines = []
+    for line in (text or "").splitlines():
+        local, at, domain = line.strip().rpartition("@")
+        lines.append(f"{local}@{new}" if at and domain.lower() == old else line)
+    return "\n".join(lines)
+
+
 def migrate_domain(db: Session, old_domain: str, new_domain: str, owner_id: int | None = None) -> MailDomain | None:
     """Move a mail domain when a website is renamed old -> new.
 
@@ -485,7 +496,7 @@ def migrate_domain(db: Session, old_domain: str, new_domain: str, owner_id: int 
     dst = MailDomain(
         domain=new,
         owner_id=owner_id or src.owner_id,
-        catch_all=(src.catch_all or "").replace(f"@{old}", f"@{new}"),
+        catch_all=_readdress(src.catch_all, old, new),
         webmail_host=had_webmail,
         relay=src.relay,
         dkim_public=_dkim_public(new),
@@ -495,8 +506,11 @@ def migrate_domain(db: Session, old_domain: str, new_domain: str, owner_id: int 
     for acct in db.query(MailAccount).filter(MailAccount.domain == old).all():
         db.add(MailAccount(owner_id=acct.owner_id, domain=new, local_part=acct.local_part,
                            password_hash=acct.password_hash, quota_mb=acct.quota_mb, enabled=acct.enabled))
+        db.delete(acct)
     for fw in db.query(MailForwarder).filter(MailForwarder.domain == old).all():
-        db.add(MailForwarder(domain=new, local_part=fw.local_part, destinations=fw.destinations))
+        db.add(MailForwarder(domain=new, local_part=fw.local_part,
+                             destinations=_readdress(fw.destinations, old, new)))
+        db.delete(fw)
     # Move the maildirs BEFORE the old record goes away, so nothing deletes the
     # mail we just carried across. BPanel keeps them in the owner's home.
     shell.privileged("mail-move-domain", helper_args=[linux_user_of(owner), old, new], check=False)
