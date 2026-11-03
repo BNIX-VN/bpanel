@@ -2756,6 +2756,7 @@ export const vi = {
   "The terminal works on the server only.": "Terminal chỉ chạy được trên server.",
   "This account already has {n} terminals open. Close one first.": "Tài khoản này đang mở {n} Terminal. Hãy đóng bớt một phiên trước.",
   "This address may not open the terminal.": "Địa chỉ này không được phép mở Terminal.",
+  "This account has no home folder on the server yet. It gets one with its first website.": "Tài khoản này chưa có thư mục home trên server. Thư mục được tạo khi có website đầu tiên.",
   "Website not found.": "Không tìm thấy website.",
   "Your session has ended. Sign in again.": "Phiên đăng nhập đã hết. Hãy đăng nhập lại.",
   "Service versions": "Phiên bản dịch vụ",

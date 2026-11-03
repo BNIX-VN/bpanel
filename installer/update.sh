@@ -19,6 +19,40 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l
 
 log()  { echo ""; echo "==> $1"; }
+
+# The panel's own administrator is a hosting account too: its Linux user and
+# private group are both named "admin", and www-data and the panel user sit in
+# that group to read its websites. Ubuntu's /etc/sudoers still carries the
+# 12.04-era "%admin ALL=(ALL) ALL", which made all three sudoers. Retire that
+# line (operator, 2026-11-03), unless an account outside the panel's own relies
+# on it. A hosting account must never be one sudo trusts.
+retire_admin_group_sudo() {
+  local file=/etc/sudoers tmp member gid others=()
+  [[ -f "$file" ]] || return 0
+  grep -qE '^[[:space:]]*%admin[[:space:]]' "$file" || return 0
+  gid="$(getent group admin | cut -d: -f3)"
+  for member in $(getent group admin | cut -d: -f4 | tr ',' ' ') \
+                $(awk -F: -v gid="$gid" 'gid != "" && $4 == gid { print $1 }' /etc/passwd); do
+    case "$member" in www-data|bpanel) continue ;; esac
+    if [[ " $(id -nG "$member" 2>/dev/null) " == *" bpanel-sftp "* ]]; then continue; fi
+    others+=("$member")
+  done
+  if (( ${#others[@]} )); then
+    echo "  (warning: /etc/sudoers trusts group admin and ${others[*]} may rely on it; left as it is)"
+    return 0
+  fi
+  tmp="$(mktemp /etc/sudoers.bpanel.XXXXXX)"
+  sed -E 's/^([[:space:]]*%admin[[:space:]].*)$/# Disabled by BPanel, group admin is a hosting account: \1/' "$file" >"$tmp"
+  chown root:root "$tmp"
+  chmod 0440 "$tmp"
+  if visudo -c -f "$tmp" >/dev/null 2>&1; then
+    mv -f "$tmp" "$file"
+    echo "  Group admin is no longer trusted by sudo"
+  else
+    rm -f "$tmp"
+    echo "  (warning: could not rewrite /etc/sudoers safely; left as it is)"
+  fi
+}
 fail() { echo "ERROR: $1" >&2; exit 1; }
 
 # Skip expensive, idempotent steps when the inputs that drive them have not
@@ -1627,6 +1661,7 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     sed -i "s#^APP_DIR=\"/opt/bpanel\"#APP_DIR=\"${APP_DIR}\"#" /usr/local/sbin/bpanel-helper
     install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
     visudo -c -f /etc/sudoers.d/bpanel >/dev/null
+    retire_admin_group_sudo
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
     # The retune output is a function of the helper's logic and this machine's
     # RAM/CPU; neither moves between two updates of the same release. Skip the

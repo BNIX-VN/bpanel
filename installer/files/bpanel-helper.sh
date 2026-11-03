@@ -7278,11 +7278,20 @@ require_terminal_user() {
   local groups
   groups=" $(id -nG "$user") "
   [[ "$groups" == *" $BPANEL_SFTP_GROUP "* ]] || deny "not a hosting account user: $user"
-  # Never one that sudo trusts (Ubuntu's old "admin" group among them), even
-  # though the sandbox could not use it.
+  # Never one that sudo trusts, even though the sandbox could not use it. Ask
+  # sudo what it would allow rather than go by group names alone: the panel's
+  # administrator is a hosting account whose private group is named "admin",
+  # which Ubuntu's sudoers used to trust (retire_admin_group_sudo, updater).
   case "$groups" in
-    *" sudo "*|*" admin "*|*" wheel "*|*" root "*) deny "not a hosting account user: $user" ;;
+    *" sudo "*|*" wheel "*|*" root "*) deny "not a hosting account user: $user" ;;
   esac
+  # Captured, not piped into grep -q: under pipefail an early grep exit fails
+  # the pipeline and the check would pass a sudoer.
+  local sudo_rules
+  sudo_rules="$(sudo -n -l -U "$user" 2>/dev/null || true)"
+  if [[ "$sudo_rules" == *"may run the following commands"* ]]; then
+    deny "$user may use sudo, so it cannot have a terminal"
+  fi
   [[ -d "$HOME_ROOT/$user" && ! -L "$HOME_ROOT/$user" ]] || deny "home directory is missing: $HOME_ROOT/$user"
 }
 
@@ -7317,7 +7326,12 @@ terminal_session() {
     ln -sfn "/usr/bin/php${php_version}" "$php_dir/php"
   fi
   terminal_prepare_home "$user" "$group"
-  for p in $TERMINAL_HIDDEN_PATHS; do hidden+=("-$p"); done
+  for p in $TERMINAL_HIDDEN_PATHS; do
+    # The administrator's own session keeps its own home: /home/admin is
+    # hidden from everyone else's (operator, 2026-11-03).
+    if [[ "$p" == "$home" || "$p" == "$home/"* ]]; then continue; fi
+    hidden+=("-$p")
+  done
   props=(
     -p "User=$user" -p "Group=$group" -p "WorkingDirectory=$cwd"
     -p ProtectSystem=strict -p ProtectHome=tmpfs -p "BindPaths=$home" -p "ReadWritePaths=$home"

@@ -42,6 +42,7 @@ function closedText(closed, rules) {
     case 'demo': return t('The terminal is not available in the demo.');
     case 'signed-out': return t('Your session has ended. Sign in again.');
     case 'not-found': return t('Website not found.');
+    case 'no-home': return t('This account has no home folder on the server yet. It gets one with its first website.');
     case 'unavailable': return t('The terminal works on the server only.');
     case 'origin': return t('This address may not open the terminal.');
     case 'failed': return t('The terminal could not start.');
