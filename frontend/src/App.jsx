@@ -1234,6 +1234,9 @@ function App() {
   // (a customer whose package has it, or an admin logged in as one). A reseller
   // puts it in its packages only if the administrator gave it the right to.
   const canOpenTerminal = !!currentUser?.terminal;
+  // An administrator's terminal covers its own websites; a customer's is
+  // opened by logging in as the customer.
+  const ownsSite = (site) => String(site?.owner_id) === String(currentUser?.id);
   const canGrantTerminal = isAdmin || (isReseller && !!currentUser?.terminal_enabled);
 
   useEffect(() => {
@@ -8533,7 +8536,7 @@ function App() {
     const siteMenuItems = (site) => [
       { label: t('Files'), icon: FolderOpen, onClick: () => openWebsiteFileManager(site) },
       { label: t('Logs'), icon: FileText, onClick: () => navigateToPage('website', { path: websiteRoute(site.domain, 'logs') }) },
-      canOpenTerminal ? { label: t('Terminal'), icon: TerminalIcon, onClick: () => { setSiteTermOpen(true); navigateToPage('website', { path: websiteRoute(site.domain, 'advanced') }); } } : null,
+      canOpenTerminal && ownsSite(site) ? { label: t('Terminal'), icon: TerminalIcon, onClick: () => { setSiteTermOpen(true); navigateToPage('website', { path: websiteRoute(site.domain, 'advanced') }); } } : null,
       site.wordpress_installed
         ? { label: t('Update WordPress'), icon: RefreshCw, disabled: !!loading, onClick: () => openWordPressUpdate(site) }
         : { label: t('Install WordPress'), icon: Download, disabled: !!loading, onClick: () => openWordPressInstaller(site) },
@@ -8847,7 +8850,7 @@ function App() {
         <div className="wsd-actions">
           <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14} aria-hidden="true"/> {t('File manager')}</button>
           <button type="button" className="secondary-light" onClick={() => goTab('logs')}><FileText size={14} aria-hidden="true"/> {t('Logs')}</button>
-          {canOpenTerminal && <button type="button" className="secondary-light" onClick={() => { setSiteTermOpen(true); goTab('advanced'); }}><TerminalIcon size={14} aria-hidden="true"/> {t('Terminal')}</button>}
+          {canOpenTerminal && ownsSite(site) && <button type="button" className="secondary-light" onClick={() => { setSiteTermOpen(true); goTab('advanced'); }}><TerminalIcon size={14} aria-hidden="true"/> {t('Terminal')}</button>}
           <button type="button" className="secondary-light" onClick={() => navigateToPage('backups')}><Archive size={14} aria-hidden="true"/> {t('Backups')}</button>
         </div>
       </section>
@@ -9066,15 +9069,15 @@ function App() {
       </p>}
 
       <section className="section" id="wsd-terminal">
-        <PageHeader title={t('Terminal')} subtitle={canOpenTerminal
+        <PageHeader title={t('Terminal')} subtitle={canOpenTerminal && ownsSite(site)
           ? t("A real bash shell as this website's owner, starting in the website's folder.")
           : isAdmin || isReseller
             ? t("Administrators and resellers open a customer's terminal by logging in as the customer.")
             : t("The terminal is not part of this account's package.")}
-          actions={canOpenTerminal && (siteTermOpen
+          actions={canOpenTerminal && ownsSite(site) && (siteTermOpen
             ? <button type="button" className="secondary-light" onClick={() => setSiteTermOpen(false)}><X size={14} aria-hidden="true"/> {t('Close terminal')}</button>
             : <button type="button" className="secondary-light" onClick={() => setSiteTermOpen(true)}><TerminalIcon size={14} aria-hidden="true"/> {t('Open terminal')}</button>)}/>
-        {canOpenTerminal && siteTermOpen && <div className="wsd-terminal"><Terminal websiteId={site.id} apiBase={API} /></div>}
+        {canOpenTerminal && ownsSite(site) && siteTermOpen && <div className="wsd-terminal"><Terminal websiteId={site.id} apiBase={API} /></div>}
       </section>
 
       <section className="section wsd-danger">
