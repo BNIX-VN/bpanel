@@ -313,3 +313,9 @@ def test_the_installer_and_updater_retire_ubuntus_admin_group_rule(script):
     marker = "visudo -c -f /etc/sudoers.d/bpanel >/dev/null"
     after = text[text.index(marker) + len(marker):]
     assert after.lstrip().startswith("retire_admin_group_sudo"), "run once the panel's own rule is in place"
+
+
+def test_the_administrators_own_home_is_not_hidden_from_its_own_session():
+    # /home/admin is hidden from every other session; the admin's own needs it.
+    assert "/home/admin" in re.search(r'TERMINAL_HIDDEN_PATHS="([^"]+)"', HELPER).group(1).split()
+    assert 'if [[ "$p" == "$home" || "$p" == "$home/"* ]]; then continue; fi' in SESSION_FN

@@ -7326,7 +7326,12 @@ terminal_session() {
     ln -sfn "/usr/bin/php${php_version}" "$php_dir/php"
   fi
   terminal_prepare_home "$user" "$group"
-  for p in $TERMINAL_HIDDEN_PATHS; do hidden+=("-$p"); done
+  for p in $TERMINAL_HIDDEN_PATHS; do
+    # The administrator's own session keeps its own home: /home/admin is
+    # hidden from everyone else's (operator, 2026-11-03).
+    if [[ "$p" == "$home" || "$p" == "$home/"* ]]; then continue; fi
+    hidden+=("-$p")
+  done
   props=(
     -p "User=$user" -p "Group=$group" -p "WorkingDirectory=$cwd"
     -p ProtectSystem=strict -p ProtectHome=tmpfs -p "BindPaths=$home" -p "ReadWritePaths=$home"
