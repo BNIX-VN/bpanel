@@ -185,5 +185,14 @@ def test_the_helper_reports_the_os_update_and_what_an_upgrade_would_do():
     run = HELPER.split("\nrun_os_update() {\n", 1)[1].split("\n}\n", 1)[0]
     assert 'echo "bpanel-os-update: finished (exit $status)"' in run
     status = HELPER.split("\nservice_packages_status() {\n", 1)[1].split("\n}\n", 1)[0]
-    assert "apt-get -s -o Debug::NoLocking=1 upgrade" in status
+    # Simulated with the button's own options, phased updates included.
+    assert "apt-get -s -o Debug::NoLocking=1 -o APT::Get::Always-Include-Phased-Updates=true upgrade" in status
     assert "systemctl is-active bpanel-os-update.service" in status and "journalctl -u bpanel-os-update.service" in status
+
+
+def test_update_os_now_takes_the_updates_ubuntu_is_still_phasing_in():
+    # Left to phasing, libsqlite3-0 stayed "available" after every click (2026-11-05).
+    run = HELPER.split("\nrun_os_update() {\n", 1)[1].split("\n}\n", 1)[0]
+    now = HELPER.split("\nrun_os_update_now() {\n", 1)[1].split("\n}\n", 1)[0]
+    assert "APT::Get::Always-Include-Phased-Updates=true" in now
+    assert run.count("APT::Get::Always-Include-Phased-Updates=true") == 2, "the unit and the nohup fallback"
