@@ -9277,6 +9277,57 @@ sys.exit(0 if result["ok"] else 1)
 PY
 }
 
+# OPcache's file cache is never pruned by PHP: the compiled copy of a file
+# stays after the file, its plugin or its website is gone. A nightly timer
+# removes what nothing has read for 14 days (the root filesystem is
+# relatime, so atime is never more than a day behind a read); an entry that is
+# needed again is simply compiled again (operator, 2026-11-06). find does not
+# follow links and -type f leaves them alone, so a link planted in a cache
+# directory reaches nothing.
+OPCACHE_PRUNE_UNIT=bpanel-opcache-prune
+OPCACHE_PRUNE_ROOT=/var/lib/php/wpcli-opcache
+OPCACHE_PRUNE_DAYS=14
+ensure_opcache_prune_timer() {
+  local service="/etc/systemd/system/${OPCACHE_PRUNE_UNIT}.service"
+  local timer="/etc/systemd/system/${OPCACHE_PRUNE_UNIT}.timer"
+  local want_service want_timer changed=0
+  want_service="# Managed by BPanel (ensure_opcache_prune_timer).
+[Unit]
+Description=Remove OPcache file cache entries nothing has read for ${OPCACHE_PRUNE_DAYS} days
+ConditionPathIsDirectory=${OPCACHE_PRUNE_ROOT}
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/bin/find ${OPCACHE_PRUNE_ROOT} -mindepth 2 -type f -atime +${OPCACHE_PRUNE_DAYS} -delete
+ExecStart=/usr/bin/find ${OPCACHE_PRUNE_ROOT} -mindepth 2 -type d -empty -delete"
+  want_timer="# Managed by BPanel (ensure_opcache_prune_timer).
+[Unit]
+Description=Prune the OPcache file cache every night
+
+[Timer]
+OnCalendar=*-*-* 04:40:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target"
+  if [[ "$(cat "$service" 2>/dev/null)" != "$want_service" ]]; then
+    printf '%s\n' "$want_service" >"$service"
+    changed=1
+  fi
+  if [[ "$(cat "$timer" 2>/dev/null)" != "$want_timer" ]]; then
+    printf '%s\n' "$want_timer" >"$timer"
+    changed=1
+  fi
+  if (( changed )); then
+    chmod 0644 "$service" "$timer"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+  systemctl enable --now "${OPCACHE_PRUNE_UNIT}.timer" >/dev/null 2>&1 || true
+}
+
 case "$cmd" in
 
   git-repo)
@@ -10396,6 +10447,12 @@ PY
   firewall-blocklist-status|nginx-blocklist-status|ufw-blocklist-status)
     firewall_blocklist_status
     ;;
+  opcache-prune-timer-install)
+    [[ $# -eq 0 ]] || deny "usage: opcache-prune-timer-install"
+    ensure_opcache_prune_timer
+    echo "OPcache prune timer installed"
+    ;;
+
   firewall-blocklist-timer-install|nginx-blocklist-timer-install|ufw-blocklist-timer-install)
     firewall_blocklist_write_timer
     echo "IP blocklist timer installed"
