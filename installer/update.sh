@@ -1741,6 +1741,7 @@ if id -u bpanel >/dev/null 2>&1; then
     echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-blocklist-timer-install >/dev/null 2>&1 || true
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper opcache-prune-timer-install >/dev/null 2>&1 || true
   # Existing servers get the per-hostname certificate copies on this update, so
   # the panel opens on every domain here and not only on PANEL_DOMAIN.
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper panel-sni-sync >/dev/null 2>&1 || true

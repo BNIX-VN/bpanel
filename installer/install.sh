@@ -1258,6 +1258,7 @@ SERVICE
     systemctl start bpanel-timesync.service >/dev/null 2>&1 || true
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-blocklist-timer-install >/dev/null 2>&1 || true
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper opcache-prune-timer-install >/dev/null 2>&1 || true
     # Certificates the panel can answer a handshake with, plus the renewal hook
     # that keeps them fresh.
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper panel-sni-sync >/dev/null 2>&1 || true
