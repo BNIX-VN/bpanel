@@ -346,7 +346,10 @@ def test_shipped_rules_match_the_helper_copy():
         return sorted(re.findall(r"id:(\d+),phase:(\d)", text))
 
     # The server-wide copy is the default set: an opt-in group is not in it.
-    shipped = "\n".join(rule["rules"] for rule in waf.DEFAULT_RULES if rule.get("enabled_default", True))
+    # php2shell's field/file counts render only for an unpatched PHP; the
+    # helper's copy (never loaded by nginx) carries the whole group.
+    shipped = "\n".join(rule["rules"] + rule.get("unpatched_rules", "")
+                        for rule in waf.DEFAULT_RULES if rule.get("enabled_default", True))
     assert rule_ids(block) == rule_ids(shipped)
     assert phases(block) == phases(shipped)
 
