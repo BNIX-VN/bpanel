@@ -359,7 +359,8 @@ DANGEROUS_DIRECTIVES = re.compile(
     r"access_log\s+|"
     r"error_log\s+|"
     # ---- HTTP response control / phishing primitives ----
-    r"return\s+|"             # forced redirects, body injection
+    # `return` is checked on its own in validate_custom_nginx: a status, or a
+    # redirect within the site, but no response body and no outside address.
     r"error_page\s+|"         # remap error responses to attacker URI
     r"more_set_headers\b|"
     r"more_clear_headers\b|"
@@ -761,6 +762,27 @@ def _custom_top_level_directives(custom_directives: str) -> set[str]:
     return names
 
 
+def _custom_sets_root_location(custom_directives: str) -> bool:
+    """Whether the custom block has its own top-level ``location / { }``."""
+    scrubbed = _scrub_nginx_for_analysis(custom_directives or "")
+    for match in re.finditer(r"(?m)(?:^|[;{}])\s*location\s+/\s*\{", scrubbed):
+        before = scrubbed[:match.start() + 1]
+        if before.count("{") - before.count("}") <= 0:
+            return True
+    return False
+
+
+# The template's own `location / { try_files ...; }`, and the same commented
+# out while a site's custom block sets location / itself: nginx refuses two of
+# them in one server (operator, 2026-11-08, "location / { return 403; }" in a
+# PHP site). Commented rather than deleted, so it comes back as it was - for
+# whichever template wrote it - when the custom block stops setting it. A
+# proxy's location / carries its proxy_pass and is never taken out.
+ROOT_LOCATION_RE = re.compile(r"\n    location / \{\n(?:        [^\n]*\n)*    \}\n")
+ROOT_LOCATION_OFF = "    # BPANEL ROOT LOCATION: the custom block sets location /\n"
+ROOT_LOCATION_OFF_RE = re.compile(r"\n" + re.escape(ROOT_LOCATION_OFF) + r"(?:    #~[^\n]*\n)+")
+
+
 def _apply_custom_overrides(content: str, custom_directives: str) -> str:
     """Leave the template's line out of the primary server block for each
     directive the custom block sets; put the default back when it does not."""
@@ -773,6 +795,18 @@ def _apply_custom_overrides(content: str, custom_directives: str) -> str:
             anchor = re.search(r"\n    error_log [^;\n]*;", content) or re.search(r"\n    server_name [^;\n]*;", content)
             if anchor:
                 content = content[:anchor.end()] + f"\n\n    {default}" + content[anchor.end():]
+    if _custom_sets_root_location(custom_directives):
+        main = ROOT_LOCATION_RE.search(content)
+        if main and "proxy_pass" not in main.group(0):
+            lines = main.group(0).strip("\n").split("\n")
+            off = ROOT_LOCATION_OFF + "".join(f"    #~{line[4:]}\n" for line in lines)
+            content = content[:main.start()] + "\n" + off + content[main.end():]
+    else:
+        off = ROOT_LOCATION_OFF_RE.search(content)
+        if off:
+            lines = off.group(0).strip("\n").split("\n")[1:]
+            back = "".join(f"    {line[6:]}\n" for line in lines)
+            content = content[:off.start()] + "\n" + back + content[off.end():]
     return content
 
 
@@ -892,6 +926,37 @@ def _scrub_nginx_for_analysis(text: str) -> str:
     return "".join(out)
 
 
+# What a custom block may `return` (operator, 2026-11-08: "location / { return
+# 403; }" was refused). A status code alone - 403, 404, 410, 444 - or a
+# redirect that stays on the site: a local path, or this host over https.
+# Never a body (`return 200 "<html>..."` is a page served as the site) and
+# never another address.
+RETURN_RE = re.compile(r"(?mi)^\s*return\s+(\d{3})(?:\s+([^\s;]+))?\s*;")
+RETURN_SAME_HOST = ("https://$host", "https://$server_name", "http://$host")
+
+
+def _check_custom_returns(text: str, scrubbed: str) -> None:
+    if re.search(r"(?i)(?:^|[\s;{}])return\b[^;]*['\"]", text):
+        raise ValueError("Custom return may not send a quoted response body")
+    statements = re.sub(r"([{};])", r"\1\n", scrubbed)
+    found = RETURN_RE.findall(statements)
+    if len(found) != len(re.findall(r"(?mi)^\s*return\b", statements)):
+        raise ValueError("Malformed or unsupported return directive")
+    for code, target in found:
+        status = int(code)
+        if not (200 <= status <= 599):
+            raise ValueError("Custom return needs a status code between 200 and 599")
+        if 300 <= status <= 399 and status not in (304,):
+            if not target or not (
+                (target.startswith("/") and not target.startswith("//"))
+                or any(target == base or target.startswith(base + "/") or target.startswith(base + "$")
+                       for base in RETURN_SAME_HOST)
+            ) or ".." in target.split("/"):
+                raise ValueError("Custom redirects must stay on the site: a path such as /new or https://$host/...")
+        elif target:
+            raise ValueError("Custom return may only send a status code, not a response body")
+
+
 def validate_custom_nginx(content: Optional[str]) -> str:
     """Sanitize and validate a custom nginx block before rendering it inside a server { } scope."""
     if not content:
@@ -926,8 +991,9 @@ def validate_custom_nginx(content: Optional[str]) -> str:
     if DANGEROUS_DIRECTIVES.search(normalized):
         raise ValueError(
             "Custom block must not contain disallowed directives (proxy_pass, alias, "
-            "return, ssl_certificate, ...)"
+            "root, ssl_certificate, ...)"
         )
+    _check_custom_returns(text, scrubbed)
     add_header_count = len(re.findall(r"(?mi)(?:^|[;{}])\s*add_header\b", text))
     add_header_names = ADD_HEADER_NAME_RE.findall(text)
     if add_header_count != len(add_header_names):
@@ -1670,7 +1736,9 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
     if not target.exists():
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
-    positioned = _apply_custom_overrides(_ensure_custom_include_position(existing, domain), safe_custom)
+    # Overrides first: a location / they bring back is then put after the
+    # include again, where the vhost had it.
+    positioned = _ensure_custom_include_position(_apply_custom_overrides(existing, safe_custom), domain)
     custom_snapshot = _custom_include_snapshot(domain)
     _write_custom_include(domain, safe_custom)
     if positioned != existing:

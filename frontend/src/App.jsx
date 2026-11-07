@@ -4308,22 +4308,29 @@ function App() {
   // Copy/Move: remember what and where from; nothing happens until Paste.
   function clipFileItems(action, paths) {
     if (!hasFileTarget() || !paths?.length) return;
-    setFileClipboard({ action, paths: [...paths], from: fileListPath || '', targetKey: fileTargetKey(), targetBody: fileTargetBody() });
+    const app = currentFileApp();
+    const label = app ? `apps/${app.name}` : (websites.find(site => String(site.id) === String(selectedWebsiteId))?.domain || '');
+    setFileClipboard({ action, paths: [...paths], from: fileListPath || '', label, targetKey: fileTargetKey(), targetBody: fileTargetBody() });
     setSelectedFilePaths([]);
     setNotice(action === 'copy'
       ? t('{n} item(s) to copy. Open the folder to put them in and press Paste.', { n: paths.length })
       : t('{n} item(s) to move. Open the folder to put them in and press Paste.', { n: paths.length }));
   }
 
-  // Paste: into the folder on screen, in the website or application they came
-  // from (a copy or move between two of them is not something the server does).
+  // Paste: into the folder on screen - in the website or application they came
+  // from, or in another one of the same account (operator, 2026-11-08).
   async function pasteFileClipboard() {
     const clip = fileClipboard;
-    if (!clip || clip.targetKey !== fileTargetKey()) return;
+    if (!clip || !hasFileTarget()) return;
+    const here = fileTargetBody();
+    const into = clip.targetKey === fileTargetKey() ? {} : {
+      destination_website_id: here.website_id ?? null,
+      destination_app_id: here.app_id ?? null,
+    };
     const verb = clip.action === 'copy' ? t('Copying files...') : t('Moving files...');
     const data = await request(`/maintenance/files/${clip.action}`, {
       method: 'POST',
-      body: JSON.stringify({ ...clip.targetBody, paths: clip.paths, destination_path: fileListPath || '' }),
+      body: JSON.stringify({ ...clip.targetBody, ...into, paths: clip.paths, destination_path: fileListPath || '' }),
     }, verb);
     if (data) {
       // Moved items are no longer where the clipboard says; copies can go again.
@@ -10175,11 +10182,9 @@ function App() {
           <strong>{fileClipboard.action === 'copy'
             ? t('{n} item(s) to copy', { n: fileClipboard.paths.length })
             : t('{n} item(s) to move', { n: fileClipboard.paths.length })}</strong>
-          <span className="hint" title={fileClipboard.paths.join('\n')}>{t('from')} /{fileClipboard.from}</span>
+          <span className="hint" title={fileClipboard.paths.join('\n')}>{t('from')} {fileClipboard.label}/{fileClipboard.from}</span>
           <div className="fm-selection-actions">
-            {fileClipboard.targetKey === fileTargetKey()
-              ? <button disabled={!!loading} onClick={pasteFileClipboard}><ClipboardPaste size={14} aria-hidden="true"/> {t('Paste here')}</button>
-              : <span className="hint">{t('Open the website or application they came from to paste them.')}</span>}
+            <button disabled={!!loading} onClick={pasteFileClipboard}><ClipboardPaste size={14} aria-hidden="true"/> {t('Paste here')}</button>
           </div>
           <button type="button" className="secondary-light fm-selection-clear" onClick={() => setFileClipboard(null)}><X size={14} aria-hidden="true"/> {t('Cancel')}</button>
         </div>}

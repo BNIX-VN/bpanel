@@ -126,6 +126,10 @@ class FileTransfer(BaseModel):
     app_id: Optional[int] = None
     paths: list[str]
     destination_path: str = site_users.PUBLIC_DIR
+    # Where Paste drops them, when that is another website or application of
+    # the same account; neither means the same tree.
+    destination_website_id: Optional[int] = None
+    destination_app_id: Optional[int] = None
 
 
 class FileArchive(BaseModel):
@@ -1735,10 +1739,21 @@ def delete_entries(payload: FileBulkDelete, db: Session = Depends(get_db), curre
     return {"deleted": deleted}
 
 
+def _transfer_target(db: Session, current_user: User, payload: FileTransfer):
+    """The other tree a copy or move goes into, checked like the source: the
+    caller must be able to open it. None when it stays in the same tree."""
+    if not (payload.destination_website_id or payload.destination_app_id):
+        return None
+    if (payload.destination_website_id == payload.website_id and payload.destination_app_id == payload.app_id):
+        return None
+    return get_file_target(db, current_user, payload.destination_website_id, payload.destination_app_id)
+
+
 @router.post("/files/copy")
 def copy_entries(payload: FileTransfer, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
     website = get_file_target(db, current_user, payload.website_id, payload.app_id)
+    into = _transfer_target(db, current_user, payload)
     try:
         copied = file_manager.copy_entries(
             website,
@@ -1746,7 +1761,8 @@ def copy_entries(payload: FileTransfer, db: Session = Depends(get_db), current_u
             payload.destination_path,
             allow_executable=is_admin_role(current_user.role),
             allow_sensitive=is_admin_role(current_user.role),
-            quota_check=_quota_check_for_website(db, website),
+            quota_check=_quota_check_for_website(db, into or website),
+            into=into,
         )
     except storage_quota.StorageQuotaExceeded as exc:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
@@ -1760,12 +1776,14 @@ def copy_entries(payload: FileTransfer, db: Session = Depends(get_db), current_u
 def move_entries(payload: FileTransfer, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
     website = get_file_target(db, current_user, payload.website_id, payload.app_id)
+    into = _transfer_target(db, current_user, payload)
     try:
         moved = file_manager.move_entries(
             website,
             payload.paths,
             payload.destination_path,
             allow_executable=is_admin_role(current_user.role),
+            into=into,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
