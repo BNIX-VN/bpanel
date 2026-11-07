@@ -5761,10 +5761,14 @@ function App() {
   }, [isAuthenticated, page, isAdmin, mailTab, rspamdView]);
 
   // The websites page needs the list too, for the Application picker on create.
+  // So does the Dashboard: a customer's Applications tile shows only once the
+  // limit is known (appsFeatureEnabled), and with the list loaded nowhere else
+  // a customer on a package with apps never saw the tile at all - there was no
+  // way in to create one (operator, 2026-11-07). Admins always see it.
   useEffect(() => {
     if (!currentUser || !applicationAddonInstalled) return;
     if (page === 'applications') { loadSiteApps(); loadSiteRuntimes(); }
-    else if (page === 'websites' || page === 'files') loadSiteApps();
+    else if (page === 'dashboard' || page === 'websites' || page === 'files') loadSiteApps();
   }, [page, currentUser, applicationAddonInstalled]);
 
   useEffect(() => {

@@ -120,3 +120,13 @@ def test_a_rename_rewrites_every_form_the_old_address_is_stored_in():
     assert forms["//legiang360.com"] == "//cms.legiang360.com"
     assert forms[r"\/\/legiang360.com"] == r"\/\/cms.legiang360.com"
     assert forms["%2F%2Flegiang360.com"] == "%2F%2Fcms.legiang360.com"
+
+
+def test_a_customer_sees_the_applications_tile_on_the_dashboard():
+    # The tile needs the app limit (appsFeatureEnabled); it was loaded only on
+    # the Applications, Websites and Files pages, so a customer whose package
+    # has apps never saw the tile and had no way in (2026-11-07).
+    effect = APP_JSX[APP_JSX.index("if (page === 'applications') { loadSiteApps(); loadSiteRuntimes(); }"):]
+    effect = effect[:effect.index("}, [page, currentUser, applicationAddonInstalled]);")]
+    assert "page === 'dashboard'" in effect and "loadSiteApps()" in effect
+    assert "const appsFeatureEnabled = applicationAddonInstalled && (isAdmin || siteApps.limit > 0);" in APP_JSX
