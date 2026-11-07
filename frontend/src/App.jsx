@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket, LayoutDashboard, SlidersHorizontal, Gauge, LineChart } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket, LayoutDashboard, SlidersHorizontal, Gauge, LineChart, ClipboardPaste } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
@@ -1079,6 +1079,9 @@ function App() {
   const [fileAppId, setFileAppId] = useState(() => standaloneEditor?.appId || fileManagerTarget.appId);
   // The file manager shows the account's home itself (its websites and apps).
   const [fileAtHome, setFileAtHome] = useState(false);
+  // Copy and Move put the items here; Paste in the folder opened next does the
+  // work (operator, 2026-11-08: typing the destination's path was the old way).
+  const [fileClipboard, setFileClipboard] = useState(null);
   const [siteAppLog, setSiteAppLog] = useState(null);
   const [composePlan, setComposePlan] = useState(null);
   const [siteAppEdit, setSiteAppEdit] = useState(null);
@@ -4278,26 +4281,42 @@ function App() {
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
-  async function transferFileItems(action, paths) {
+  // Copy/Move: remember what and where from; nothing happens until Paste.
+  function clipFileItems(action, paths) {
     if (!hasFileTarget() || !paths?.length) return;
-    const verb = action === 'copy' ? 'Copy' : 'Move';
-    const destination = await promptDialog({ label: `${verb} to folder:`, defaultValue: fileListPath || 'public_html' });
-    if (destination === null) return;
-    const targetPath = destination.trim() || fileListPath || 'public_html';
-    const data = await request(`/maintenance/files/${action}`, {
+    setFileClipboard({ action, paths: [...paths], from: fileListPath || '', targetKey: fileTargetKey(), targetBody: fileTargetBody() });
+    setSelectedFilePaths([]);
+    setNotice(action === 'copy'
+      ? t('{n} item(s) to copy. Open the folder to put them in and press Paste.', { n: paths.length })
+      : t('{n} item(s) to move. Open the folder to put them in and press Paste.', { n: paths.length }));
+  }
+
+  // Paste: into the folder on screen, in the website or application they came
+  // from (a copy or move between two of them is not something the server does).
+  async function pasteFileClipboard() {
+    const clip = fileClipboard;
+    if (!clip || clip.targetKey !== fileTargetKey()) return;
+    const verb = clip.action === 'copy' ? t('Copying files...') : t('Moving files...');
+    const data = await request(`/maintenance/files/${clip.action}`, {
       method: 'POST',
-      body: JSON.stringify({ ...fileTargetBody(), paths, destination_path: targetPath }),
-    }, `${verb}ing files...`);
-    if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
+      body: JSON.stringify({ ...clip.targetBody, paths: clip.paths, destination_path: fileListPath || '' }),
+    }, verb);
+    if (data) {
+      // Moved items are no longer where the clipboard says; copies can go again.
+      if (clip.action === 'move') setFileClipboard(null);
+      setNotice(t('{n} item(s) pasted.', { n: clip.paths.length }));
+      await listFiles(fileListPath);
+      await loadCurrentUser();
+    }
   }
 
   // A row's own menu passes its one path; the selection bar passes none.
-  async function copySelectedFiles(paths = selectedFilePaths) {
-    await transferFileItems('copy', paths);
+  function copySelectedFiles(paths = selectedFilePaths) {
+    clipFileItems('copy', paths);
   }
 
-  async function moveSelectedFiles(paths = selectedFilePaths) {
-    await transferFileItems('move', paths);
+  function moveSelectedFiles(paths = selectedFilePaths) {
+    clipFileItems('move', paths);
   }
 
   async function archiveSelectedFiles(format = archiveFormat) {
@@ -10090,6 +10109,18 @@ function App() {
           </label>
           <button className="secondary-light" disabled={!canEdit || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14} aria-hidden="true"/> {t('Refresh')}</button>
         </div>
+        {fileClipboard && !fileAtHome && <div className="fm-selection fm-clipboard" role="region" aria-label={t('Clipboard')}>
+          <strong>{fileClipboard.action === 'copy'
+            ? t('{n} item(s) to copy', { n: fileClipboard.paths.length })
+            : t('{n} item(s) to move', { n: fileClipboard.paths.length })}</strong>
+          <span className="hint" title={fileClipboard.paths.join('\n')}>{t('from')} /{fileClipboard.from}</span>
+          <div className="fm-selection-actions">
+            {fileClipboard.targetKey === fileTargetKey()
+              ? <button disabled={!!loading} onClick={pasteFileClipboard}><ClipboardPaste size={14} aria-hidden="true"/> {t('Paste here')}</button>
+              : <span className="hint">{t('Open the website or application they came from to paste them.')}</span>}
+          </div>
+          <button type="button" className="secondary-light fm-selection-clear" onClick={() => setFileClipboard(null)}><X size={14} aria-hidden="true"/> {t('Cancel')}</button>
+        </div>}
         {selectedFilePaths.length > 0 && <div className="fm-selection" role="region" aria-label={t('Selected items')}>
           <strong>{t('{count} selected', { count: selectedFilePaths.length })}</strong>
           <div className="fm-selection-actions">
