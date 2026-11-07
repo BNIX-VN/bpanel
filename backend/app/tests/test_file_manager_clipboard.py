@@ -21,11 +21,14 @@ def test_copy_and_move_ask_for_no_path():
     assert "clipFileItems('copy', paths);" in APP and "clipFileItems('move', paths);" in APP
 
 
-def test_paste_goes_into_the_folder_on_screen_of_the_same_tree():
+def test_paste_goes_into_the_folder_on_screen_of_any_tree_of_the_account():
     paste = _function("pasteFileClipboard")
-    assert "clip.targetKey !== fileTargetKey()" in paste
+    assert "clip.targetKey === fileTargetKey() ? {} : {" in paste
+    assert "destination_website_id: here.website_id ?? null" in paste
+    assert "destination_app_id: here.app_id ?? null" in paste
     assert "destination_path: fileListPath || ''" in paste
-    assert "...clip.targetBody" in paste
+    assert "...clip.targetBody, ...into" in paste
+    assert "Open the website or application they came from" not in APP
     assert "if (clip.action === 'move') setFileClipboard(null);" in paste
 
 
