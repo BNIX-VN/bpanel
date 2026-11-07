@@ -3507,6 +3507,12 @@ function App() {
     setSiteAppEdit({
       id: app.id,
       kind: app.kind,
+      name: app.name || '',
+      autostart: app.autostart !== false,
+      start_kind: app.start_kind || 'npm',
+      start_arg: app.start_arg || '',
+      node_major: app.node_major || '22',
+      image: app.image || '',
       port: app.port ?? '',
       memory_limit_mb: app.memory_limit_mb ?? '',
       cpu_limit: app.cpu_limit || '',
@@ -3543,7 +3549,25 @@ function App() {
     const memory = Number(siteAppEdit.memory_limit_mb);
     if (memory && memory !== app.memory_limit_mb) patch.memory_limit_mb = memory;
     const cpu = String(siteAppEdit.cpu_limit || '').trim();
-    if (app.kind === 'docker' && cpu && cpu !== app.cpu_limit) patch.cpu_limit = cpu;
+    if (app.kind !== 'node' && cpu && cpu !== app.cpu_limit) patch.cpu_limit = cpu;
+    // The rest goes only when it changed too: a rename moves the folder and the
+    // unit, and the runtime settings rewrite the unit and restart the app.
+    const name = String(siteAppEdit.name || '').trim();
+    if (name && name !== app.name) patch.name = name;
+    if (siteAppEdit.autostart !== (app.autostart !== false)) patch.autostart = siteAppEdit.autostart;
+    if (app.kind === 'node') {
+      if (siteAppEdit.start_kind !== app.start_kind || siteAppEdit.start_arg.trim() !== (app.start_arg || '')) {
+        patch.start_kind = siteAppEdit.start_kind;
+        patch.start_arg = siteAppEdit.start_arg.trim();
+      }
+      if (siteAppEdit.node_major !== (app.node_major || '22')) patch.node_major = siteAppEdit.node_major;
+    }
+    if (app.kind === 'docker') {
+      const image = siteAppEdit.image.trim();
+      if (image && image !== app.image) patch.image = image;
+      const inner = Number(siteAppEdit.container_port);
+      if (inner && inner !== app.container_port) patch.container_port = inner;
+    }
     const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, t('Saving configuration...'));
     if (data) {
       setSiteAppEdit(null);
@@ -8255,6 +8279,14 @@ function App() {
                 <button className="user-edit-close secondary-light" onClick={() => { setSiteAppEdit(null); setSiteAppEditPlan(null); }} aria-label={t('Close')} title={t('Close')}><X size={16}/></button>
               </div>
               <div className="user-edit-grid">
+                <label><span>{t('Name')}</span>
+                  <input value={siteAppEdit.name} disabled={!!loading || app.kind === 'compose'}
+                    title={app.kind === 'compose' ? t('A compose application keeps its volumes under its name, so it cannot be renamed.') : undefined}
+                    onChange={e => setSiteAppEdit(prev => ({ ...prev, name: e.target.value }))} />
+                </label>
+                <label><span>{t('Runtime')}</span>
+                  <input value={t(SITE_APP_KIND_LABELS[app.kind] || app.kind)} disabled readOnly />
+                </label>
                 <label><span>{t('Port')}</span>
                   <input type="number" value={siteAppEdit.port} min={portFrom} max={portTo} disabled={!!loading}
                     onChange={e => setSiteAppEdit(prev => ({ ...prev, port: e.target.value }))} />
@@ -8263,9 +8295,39 @@ function App() {
                   <input type="number" value={siteAppEdit.memory_limit_mb} min={64} max={isAdmin ? 16384 : (siteApps.memory_ceiling_mb || 512)} disabled={!!loading}
                     onChange={e => setSiteAppEdit(prev => ({ ...prev, memory_limit_mb: e.target.value }))} />
                 </label>
-                {app.kind === 'docker' && <label><span>CPU</span>
+                {app.kind === 'node' && <>
+                  <label><span>{t('Start with')}</span>
+                    <select value={siteAppEdit.start_kind} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, start_kind: e.target.value }))}>
+                      <option value="npm">npm run</option>
+                      <option value="npx">npx</option>
+                      <option value="yarn">yarn</option>
+                      <option value="node">node</option>
+                    </select>
+                  </label>
+                  <label><span>{siteAppEdit.start_kind === 'node' ? t('Entry file') : t('Script or package')}</span>
+                    <input value={siteAppEdit.start_arg} disabled={!!loading} placeholder={siteAppEdit.start_kind === 'node' ? 'server.js' : 'start'}
+                      onChange={e => setSiteAppEdit(prev => ({ ...prev, start_arg: e.target.value }))} />
+                  </label>
+                  <label><span>{t('Node version')}</span>
+                    <select value={siteAppEdit.node_major} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, node_major: e.target.value }))}>
+                      {[...new Set([...(siteRuntimes.node_majors?.length ? siteRuntimes.node_majors : ['22']), siteAppEdit.node_major])].map(major => <option key={major} value={major}>Node {major}</option>)}
+                    </select>
+                  </label>
+                </>}
+                {app.kind === 'docker' && <>
+                  <label><span>{t('Image')}</span>
+                    <input value={siteAppEdit.image} disabled={!!loading} placeholder="n8nio/n8n:latest" onChange={e => setSiteAppEdit(prev => ({ ...prev, image: e.target.value }))} />
+                  </label>
+                  <label><span>{t('Port in container')}</span>
+                    <input type="number" value={siteAppEdit.container_port} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, container_port: e.target.value }))} />
+                  </label>
+                </>}
+                {app.kind !== 'node' && <label><span>{app.kind === 'compose' ? t('CPU per service') : 'CPU'}</span>
                   <input value={siteAppEdit.cpu_limit} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, cpu_limit: e.target.value }))} />
                 </label>}
+                <label className="check-line"><input type="checkbox" checked={siteAppEdit.autostart} disabled={!!loading}
+                  onChange={e => setSiteAppEdit(prev => ({ ...prev, autostart: e.target.checked }))} /> <span>{t('Start on boot')}</span>
+                </label>
                 {app.kind === 'compose' && siteAppEditPlan?.services?.length > 0 && <label><span>{t('Service behind the domain')}</span>
                   <select value={siteAppEdit.web_service} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, web_service: e.target.value }))}>
                     <option value="">{t('Choose for me')}</option>
