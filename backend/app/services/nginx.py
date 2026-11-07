@@ -1736,7 +1736,9 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
     if not target.exists():
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
-    positioned = _apply_custom_overrides(_ensure_custom_include_position(existing, domain), safe_custom)
+    # Overrides first: a location / they bring back is then put after the
+    # include again, where the vhost had it.
+    positioned = _ensure_custom_include_position(_apply_custom_overrides(existing, safe_custom), domain)
     custom_snapshot = _custom_include_snapshot(domain)
     _write_custom_include(domain, safe_custom)
     if positioned != existing:
