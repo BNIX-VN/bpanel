@@ -36,8 +36,8 @@ from app.api import users as users_api
 from app.api import waf as waf_api
 from app.api import websites as websites_api
 from app.core.access import can_manage_user, scope_owner
-from app.core.permissions import is_reseller_role
-from app.models.entities import User, Website
+from app.core.permissions import is_admin_role, is_reseller_role
+from app.models.entities import SiteApp, User, Website
 from app.api.maintenance import FileBulkDelete, FileMkdir, FileTransfer, FileWrite
 from app.api.waf import WafCustomRulesUpdate
 from app.schemas.schemas import (
@@ -72,6 +72,52 @@ def _website(ctx: Context, domain: str) -> Website:
             f"No website named {wanted}. Use list_websites to see what there is."
         )
     return website
+
+
+# An application's code lives in ~/apps/<name>, outside every website, so a
+# token could not upload to it: the file tools only took a domain (operator,
+# 2026-11-07, uploading an Astro app's source). They take an app instead.
+APP_ARG = {
+    "type": "string",
+    "maxLength": 64,
+    "description": "An application's name, from list_apps. Give it instead of "
+                   "domain to work in the application's own folder.",
+}
+FILE_TREE = "Give domain for a website or app for an application, not both."
+
+
+def _app(ctx: Context, name: str) -> SiteApp:
+    """The application this name names, if the caller may see it."""
+    wanted = (name or "").strip()
+    if not wanted:
+        raise ToolError("An application name is required")
+    rows = scope_owner(ctx.db.query(SiteApp).filter(SiteApp.name == wanted),
+                       SiteApp.owner_id, ctx.db, ctx.user).all()
+    if not rows:
+        raise ToolError(f"No application named {wanted}. Use list_apps to see what there is.")
+    if len(rows) > 1:
+        owners = ", ".join(sorted(row.owner.username for row in rows))
+        raise ToolError(f"Several accounts have an application named {wanted} ({owners}). "
+                        "Use a token of the account you mean.")
+    return rows[0]
+
+
+def _tree_ids(ctx: Context, args: dict) -> dict:
+    """website_id or app_id, for the file manager's payloads."""
+    domain, app = (args.get("domain") or "").strip(), (args.get("app") or "").strip()
+    if bool(domain) == bool(app):
+        raise ToolError(FILE_TREE)
+    if app:
+        return {"app_id": _app(ctx, app).id}
+    return {"website_id": _website(ctx, domain).id}
+
+
+def _tree(ctx: Context, args: dict):
+    """What file_manager works on: a website's folder, or an application's."""
+    try:
+        return maintenance_api.get_file_target(ctx.db, ctx.user, **_tree_ids(ctx, args))
+    except HTTPException as exc:
+        raise ToolError(str(exc.detail)) from exc
 
 
 def _rows(value) -> list:
@@ -348,50 +394,63 @@ MAX_READ_LINES = 2000
 MAX_READ_CHARS = 40_000
 
 
-@tool("list_files", "List files in a website",
-      "What is in a directory of a website, with sizes and modification "
-      "times. Paths are relative to the website's root.",
+@tool("list_apps", "List applications",
+      "The applications this token can reach (Node, Docker, Compose), with the "
+      "folder each one's code is in and the websites it serves. Use the name "
+      "as app in the file tools to read or upload an application's code.",
+      {})
+def _list_apps(ctx: Context, args: dict):
+    rows = scope_owner(ctx.db.query(SiteApp), SiteApp.owner_id, ctx.db, ctx.user).order_by(SiteApp.name).all()
+    return [{"name": app.name, "kind": app.kind, "owner": app.owner.username if app.owner else None,
+             "status": app.status, "port": app.port,
+             "websites": sorted(site.domain for site in app.websites)} for app in rows]
+
+
+@tool("list_files", "List files in a website or application",
+      "What is in a directory of a website or an application, with sizes and "
+      "modification times. Paths are relative to its root. " + FILE_TREE,
       {"domain": DOMAIN_ARG,
+       "app": APP_ARG,
        "path": {"type": "string", "maxLength": 1024,
-                "description": "Directory relative to the website root. "
-                               "Empty or omitted means the root itself."}},
-      required=("domain",))
+                "description": "Directory relative to the root. "
+                               "Empty or omitted means the root itself."}})
 def _list_files(ctx: Context, args: dict):
-    website = _website(ctx, args["domain"])
-    return maintenance_api.list_files(
-        website_id=website.id, path=args.get("path", ""),
-        db=ctx.db, current_user=ctx.user)
+    target = _tree(ctx, args)
+    try:
+        return {"items": file_manager.list_files(target, args.get("path", ""))}
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
 
 
-@tool("read_file", "Read a file from a website",
+@tool("read_file", "Read a file from a website or application",
       f"A text file, a range of lines at a time: up to {MAX_READ_LINES} lines "
       f"or {MAX_READ_CHARS // 1000} KB, whichever comes first. The answer says "
       "total_lines, and next_start_line when there is more: call again with "
       "start_line set to it to read on. Check that before concluding something "
       "is missing from the end. Source files with a few bytes that are not "
       "UTF-8 come back with those shown as � and a note; images, fonts and "
-      "other binary files are refused.",
+      "other binary files are refused. " + FILE_TREE,
       {"domain": DOMAIN_ARG,
+       "app": APP_ARG,
        "path": {"type": "string", "maxLength": 1024,
-                "description": "File relative to the website root."},
+                "description": "File relative to the root."},
        # A file opened as text has at most as many lines as bytes.
        "start_line": {"type": "integer", "minimum": 1,
                       "maximum": file_manager.MAX_TEXT_FILE_BYTES,
                       "description": "First line to return, 1-based. Defaults to 1."},
        "line_count": {"type": "integer", "minimum": 1, "maximum": MAX_READ_LINES,
                       "description": f"How many lines at most. Defaults to {MAX_READ_LINES}."}},
-      required=("domain", "path"))
+      required=("path",))
 def _read_file(ctx: Context, args: dict):
-    website = _website(ctx, args["domain"])
+    target = _tree(ctx, args)
     path = args["path"]
     try:
-        result = maintenance_api.read_file(
-            website_id=website.id, path=path, lossy=True, db=ctx.db, current_user=ctx.user)
-    except HTTPException as exc:
+        content = file_manager.read_text_file(
+            target, path, allow_sensitive=is_admin_role(ctx.user.role), lossy=True)
+    except ValueError as exc:
         # "File not found", "is not a text file": the reason, not a stack trace.
-        raise ToolError(f"{path}: {exc.detail}") from exc
+        raise ToolError(f"{path}: {exc}") from exc
 
-    content = result.get("content", "") if isinstance(result, dict) else str(result)
     lines = content.splitlines(keepends=True)
     total = len(lines)
     start = args.get("start_line") or 1
@@ -481,12 +540,13 @@ def _traffic_summary(ctx: Context, args: dict):
         [website], lines=args.get("lines", 5000), top=args.get("top", 10))
 
 
-@tool("search_files", "Search a website's files for text",
+@tool("search_files", "Search a website's or application's files for text",
       "Find which files contain a string, and on which line. Use it to locate "
       "where something is configured, or which file mentions a domain. Skips "
       "dependency trees, caches, uploads and binary files, and says so when "
-      "it stopped early rather than pretending it found everything.",
+      "it stopped early rather than pretending it found everything. " + FILE_TREE,
       {"domain": DOMAIN_ARG,
+       "app": APP_ARG,
        "text": {"type": "string", "maxLength": 200,
                 "description": "The exact string to look for. Not a regular expression."},
        "path": {"type": "string", "maxLength": 1024,
@@ -494,12 +554,12 @@ def _traffic_summary(ctx: Context, args: dict):
                                "root. Omit to search the whole site."},
        "max_matches": {"type": "integer", "minimum": 1, "maximum": 100,
                        "description": "Defaults to 100."}},
-      required=("domain", "text"))
+      required=("text",))
 def _search_files(ctx: Context, args: dict):
-    website = _website(ctx, args["domain"])
+    target = _tree(ctx, args)
     try:
         return file_manager.search_text(
-            website, args["text"], relative_path=args.get("path", ""),
+            target, args["text"], relative_path=args.get("path", ""),
             max_matches=args.get("max_matches", 100))
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
@@ -666,58 +726,59 @@ def _set_website_waf(ctx: Context, args: dict):
 
 # --- files ------------------------------------------------------------------
 
-@tool("write_file", "Write a file in a website",
+@tool("write_file", "Write a file in a website or application",
       "Create a file or replace one completely. There is no partial edit: "
       "read the file first, change what you mean to change, and send the "
-      "whole thing back. Missing parent directories are created.",
+      "whole thing back. Missing parent directories are created. " + FILE_TREE,
       {"domain": DOMAIN_ARG,
+       "app": APP_ARG,
        "path": {"type": "string", "maxLength": 1024,
-                "description": "File relative to the website root."},
+                "description": "File relative to the root."},
        "content": {"type": "string", "maxLength": 1_000_000,
                    "description": "The complete new contents."}},
-      required=("domain", "path", "content"), writes=True)
+      required=("path", "content"), writes=True)
 def _write_file(ctx: Context, args: dict):
-    website = _website(ctx, args["domain"])
     return maintenance_api.write_file(
-        payload=FileWrite(website_id=website.id, path=args["path"],
+        payload=FileWrite(**_tree_ids(ctx, args), path=args["path"],
                           content=args["content"]),
         db=ctx.db, current_user=ctx.user)
 
 
-@tool("create_directory", "Make a directory in a website",
+@tool("create_directory", "Make a directory in a website or application",
       "Create one directory inside a website. write_file already creates any "
       "parent directories it needs, so reach for this only when you want an "
       "empty directory - a quarantine folder to move suspicious files into, "
-      "for instance.",
+      "for instance. " + FILE_TREE,
       {"domain": DOMAIN_ARG,
+       "app": APP_ARG,
        "path": {"type": "string", "maxLength": 1024,
-                "description": "Where to create it, relative to the website root."},
+                "description": "Where to create it, relative to the root. Defaults to a "
+                               "website's public folder, or an application's root."},
        "name": {"type": "string", "maxLength": 255,
                 "description": "The new directory's name."}},
-      required=("domain", "name"), writes=True)
+      required=("name",), writes=True)
 def _create_directory(ctx: Context, args: dict):
-    website = _website(ctx, args["domain"])
+    ids = _tree_ids(ctx, args)
+    default = "" if "app_id" in ids else site_users.PUBLIC_DIR
     return maintenance_api.make_directory(
-        payload=FileMkdir(website_id=website.id,
-                          path=args.get("path", site_users.PUBLIC_DIR),
-                          name=args["name"]),
+        payload=FileMkdir(**ids, path=args.get("path", default), name=args["name"]),
         db=ctx.db, current_user=ctx.user)
 
 
 @tool("move_file", "Move a file or directory",
       "Move something to another directory inside the same website. Use it to "
       "set a suspicious file aside rather than deleting it - a quarantine "
-      "directory is recoverable and a deletion is not.",
+      "directory is recoverable and a deletion is not. " + FILE_TREE,
       {"domain": DOMAIN_ARG,
+       "app": APP_ARG,
        "path": {"type": "string", "maxLength": 1024,
-                "description": "What to move, relative to the website root."},
+                "description": "What to move, relative to the root."},
        "destination": {"type": "string", "maxLength": 1024,
                        "description": "The directory to move it into."}},
-      required=("domain", "path", "destination"), writes=True)
+      required=("path", "destination"), writes=True)
 def _move_file(ctx: Context, args: dict):
-    website = _website(ctx, args["domain"])
     return maintenance_api.move_entries(
-        payload=FileTransfer(website_id=website.id, paths=[args["path"]],
+        payload=FileTransfer(**_tree_ids(ctx, args), paths=[args["path"]],
                              destination_path=args["destination"]),
         db=ctx.db, current_user=ctx.user)
 
@@ -725,25 +786,28 @@ def _move_file(ctx: Context, args: dict):
 @tool("delete_file", "Delete a file or directory",
       "Permanently delete one file or directory from a website. There is no "
       "undo and no trash. Prefer move_file into a quarantine directory unless "
-      "you are certain.",
+      "you are certain. " + FILE_TREE,
       {"domain": DOMAIN_ARG,
+       "app": APP_ARG,
        "path": {"type": "string", "maxLength": 1024,
-                "description": "What to delete, relative to the website root."}},
-      required=("domain", "path"), writes=True, destructive=True)
+                "description": "What to delete, relative to the root."}},
+      required=("path",), writes=True, destructive=True)
 def _delete_file(ctx: Context, args: dict):
-    website = _website(ctx, args["domain"])
+    ids = _tree_ids(ctx, args)
     wanted = (args["path"] or "").strip().strip("/")
     # The file manager already refuses to escape the site. What it does not
     # refuse is emptying it: "" is the site root and public_html is every page
     # the site serves. Both are one plausible model mistake away from a
     # customer's website being gone.
-    if not wanted or wanted in {".", site_users.PUBLIC_DIR.strip("/")}:
+    whole = {"."} if "app_id" in ids else {".", site_users.PUBLIC_DIR.strip("/")}
+    if not wanted or wanted in whole:
+        what = "the application" if "app_id" in ids else "the website"
         raise ToolError(
-            f"Refusing to delete {wanted or 'the website root'}: that is the "
-            "website itself, not a file in it. Name something inside it."
+            f"Refusing to delete {wanted or what + ' root'}: that is {what} "
+            "itself, not a file in it. Name something inside it."
         )
     return maintenance_api.delete_entries(
-        payload=FileBulkDelete(website_id=website.id, paths=[wanted]),
+        payload=FileBulkDelete(**ids, paths=[wanted]),
         db=ctx.db, current_user=ctx.user)
 
 
