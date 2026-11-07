@@ -223,10 +223,13 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
     return _app_out(app)
 
 
+def _deployed(app: SiteApp, name: str | None = None) -> bool:
+    return (Path("/etc/systemd/system") / f"{site_apps.unit_name(app, name)}.service").exists()
+
+
 def _reapply_runtime(db: Session, app: SiteApp, previous_name: str | None = None) -> None:
     """Rewrite the unit and restart, but only for an app already deployed."""
-    units = Path("/etc/systemd/system")
-    if not (units / f"{site_apps.unit_name(app, previous_name)}.service").exists():
+    if not _deployed(app, previous_name):
         return
     if previous_name and previous_name != app.name:
         # A rename moves the unit, so the old one has to go or it keeps running
@@ -240,6 +243,9 @@ def _reapply_runtime(db: Session, app: SiteApp, previous_name: str | None = None
         # Fetch first, so the containers currently serving stay up while the new
         # image downloads. A bad tag then fails here, with the old ones running.
         site_apps.fetch_images(app)
+        # A renamed app has a new unit, which nothing has enabled yet: without
+        # this it would not come back after a reboot.
+        site_apps.control(app, "enable" if app.autostart else "disable")
         site_apps.control(app, "restart")
     except (RuntimeError, ValueError) as exc:
         app.status = "error"
@@ -279,9 +285,16 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
                    "start_kind", "start_arg", "node_major", "env", "name",
                    "compose_source", "web_service")
     before = {field: getattr(app, field) for field in UNIT_FIELDS}
+    was_autostart = app.autostart
     try:
         if payload.name is not None:
-            app.name = site_apps.validate_name(payload.name)
+            name = site_apps.validate_name(payload.name)
+            if name != app.name and app.kind == "compose":
+                # The compose project, and so every named volume, is called after
+                # the app: the rename's teardown of the old unit runs `down
+                # --volumes` on it and the database inside is gone.
+                raise ValueError("A compose application cannot be renamed: its volumes are named after it")
+            app.name = name
             site_apps.ensure_identifier_unique(db, owner, app.name, exclude_app_id=app.id)
         if payload.memory_limit_mb is not None:
             app.memory_limit_mb = site_apps.validate_memory_mb(
@@ -352,6 +365,13 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
         # a tag like :latest the version that should run moves without the text
         # moving, and saving is how someone asks for what the tag points at now.
         _reapply_runtime(db, app, before["name"])
+    elif app.autostart != was_autostart and _deployed(app):
+        # Start on boot only decides whether the unit is enabled; the process
+        # that is running now is left alone.
+        try:
+            site_apps.control(app, "enable" if app.autostart else "disable")
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if app.port != previous_port:
         _resync_websites(app)
 
