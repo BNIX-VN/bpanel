@@ -217,6 +217,21 @@ def wp_update(path: str, action: str, linux_user: str | None = None, php_version
     )
 
 
+def _address_forms(old_domain: str, new_domain: str) -> list[tuple[str, str]]:
+    """The ways a site's own address is stored, old and new: plain (//old, which
+    catches http://, https:// and protocol-relative links), JSON-escaped
+    (\\/\\/old, as Elementor and the block editor keep their data) and URL-encoded
+    (%2F%2Fold). Only the plain form was replaced at first, and 182 escaped
+    links still named the old domain after a rename (legiang360.com on .88,
+    2026-11-07). The // in front keeps a longer name that ends the same
+    (cms.legiang360.com) from matching legiang360.com."""
+    return [
+        (f"//{old_domain}", f"//{new_domain}"),
+        (f"\\/\\/{old_domain}", f"\\/\\/{new_domain}"),
+        (f"%2F%2F{old_domain}", f"%2F%2F{new_domain}"),
+    ]
+
+
 def rename_site_url(path: str, linux_user: str | None, old_domain: str, new_domain: str, https: bool = True, php_version: str | None = None):
     """Point a WordPress install at a renamed domain.
 
@@ -227,15 +242,17 @@ def rename_site_url(path: str, linux_user: str | None, old_domain: str, new_doma
     site_user = _site_user_for_path(path, linux_user)
     scheme = "https" if https else "http"
     new_url = f"{scheme}://{new_domain}"
-    search = shell.privileged(
-        "wp-site",
-        helper_args=[site_user, *_wp_php_flag(php_version), "search-replace", f"//{old_domain}", f"//{new_domain}",
-                     f"--path={path}", "--all-tables", "--skip-columns=guid",
-                     "--report-changed-only", "--allow-root"],
-        fallback=["wp", "search-replace", f"//{old_domain}", f"//{new_domain}",
-                  f"--path={path}", "--all-tables", "--skip-columns=guid", "--allow-root"],
-        timeout=900,
-    )
+    search = None
+    for old_form, new_form in _address_forms(old_domain, new_domain):
+        search = shell.privileged(
+            "wp-site",
+            helper_args=[site_user, *_wp_php_flag(php_version), "search-replace", old_form, new_form,
+                         f"--path={path}", "--all-tables", "--skip-columns=guid",
+                         "--report-changed-only", "--allow-root"],
+            fallback=["wp", "search-replace", old_form, new_form,
+                      f"--path={path}", "--all-tables", "--skip-columns=guid", "--allow-root"],
+            timeout=900,
+        )
     for option in ("home", "siteurl"):
         shell.privileged(
             "wp-site",

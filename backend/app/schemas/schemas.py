@@ -873,6 +873,10 @@ class SiteAppControl(BaseModel):
     action: Literal["start", "stop", "restart"]
 
 
+class SiteAppOwnerChange(BaseModel):
+    owner_id: int
+
+
 class NodeInstallRequest(BaseModel):
     major: str
 

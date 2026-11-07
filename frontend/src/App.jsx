@@ -1044,6 +1044,7 @@ function App() {
   const [mailboxEdit, setMailboxEdit] = useState(null);
   const [forwarderEdit, setForwarderEdit] = useState(null);
   const [renameSite, setRenameSite] = useState(null);
+  const [siteAppMove, setSiteAppMove] = useState(null);
   const [mailDomainForm, setMailDomainForm] = useState({ domain: '', owner_id: '' });
   // Turn on email: a domain typed by hand instead of picked from the list.
   const [mailDomainOther, setMailDomainOther] = useState(false);
@@ -3562,6 +3563,19 @@ function App() {
     }
   }
 
+  async function moveSiteApp() {
+    if (!siteAppMove?.owner_id) return;
+    const { app } = siteAppMove;
+    const owner = users.find(user => String(user.id) === String(siteAppMove.owner_id));
+    const data = await request(`/site-apps/${app.id}/owner`, { method: 'POST', body: JSON.stringify({ owner_id: Number(siteAppMove.owner_id) }) },
+      t('Moving {name} to {owner}...', { name: app.name, owner: owner?.username || '' }));
+    if (data) {
+      setSiteAppMove(null);
+      setNotice(t('{name} now belongs to {owner}.', { name: app.name, owner: owner?.username || '' }));
+      await loadSiteApps();
+    }
+  }
+
   async function controlSiteApp(app, action) {
     const data = await request(`/site-apps/${app.id}/control`, { method: 'POST', body: JSON.stringify({ action }) }, `${action} ${app.name}...`);
     if (data) {
@@ -5747,10 +5761,14 @@ function App() {
   }, [isAuthenticated, page, isAdmin, mailTab, rspamdView]);
 
   // The websites page needs the list too, for the Application picker on create.
+  // So does the Dashboard: a customer's Applications tile shows only once the
+  // limit is known (appsFeatureEnabled), and with the list loaded nowhere else
+  // a customer on a package with apps never saw the tile at all - there was no
+  // way in to create one (operator, 2026-11-07). Admins always see it.
   useEffect(() => {
     if (!currentUser || !applicationAddonInstalled) return;
     if (page === 'applications') { loadSiteApps(); loadSiteRuntimes(); }
-    else if (page === 'websites' || page === 'files') loadSiteApps();
+    else if (page === 'dashboard' || page === 'websites' || page === 'files') loadSiteApps();
   }, [page, currentUser, applicationAddonInstalled]);
 
   useEffect(() => {
@@ -7829,29 +7847,6 @@ function App() {
 
   function renderMailModals() {
     return <>
-      {renameSite && <div className="modal-overlay" onClick={() => setRenameSite(null)}>
-        <div className="modal-card" onClick={e => e.stopPropagation()}>
-          <div className="modal-header">
-            <h3>{t('Rename domain')}</h3>
-            <button className="secondary-light" onClick={() => setRenameSite(null)} aria-label={t('Close')}><X size={16}/></button>
-          </div>
-          <div className="modal-body">
-            <p className="hint">{t('Changes the main domain of {0}: its folder, web server, certificate, DNS, mail, WordPress address and cron all move to the new name.', renameSite.site.domain)}</p>
-            <label className="field"><span className="field-label">{t('New domain')}</span>
-              <input value={renameSite.newDomain} autoCapitalize="none" spellCheck={false} autoComplete="off"
-                placeholder="example.com" onChange={e => setRenameSite(prev => ({ ...prev, newDomain: e.target.value }))}/>
-            </label>
-            <label className="checkbox-row"><input type="checkbox" checked={renameSite.reissueSsl !== false}
-              onChange={e => setRenameSite(prev => ({ ...prev, reissueSsl: e.target.checked }))}/>
-              <span>{t('Reissue the HTTPS certificate for the new domain')}</span></label>
-            <p className="hint">{t("Point the new domain's DNS at this server first, or HTTPS can only be issued once it resolves here.")}</p>
-          </div>
-          <div className="modal-actions">
-            <button className="secondary-light" onClick={() => setRenameSite(null)}>{t('Cancel')}</button>
-            <button disabled={!!loading || !String(renameSite.newDomain || '').trim() || String(renameSite.newDomain || '').trim().toLowerCase() === renameSite.site.domain} onClick={renameWebsite}><Save size={14}/> {t('Rename')}</button>
-          </div>
-        </div>
-      </div>}
       {mailboxEdit && <div className="modal-overlay" onClick={() => setMailboxEdit(null)}>
         <div className="modal-card" onClick={e => e.stopPropagation()}>
           <div className="modal-header">
@@ -8228,6 +8223,7 @@ function App() {
               <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'stop')}><Square size={13}/> {t('Stop')}</button>
               <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppLog(app)}><FileText size={13}/> {t('Log')}</button>
               <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppEdit(app)}><Pencil size={13}/> {t('Edit')}</button>
+              {canManageUsers && <button className="mini secondary-light" disabled={!!loading} onClick={() => { loadUsers(); setSiteAppMove({ app, owner_id: '' }); }}><MoveRight size={13}/> {t('Move')}</button>}
               <button className="mini danger" disabled={!!loading} onClick={() => deleteSiteApp(app)} aria-label={t('Delete {name}', { name: app.name })} title={t('Delete')}><Trash2 size={13}/></button>
             </div>
             {app.last_error && <p className="site-app-error">{app.last_error}</p>}
@@ -13190,6 +13186,54 @@ function App() {
         </div>
       </div>
     </section>
+    {siteAppMove && <div className="modal-overlay" onClick={() => setSiteAppMove(null)}>
+      <div className="modal-card" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{t('Move {name}', { name: siteAppMove.app.name })}</h3>
+          <button className="secondary-light" onClick={() => setSiteAppMove(null)} aria-label={t('Close')}><X size={16}/></button>
+        </div>
+        <div className="modal-body">
+          <p className="hint">{t('The application, its files, its service and the databases it uses move to the account you pick. An application that serves a website moves with that website instead.')}</p>
+          <label className="field"><span className="field-label">{t('New owner')}</span>
+            <select value={siteAppMove.owner_id} onChange={e => setSiteAppMove(prev => ({ ...prev, owner_id: e.target.value }))}>
+              <option value="">{t('Choose an account')}</option>
+              {users.filter(user => String(user.id) !== String(siteAppMove.app.owner_id)).map(user =>
+                <option key={user.id} value={user.id}>{user.username}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-light" onClick={() => setSiteAppMove(null)}>{t('Cancel')}</button>
+          <button disabled={!!loading || !siteAppMove.owner_id} onClick={moveSiteApp}><MoveRight size={14}/> {t('Move')}</button>
+        </div>
+      </div>
+    </div>}
+    {/* Rename lives with the page-wide modals: inside renderMailModals it was
+        only ever drawn on the Email page, so the Domains tab's button did
+        nothing (2026-11-07). */}
+    {renameSite && <div className="modal-overlay" onClick={() => setRenameSite(null)}>
+      <div className="modal-card" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{t('Rename domain')}</h3>
+          <button className="secondary-light" onClick={() => setRenameSite(null)} aria-label={t('Close')}><X size={16}/></button>
+        </div>
+        <div className="modal-body">
+          <p className="hint">{t('Changes the main domain of {0}: its folder, web server, certificate, DNS, mail, WordPress address and cron all move to the new name.', renameSite.site.domain)}</p>
+          <label className="field"><span className="field-label">{t('New domain')}</span>
+            <input value={renameSite.newDomain} autoCapitalize="none" spellCheck={false} autoComplete="off"
+              placeholder="example.com" onChange={e => setRenameSite(prev => ({ ...prev, newDomain: e.target.value }))}/>
+          </label>
+          <label className="checkbox-row"><input type="checkbox" checked={renameSite.reissueSsl !== false}
+            onChange={e => setRenameSite(prev => ({ ...prev, reissueSsl: e.target.checked }))}/>
+            <span>{t('Reissue the HTTPS certificate for the new domain')}</span></label>
+          <p className="hint">{t("Point the new domain's DNS at this server first, or HTTPS can only be issued once it resolves here.")}</p>
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-light" onClick={() => setRenameSite(null)}>{t('Cancel')}</button>
+          <button disabled={!!loading || !String(renameSite.newDomain || '').trim() || String(renameSite.newDomain || '').trim().toLowerCase() === renameSite.site.domain} onClick={renameWebsite}><Save size={14}/> {t('Rename')}</button>
+        </div>
+      </div>
+    </div>}
     {showProfileModal && <div className="modal-overlay" onClick={() => setShowProfileModal(false)}>
       <div className="modal-card" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
