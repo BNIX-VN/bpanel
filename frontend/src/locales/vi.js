@@ -1769,7 +1769,6 @@ export const vi = {
   "Paste here": "Dán vào đây",
   "Clipboard": "Bộ nhớ tạm",
   "from": "từ",
-  "Open the website or application they came from to paste them.": "Mở lại website hoặc ứng dụng chứa các mục này để dán.",
   "Copying files...": "Đang sao chép...",
   "Moving files...": "Đang di chuyển...",
   "Start on boot": "Tự chạy khi khởi động máy",
