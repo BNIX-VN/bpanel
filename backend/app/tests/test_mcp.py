@@ -551,11 +551,11 @@ def test_an_empty_domain_says_so_rather_than_searching():
 # --- reading a file ---------------------------------------------------------
 
 def _read(monkeypatch, content, **args):
-    from app.api import maintenance as maintenance_api
-    monkeypatch.setattr(mcp_tools, "_website",
-                        lambda ctx, domain: type("W", (), {"id": 1})())
-    monkeypatch.setattr(maintenance_api, "read_file",
-                        lambda **kwargs: {"content": content})
+    # read_file works on whichever tree the arguments name (a website or an
+    # application) and reads it through the file manager.
+    monkeypatch.setattr(mcp_tools, "_tree", lambda ctx, args: object())
+    monkeypatch.setattr(mcp_tools.file_manager, "read_text_file",
+                        lambda target, path, **kwargs: content)
     args = mcp.validate_arguments(mcp.REGISTRY["read_file"],
                                   {"domain": "a.test", "path": "big.php", **args})
     return mcp.REGISTRY["read_file"].handler(_ctx(), args)
@@ -604,11 +604,11 @@ def test_a_refused_read_says_why_not_how_it_failed(monkeypatch):
     from fastapi import HTTPException
     from app.api import maintenance as maintenance_api
 
-    def refuse(**kwargs):
-        raise HTTPException(status_code=400, detail="logo.png is not a text file (binary, or not UTF-8)")
+    def refuse(target, path, **kwargs):
+        raise ValueError("logo.png is not a text file (binary, or not UTF-8)")
 
-    monkeypatch.setattr(mcp_tools, "_website", lambda ctx, domain: type("W", (), {"id": 1})())
-    monkeypatch.setattr(maintenance_api, "read_file", refuse)
+    monkeypatch.setattr(mcp_tools, "_tree", lambda ctx, args: object())
+    monkeypatch.setattr(mcp_tools.file_manager, "read_text_file", refuse)
     result = mcp.call_tool(_ctx(), "read_file", {"domain": "a.test", "path": "logo.png"})
     assert result["isError"] is True
     text = result["content"][0]["text"]

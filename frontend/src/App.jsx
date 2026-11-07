@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket, LayoutDashboard, SlidersHorizontal, Gauge, LineChart } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket, LayoutDashboard, SlidersHorizontal, Gauge, LineChart, ClipboardPaste } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
@@ -1077,6 +1077,11 @@ function App() {
   const [createSiteAppId, setCreateSiteAppId] = useState('');
   // File manager target: empty means the selected website, otherwise an app.
   const [fileAppId, setFileAppId] = useState(() => standaloneEditor?.appId || fileManagerTarget.appId);
+  // The file manager shows the account's home itself (its websites and apps).
+  const [fileAtHome, setFileAtHome] = useState(false);
+  // Copy and Move put the items here; Paste in the folder opened next does the
+  // work (operator, 2026-11-08: typing the destination's path was the old way).
+  const [fileClipboard, setFileClipboard] = useState(null);
   const [siteAppLog, setSiteAppLog] = useState(null);
   const [composePlan, setComposePlan] = useState(null);
   const [siteAppEdit, setSiteAppEdit] = useState(null);
@@ -4276,26 +4281,42 @@ function App() {
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
-  async function transferFileItems(action, paths) {
+  // Copy/Move: remember what and where from; nothing happens until Paste.
+  function clipFileItems(action, paths) {
     if (!hasFileTarget() || !paths?.length) return;
-    const verb = action === 'copy' ? 'Copy' : 'Move';
-    const destination = await promptDialog({ label: `${verb} to folder:`, defaultValue: fileListPath || 'public_html' });
-    if (destination === null) return;
-    const targetPath = destination.trim() || fileListPath || 'public_html';
-    const data = await request(`/maintenance/files/${action}`, {
+    setFileClipboard({ action, paths: [...paths], from: fileListPath || '', targetKey: fileTargetKey(), targetBody: fileTargetBody() });
+    setSelectedFilePaths([]);
+    setNotice(action === 'copy'
+      ? t('{n} item(s) to copy. Open the folder to put them in and press Paste.', { n: paths.length })
+      : t('{n} item(s) to move. Open the folder to put them in and press Paste.', { n: paths.length }));
+  }
+
+  // Paste: into the folder on screen, in the website or application they came
+  // from (a copy or move between two of them is not something the server does).
+  async function pasteFileClipboard() {
+    const clip = fileClipboard;
+    if (!clip || clip.targetKey !== fileTargetKey()) return;
+    const verb = clip.action === 'copy' ? t('Copying files...') : t('Moving files...');
+    const data = await request(`/maintenance/files/${clip.action}`, {
       method: 'POST',
-      body: JSON.stringify({ ...fileTargetBody(), paths, destination_path: targetPath }),
-    }, `${verb}ing files...`);
-    if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
+      body: JSON.stringify({ ...clip.targetBody, paths: clip.paths, destination_path: fileListPath || '' }),
+    }, verb);
+    if (data) {
+      // Moved items are no longer where the clipboard says; copies can go again.
+      if (clip.action === 'move') setFileClipboard(null);
+      setNotice(t('{n} item(s) pasted.', { n: clip.paths.length }));
+      await listFiles(fileListPath);
+      await loadCurrentUser();
+    }
   }
 
   // A row's own menu passes its one path; the selection bar passes none.
-  async function copySelectedFiles(paths = selectedFilePaths) {
-    await transferFileItems('copy', paths);
+  function copySelectedFiles(paths = selectedFilePaths) {
+    clipFileItems('copy', paths);
   }
 
-  async function moveSelectedFiles(paths = selectedFilePaths) {
-    await transferFileItems('move', paths);
+  function moveSelectedFiles(paths = selectedFilePaths) {
+    clipFileItems('move', paths);
   }
 
   async function archiveSelectedFiles(format = archiveFormat) {
@@ -5773,6 +5794,7 @@ function App() {
 
   useEffect(() => {
     if (page !== 'files' || !hasFileTarget()) return;
+    setFileAtHome(false);
     // An app has no public_html; its root is the code directory itself.
     listFiles(fileAppId ? '' : 'public_html');
   }, [selectedWebsiteId, fileAppId, page]);
@@ -10020,6 +10042,36 @@ function App() {
     const rootPath = activeFileApp
       ? `${activeFileApp.directory}${fileListPath ? `/${fileListPath}` : ''}`
       : (currentSite ? `${currentSite.root_path}${fileListPath ? `/${fileListPath}` : ''}` : '');
+    // The tree starts at the account's home, /home/<user>, not at one website
+    // (operator, 2026-11-07): every website and application of that account is
+    // in it. Files are still changed only inside a website or an application.
+    const fileHome = (() => {
+      const dir = activeFileApp ? activeFileApp.directory : currentSite?.root_path;
+      const match = String(dir || '').match(/^(\/home\/[^/]+)\//);
+      return match ? match[1] : '';
+    })();
+    const selectSiteFiles = site => {
+      setFileAtHome(false);
+      if (!fileAppId && String(site.id) === String(selectedWebsiteId)) { listFiles('public_html'); return; }
+      setFileAppId('');
+      setSelectedWebsiteId(String(site.id));
+    };
+    const selectAppFiles = app => {
+      setFileAtHome(false);
+      if (String(app.id) === String(fileAppId)) { listFiles(''); return; }
+      setFileAppId(String(app.id));
+    };
+    const homeEntries = fileHome ? [
+      ...websites.filter(site => String(site.root_path || '').startsWith(`${fileHome}/`))
+        .sort((a, b) => a.domain.localeCompare(b.domain))
+        .map(site => ({ key: `site:${site.id}`, kind: 'site', label: site.domain, title: site.root_path,
+          active: !activeFileApp && String(site.id) === String(selectedWebsiteId), onSelect: () => selectSiteFiles(site) })),
+      ...siteApps.items.filter(app => String(app.directory || '').startsWith(`${fileHome}/apps/`))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(app => ({ key: `app:${app.id}`, kind: 'app', label: app.name, title: app.directory,
+          active: !!activeFileApp && String(app.id) === String(activeFileApp.id), onSelect: () => selectAppFiles(app) })),
+    ] : [];
+    const canEdit = hasTarget && !fileAtHome;
     return <>
       <header className="fm-app-top">
         <div className="fm-app-brand">{brand}<strong>{t('File manager')}</strong></div>
@@ -10027,30 +10079,48 @@ function App() {
           <FileTargetSelect />
           {activeFileApp && <span className="fm-app-root">{t('Application:')} <strong>{activeFileApp.name}</strong></span>}
           {activeFileApp && servedDomains.length > 0 && <span className="fm-app-root">{t('Serves:')} <strong>{servedDomains.join(', ')}</strong></span>}
-          {rootPath && <span className="fm-app-root" title={rootPath}>{t('Root:')} <strong>{rootPath}</strong></span>}
+          {(fileHome || rootPath) && <span className="fm-app-root" title={fileAtHome ? fileHome : rootPath}>{t('Root:')} <strong>{fileHome || rootPath}</strong></span>}
           {currentUser && !isAdmin && <span className="fm-app-root">{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
         </div>
         <div className="fm-app-actions">{actions}</div>
       </header>
       <FolderTree request={request} base={hasTarget ? fileTargetBase() : ''} targetKey={targetKey}
-        current={fileListPath} currentItems={files} onOpen={path => listFiles(path)} t={t}
+        current={fileListPath} currentItems={files} onOpen={path => { setFileAtHome(false); listFiles(path); }} t={t}
+        homeLabel={fileHome} homeEntries={homeEntries} atHome={fileAtHome} onHome={() => setFileAtHome(true)}
         rootLabel={activeFileApp ? activeFileApp.name : (currentSite?.domain || t('root'))}/>
       <section className="fm-main" aria-label={t('Files')}>
         {currentUser?.demo && <div className="demo-banner" role="status"><Eye size={15} aria-hidden="true"/> <span>{t('You are viewing a read-only demo: you can open every page, and nothing you change is saved.')}</span></div>}
         <div className="path-pill breadcrumb-line">
-          <button className="crumb" disabled={!hasTarget || fileListPath === ''} onClick={() => listFiles('')}>{t('root')}</button>
-          {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
+          {fileHome
+            ? <>
+                <button className="crumb" disabled={fileAtHome} onClick={() => setFileAtHome(true)} title={fileHome}>{fileHome}</button>
+                {!fileAtHome && <button className="crumb" disabled={fileListPath === ''} onClick={() => listFiles('')}>{activeFileApp ? `apps/${activeFileApp.name}` : currentSite?.domain}</button>}
+              </>
+            : <button className="crumb" disabled={!hasTarget || fileListPath === ''} onClick={() => listFiles('')}>{t('root')}</button>}
+          {!fileAtHome && fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
         </div>
         <div className="file-toolbar fm-toolbar">
-          <button className="secondary-light" disabled={!hasTarget || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}><CornerLeftUp size={14} aria-hidden="true"/> {t('Up')}</button>
-          <button className="secondary-light" disabled={!hasTarget || !!loading} onClick={makeFileDirectory}><FolderPlus size={14} aria-hidden="true"/> {t('New folder')}</button>
-          <button className="secondary-light" disabled={!hasTarget || !!loading} onClick={makeFile}><FilePlus size={14} aria-hidden="true"/> {t('New file')}</button>
-          <label className={`upload-button ${(!hasTarget || !!loading) ? 'disabled' : ''}`}>
+          <button className="secondary-light" disabled={!canEdit || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}><CornerLeftUp size={14} aria-hidden="true"/> {t('Up')}</button>
+          <button className="secondary-light" disabled={!canEdit || !!loading} onClick={makeFileDirectory}><FolderPlus size={14} aria-hidden="true"/> {t('New folder')}</button>
+          <button className="secondary-light" disabled={!canEdit || !!loading} onClick={makeFile}><FilePlus size={14} aria-hidden="true"/> {t('New file')}</button>
+          <label className={`upload-button ${(!canEdit || !!loading) ? 'disabled' : ''}`}>
             <Upload size={14} aria-hidden="true"/> {t('Upload')}
-            <input type="file" disabled={!hasTarget || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
+            <input type="file" disabled={!canEdit || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
-          <button className="secondary-light" disabled={!hasTarget || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14} aria-hidden="true"/> {t('Refresh')}</button>
+          <button className="secondary-light" disabled={!canEdit || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14} aria-hidden="true"/> {t('Refresh')}</button>
         </div>
+        {fileClipboard && !fileAtHome && <div className="fm-selection fm-clipboard" role="region" aria-label={t('Clipboard')}>
+          <strong>{fileClipboard.action === 'copy'
+            ? t('{n} item(s) to copy', { n: fileClipboard.paths.length })
+            : t('{n} item(s) to move', { n: fileClipboard.paths.length })}</strong>
+          <span className="hint" title={fileClipboard.paths.join('\n')}>{t('from')} /{fileClipboard.from}</span>
+          <div className="fm-selection-actions">
+            {fileClipboard.targetKey === fileTargetKey()
+              ? <button disabled={!!loading} onClick={pasteFileClipboard}><ClipboardPaste size={14} aria-hidden="true"/> {t('Paste here')}</button>
+              : <span className="hint">{t('Open the website or application they came from to paste them.')}</span>}
+          </div>
+          <button type="button" className="secondary-light fm-selection-clear" onClick={() => setFileClipboard(null)}><X size={14} aria-hidden="true"/> {t('Cancel')}</button>
+        </div>}
         {selectedFilePaths.length > 0 && <div className="fm-selection" role="region" aria-label={t('Selected items')}>
           <strong>{t('{count} selected', { count: selectedFilePaths.length })}</strong>
           <div className="fm-selection-actions">
@@ -10074,7 +10144,16 @@ function App() {
             <button type="button" className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label={t('Dismiss')} title={t('Dismiss')}><X size={13} aria-hidden="true"/></button>
           </div>)}
         </div>}
-        <div className="file-list">
+        {fileAtHome && <div className="file-list fm-home-list">
+          {homeEntries.length === 0 && <div className="empty-box">{t('No websites or applications in this account.')}</div>}
+          {homeEntries.map(entry => <div className="file-item" key={entry.key}>
+            <span aria-hidden="true"></span>
+            <button className="file-name" onClick={entry.onSelect} title={entry.title}>
+              <FileTypeIcon isDir size={17}/> <strong>{entry.kind === 'app' ? `apps/${entry.label}` : entry.label}</strong>
+            </button>
+          </div>)}
+        </div>}
+        {!fileAtHome && <div className="file-list">
           <div className="file-list-header">
             <input type="checkbox" checked={allSelected} ref={el => { if (el) el.indeterminate = selectedFilePaths.length > 0 && !allSelected; }}
               onChange={toggleAllFiles} disabled={files.length === 0} aria-label={t('Select all')}/>
@@ -10117,7 +10196,7 @@ function App() {
               ]}/>
             </div>
           </div>)}
-        </div>
+        </div>}
         {loading && <div className="loading"><span></span>{t(loading)}</div>}
       </section>
     </>;
