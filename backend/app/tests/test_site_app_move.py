@@ -110,3 +110,13 @@ def test_the_dialogs_are_drawn_on_every_page():
     assert "renameSite &&" not in mail_modals
     shell = APP_JSX[APP_JSX.index('return <main className="app-shell">'):]
     assert "{renameSite && <div" in shell and "{siteAppMove && <div" in shell
+
+
+def test_a_rename_rewrites_every_form_the_old_address_is_stored_in():
+    # Elementor and the block editor keep links JSON-escaped (https:\/\/old);
+    # only //old was replaced, and 182 escaped links stayed on legiang360.com.
+    from app.services import wordpress
+    forms = dict(wordpress._address_forms("legiang360.com", "cms.legiang360.com"))
+    assert forms["//legiang360.com"] == "//cms.legiang360.com"
+    assert forms[r"\/\/legiang360.com"] == r"\/\/cms.legiang360.com"
+    assert forms["%2F%2Flegiang360.com"] == "%2F%2Fcms.legiang360.com"
