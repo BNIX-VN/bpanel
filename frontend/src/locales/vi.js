@@ -1760,6 +1760,7 @@ export const vi = {
   "No errors logged yet.": "Chưa ghi nhận lỗi nào.",
   "No extra domains": "Không có tên miền phụ",
   "No file selected": "Chưa chọn file nào",
+  "No websites or applications in this account.": "Tài khoản này chưa có website hay ứng dụng nào.",
   "No files in this folder.": "Thư mục này trống.",
   "No forwarder matches.": "Không có chuyển tiếp nào khớp.",
   "No forwarders yet.": "Chưa có chuyển tiếp nào.",
