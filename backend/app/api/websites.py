@@ -334,6 +334,13 @@ def _databases_moving_with(db: Session, website: Website) -> tuple[list[Database
     app = db.query(SiteApp).filter(SiteApp.id == website.app_id).first() if website.app_id else None
     if app is None:
         return own, []
+    return own, app_databases(db, app, exclude=own)
+
+
+def app_databases(db: Session, app: SiteApp, exclude=()) -> list[DatabaseAccount]:
+    """The databases an application uses: owned by its owner, linked to no
+    website, and named in its configuration (the environment the panel keeps,
+    the compose file, and the .env in the app's directory)."""
     texts = [app.env or "", getattr(app, "compose_source", "") or ""]
     try:
         texts.append(file_manager.read_text_file(site_apps.file_target(app), ".env", allow_sensitive=True))
@@ -344,12 +351,11 @@ def _databases_moving_with(db: Session, website: Website) -> tuple[list[Database
         DatabaseAccount.owner_id == app.owner_id,
         DatabaseAccount.website_id.is_(None),
     ).all()
-    used = [
+    return [
         item for item in candidates
-        if item not in own
+        if item not in exclude
         and re.search(rf"(?<![A-Za-z0-9_]){re.escape(item.db_name)}(?![A-Za-z0-9_])", config)
     ]
-    return own, used
 
 
 def _unsuspend_website(website: Website) -> str:

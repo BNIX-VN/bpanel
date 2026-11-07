@@ -21,6 +21,7 @@ from app.schemas.schemas import (
     ComposeValidateRequest,
     NodeInstallRequest,
     SiteAppControl,
+    SiteAppOwnerChange,
     SiteAppCreate,
     SiteAppOut,
     SiteAppUpdate,
@@ -452,6 +453,45 @@ def control_site_app(app_id: int, payload: SiteAppControl, db: Session = Depends
     _record_status(db, app, "running" if running else "stopped")
     log_action(db, current_user.id, f"{payload.action}_site_app", app.name, "")
     return {"action": payload.action, "running": running, "status": app.status, "output": output[-2000:]}
+
+
+@router.post("/{app_id}/owner")
+def move_site_app(app_id: int, payload: SiteAppOwnerChange, db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_user)):
+    """Hand an application to another account (operator, 2026-11-07: there was
+    no way to put an admin-made app in a customer's hands). Its files, its unit
+    and the databases it uses go with it, as when it follows a moved website.
+    Refused while it serves a website the new owner does not own: moving that
+    website takes the application along instead.
+    """
+    ensure_role(current_user.role, Role.reseller)
+    app = _owned_app(db, current_user, app_id)
+    owner = _resolve_owner(db, current_user, payload.owner_id)
+    if owner.id == app.owner_id:
+        raise HTTPException(status_code=400, detail=f"{app.name} already belongs to {owner.username}")
+    others = sorted(site.domain for site in app.websites if site.owner_id != owner.id)
+    if others:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{app.name} serves {', '.join(others)}, which {owner.username} does not own. "
+                   "Move that website to them instead: a website takes its application with it.",
+        )
+    from app.api.websites import app_databases
+
+    previous = app.owner.username if app.owner else str(app.owner_id)
+    try:
+        site_apps.ensure_app_quota(db, owner, is_admin=is_admin_role(owner.role))
+        databases = app_databases(db, app)
+        site_apps.move_to_owner(app, owner)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f"{app.name} cannot move to {owner.username}: {exc}") from exc
+    for item in databases:
+        item.owner_id = owner.id
+    db.commit()
+    db.refresh(app)
+    log_action(db, current_user.id, "move_site_app", app.name,
+               f"{previous} -> {owner.username}" + (f"; databases {', '.join(d.db_name for d in databases)}" if databases else ""))
+    return _app_out(app)
 
 
 @router.get("/{app_id}/status")
