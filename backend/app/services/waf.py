@@ -6,7 +6,9 @@ import json
 import logging
 import re
 import socket
+import subprocess
 import threading
+import time
 import urllib.request
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -159,10 +161,15 @@ DEFAULT_RULES = [
         # (Datadog Security Labs, 2026-10-22): a multipart POST of hundreds of
         # parts, machine-nested or very long field names, the session upload
         # progress field, and code in an upload's file name - which PHP keeps
-        # in the session record. The thresholds sit far above any form
-        # WordPress, WooCommerce or ACF sends; a site that needs more turns
-        # the group off. PHP's own setting (session.upload_progress.enabled=0)
-        # is applied as well; this is the WAF half.
+        # in the session record. PHP's own setting
+        # (session.upload_progress.enabled=0) is applied as well; this is the
+        # WAF half.
+        #
+        # The field and file counts (unpatched_rules) are not shapes only an
+        # exploit sends: WordPress's menu screen posts ~10 fields per item, and
+        # a 50-item menu (552 fields) was refused on an OPanel box (.122,
+        # 2026-11-07). They go only on a site whose PHP lacks the fix; the
+        # rest stays everywhere.
         #
         # bpanel-base.conf keeps request bodies off, and libmodsecurity skips phase 2
         # while they are: 1003001 turns them on for form POSTs only, which is what
@@ -173,13 +180,14 @@ DEFAULT_RULES = [
         "description": "Blocks the request shapes of the php2shell exploits (CVE-2026-109618/109619/115560): the session upload progress field, multipart floods of hundreds of fields or files, field names nested 16 deep or over 1 KB, and code in upload file names. Reads the body of form POSTs only.",
         "rules": r"""SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*(?:multipart/form-data|application/x-www-form-urlencoded)" "id:1003001,phase:1,pass,nolog,ctl:requestBodyAccess=On"
 SecRule ARGS_POST_NAMES "@rx (?i)^php_session_upload_progress$" "id:1003002,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell upload progress field'"
-SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*multipart/form-data" "id:1003003,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell multipart field flood',chain"
-  SecRule &ARGS_POST "@gt 400" "t:none"
-SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*multipart/form-data" "id:1003004,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell multipart file flood',chain"
-  SecRule &FILES "@gt 100" "t:none"
 SecRule ARGS_NAMES "@rx (?:\[[^\]]*\]){16}" "id:1003005,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell nested field name'"
 SecRule ARGS_NAMES "@gt 1024" "id:1003006,phase:2,t:none,t:length,deny,status:403,log,msg:'BPanel blocked php2shell oversized field name'"
 SecRule FILES "@rx (?i)<\?php|\|O:\d|[\x00-\x08\x0b\x0c\x0e-\x1f]" "id:1003007,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell upload file name'"
+""",
+        "unpatched_rules": r"""SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*multipart/form-data" "id:1003003,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell multipart field flood',chain"
+  SecRule &ARGS_POST "@gt 400" "t:none"
+SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^\s*multipart/form-data" "id:1003004,phase:2,deny,status:403,log,msg:'BPanel blocked php2shell multipart file flood',chain"
+  SecRule &FILES "@gt 100" "t:none"
 """,
     },
 ]
@@ -287,11 +295,53 @@ GLOBAL_CUSTOM_PATH = "/etc/nginx/modsec/bpanel-custom.conf"
 CRS_MODES = ("off", "detect", "block")
 
 
+# The first release of each branch with the php2shell fix.
+PHP2SHELL_FIXED = {"8.2": (8, 2, 35), "8.3": (8, 3, 36), "8.4": (8, 4, 27), "8.5": (8, 5, 12)}
+PHP_BUILD_TTL = 600
+_php_builds: dict[str, tuple[float, str]] = {}
+
+
+def php_build(version: str | None) -> str:
+    """The release a website's PHP branch runs here ("8.4" -> "8.4.27"), "" if unknown.
+
+    Read from the CLI of the same ondrej/Sury build the site's FPM pool runs
+    (/usr/bin/php<branch>, as cron.php_binary uses).
+    """
+    match = re.fullmatch(r"([5-9])\.(\d)", str(version or "").strip())
+    if not match:
+        return ""
+    key = match.group(0)
+    cached = _php_builds.get(key)
+    if cached and time.monotonic() - cached[0] < PHP_BUILD_TTL:
+        return cached[1]
+    try:
+        # -n: no ini, so a broken extension line cannot garble the answer.
+        out = subprocess.run([f"/usr/bin/php{key}", "-n", "-r", "echo PHP_VERSION;"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", out):
+        out = ""
+    _php_builds[key] = (time.monotonic(), out)
+    return out
+
+
+def php2shell_fixed(version: str | None) -> bool:
+    """Whether the website's PHP has the php2shell fix. Unknown is not fixed."""
+    build = php_build(version)
+    if not build:
+        return False
+    parts = tuple(int(part) for part in build.split("."))
+    fixed = PHP2SHELL_FIXED.get(f"{parts[0]}.{parts[1]}")
+    return bool(fixed) and parts >= fixed
+
+
 def render_site_rules(
     domain: str,
     enabled_rule_ids: Iterable[str],
     custom_rules: str = "",
     crs_mode: str = "off",
+    php_version: str | None = None,
 ) -> str:
     safe_domain = _validate_domain(domain)
     enabled = set(validate_enabled_rule_ids(enabled_rule_ids))
@@ -308,6 +358,9 @@ def render_site_rules(
             continue
         chunks.append(f"# {rule['category']} - {rule['title']} ({rule['id']})")
         chunks.append(rule["rules"].strip())
+        if rule.get("unpatched_rules") and not php2shell_fixed(php_version):
+            chunks.append("# This website's PHP lacks the fix: the field and file counts too.")
+            chunks.append(rule["unpatched_rules"].strip())
         if rule.get("exceptions"):
             chunks.append(rule["exceptions"].strip())
     if mode != "off":
@@ -449,6 +502,7 @@ def set_crs_mode(mode: str, websites: Iterable[Website]) -> dict:
                     website_enabled_rule_ids(website),
                     website_custom_rules(website),
                     crs_mode=mode_for_sites if site_uses_crs(website) else "off",
+                    php_version=getattr(website, "php_version", None),
                 )
                 if outcome.returncode != 0:
                     problems.append({"domain": website.domain, "error": (outcome.stderr or outcome.stdout or "").strip()[:200]})
@@ -531,6 +585,7 @@ def sync_site_rules(
     enabled_rule_ids: Iterable[str],
     custom_rules: str = "",
     crs_mode: str = "off",
+    php_version: str | None = None,
 ) -> CommandResult:
     """Write one site's rule file.
 
@@ -544,7 +599,8 @@ def sync_site_rules(
     """
     safe_domain = _validate_domain(domain)
     mode = normalize_crs_mode(crs_mode)
-    content = render_site_rules(safe_domain, enabled_rule_ids, custom_rules, crs_mode=mode)
+    content = render_site_rules(safe_domain, enabled_rule_ids, custom_rules, crs_mode=mode,
+                                php_version=php_version)
     return shell.privileged(
         "waf-site-save",
         helper_args=[safe_domain],
@@ -563,6 +619,7 @@ def sync_website_rules(website: Website) -> CommandResult:
         website_enabled_rule_ids(website),
         website_custom_rules(website),
         crs_mode=mode,
+        php_version=getattr(website, "php_version", None),
     )
 
 
@@ -711,6 +768,7 @@ def save_website_config(website: Website, enabled_rule_ids: Iterable[str], custo
         selected,
         custom,
         crs_mode=active_crs_mode() if site_uses_crs(website) else "off",
+        php_version=getattr(website, "php_version", None),
     )
 
 
