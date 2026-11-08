@@ -32,6 +32,13 @@ WPCLI_OPCACHE_ROOT="/var/lib/php/wpcli-opcache"
 # ${PHP_BASEDIR_ROOT}/<user>-<site hash>. Root's, so every rewrite of the pool
 # (PHP version change, update, cron) keeps what the panel last set.
 PHP_BASEDIR_ROOT="/etc/bpanel/php-basedir"
+# The PHP functions a site's pool disables (operator, 2026-11-08): without a
+# file of its own under ${PHP_DISABLE_ROOT}/<user>-<site hash>, a site gets
+# PHP_DEFAULT_DISABLE_FUNCTIONS; the file, written by the panel when the
+# customer takes functions off or puts them back, holds the site's own list
+# ("" when nothing is disabled). Root's, like the open_basedir marker.
+PHP_DISABLE_ROOT="/etc/bpanel/php-disable"
+PHP_DEFAULT_DISABLE_FUNCTIONS="exec,system,passthru,shell_exec,proc_close,proc_open,dl,show_source,posix_kill,posix_mkfifo,posix_getpwuid,posix_setpgid,posix_setsid,posix_setuid,posix_setgid,posix_seteuid,posix_setegid,posix_uname"
 BPANEL_SITES_GROUP="bpanel-sites"
 # Default permissions for everything inside a site tree. 0644/0755 is what every
 # hosting panel gives a customer, and what PHP applications, SFTP clients and
@@ -7615,6 +7622,7 @@ delete_panel_user_runtime() {
     done
   done
   rm -f "${PHP_BASEDIR_ROOT}/${user}-"* 2>/dev/null || true
+  rm -f "${PHP_DISABLE_ROOT}/${user}-"* 2>/dev/null || true
   crontab -r -u "$user" 2>/dev/null || true
   # The account's own Redis (Redis per account addon), whichever path deletes
   # the account: killed by the pkill below, its unit would only restart as a
@@ -8293,9 +8301,58 @@ set_site_php_basedir() {
   fi
 }
 
+site_php_disable_marker() {
+  local user="$1" target="$2" site_hash
+  require_linux_user "$user"
+  target=$(readlink -m "$target") || deny "cannot resolve $target"
+  site_hash="$(printf '%s' "$target" | sha256sum | awk '{print substr($1, 1, 12)}')"
+  printf '%s/%s-%s' "$PHP_DISABLE_ROOT" "$user" "$site_hash"
+}
+
+# "default" drops the site's own list, so PHP_DEFAULT_DISABLE_FUNCTIONS applies;
+# "none" disables nothing; anything else is a comma list of function names.
+require_php_function_list() {
+  local value="$1"
+  [[ "$value" == "default" || "$value" == "none" ]] && return 0
+  (( ${#value} <= 4000 )) || deny "disabled function list is too long"
+  [[ "$value" =~ ^[a-z_][a-z0-9_]*(,[a-z_][a-z0-9_]*)*$ ]] || deny "invalid disabled function list: $value"
+}
+
+set_site_php_disable() {
+  local user="$1" target="$2" value="$3" marker
+  require_php_function_list "$value"
+  marker="$(site_php_disable_marker "$user" "$target")"
+  if [[ "$value" == "default" ]]; then
+    rm -f "$marker"
+    return 0
+  fi
+  [[ "$value" == "none" ]] && value=""
+  install -d -o root -g root -m 0755 "$PHP_DISABLE_ROOT"
+  printf '%s' "$value" >"$marker"
+  chmod 0644 "$marker"
+}
+
+# What the pool disables: the site's own list, or the default without one. A
+# marker that does not read as a list falls back to the default, never to none.
+site_php_disable_list() {
+  local user="$1" target="$2" marker value
+  marker="$(site_php_disable_marker "$user" "$target")"
+  if [[ ! -f "$marker" ]]; then
+    printf '%s' "$PHP_DEFAULT_DISABLE_FUNCTIONS"
+    return 0
+  fi
+  value="$(head -c 4000 "$marker")"
+  if [[ -z "$value" || "$value" =~ ^[a-z_][a-z0-9_]*(,[a-z_][a-z0-9_]*)*$ ]]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "$PHP_DEFAULT_DISABLE_FUNCTIONS"
+  fi
+}
+
 delete_site_php_pools() {
   local user="$1" target="$2" glob
   rm -f "$(site_php_basedir_marker "$user" "$target")"
+  rm -f "$(site_php_disable_marker "$user" "$target")"
   glob="$(site_php_pool_glob "$user" "$target")"
   for dir in /etc/php/*/fpm/pool.d; do
     [[ -d "$dir" ]] || continue
@@ -8341,6 +8398,13 @@ ensure_php_pool() {
   if [[ -f "${PHP_BASEDIR_ROOT}/${user}-${site_hash}" ]]; then
     basedir_line="php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:${tmp_dir}:/usr/share/php"
   fi
+  # The functions this site's PHP may not call (BPanel > Website > PHP): the
+  # default list unless the customer changed it. php_admin_value, so neither
+  # ini_set() nor a .user.ini of the site's can take it back.
+  local disable_list disable_line
+  disable_list="$(site_php_disable_list "$user" "$target")"
+  disable_line="; disable_functions: none for this site (BPanel > Website > PHP)"
+  [[ -n "$disable_list" ]] && disable_line="php_admin_value[disable_functions] = ${disable_list}"
   # php2shell (see ensure_php2shell_ini); 8.5 also needs backtraces off.
   local php2shell_pool_extra="; php2shell: fatal_error_backtraces exists from PHP 8.5"
   if [[ "$php_version" == 8.5 || "$php_version" > 8.5 ]]; then
@@ -8367,6 +8431,7 @@ pm.max_requests = ${PHP_FPM_MAX_REQUESTS}
 request_terminate_timeout = ${PHP_FPM_REQUEST_TERMINATE_TIMEOUT}s
 chdir = /
 ${basedir_line}
+${disable_line}
 php_admin_value[upload_tmp_dir] = ${upload_dir}
 php_admin_value[session.upload_progress.enabled] = 0
 ${php2shell_pool_extra}
@@ -10924,6 +10989,16 @@ PY
     ensure_php_pool "$user" "$target" "$php_version"
     ;;
 
+  site-php-disable)
+    # The functions a site's PHP may not call: default | none | a,b,c.
+    [[ $# -eq 4 ]] || deny "usage: site-php-disable <site-user> <path> <php-version|none> <default|none|list>"
+    user="$1"; path="$2"; php_version="$3"; value="$4"
+    require_linux_user "$user"
+    target=$(require_managed_path "$path" "$user")
+    set_site_php_disable "$user" "$target" "$value"
+    ensure_php_pool "$user" "$target" "$php_version"
+    ;;
+
   site-runtime-ensure)
     [[ $# -eq 3 ]] || deny "usage: site-runtime-ensure <site-user> <path> <php-version|none>"
     user="$1"; path="$2"; php_version="$3"
@@ -10958,10 +11033,18 @@ PY
       # The open_basedir marker is keyed by the path, so it moves with the site.
       basedir_state="off"
       [[ -f "$(site_php_basedir_marker "$old_user" "$old_target")" ]] && basedir_state="on"
+      # So does the disabled-function list: the default when it had none.
+      disable_state="default"
+      disable_marker="$(site_php_disable_marker "$old_user" "$old_target")"
+      if [[ -f "$disable_marker" ]]; then
+        disable_state="$(site_php_disable_list "$old_user" "$old_target")"
+        disable_state="${disable_state:-none}"
+      fi
       delete_site_php_pools "$old_user" "$old_target"
       mkdir -p "$(dirname "$new_target")"
       mv "$old_target" "$new_target"
       set_site_php_basedir "$user" "$new_target" "$basedir_state"
+      set_site_php_disable "$user" "$new_target" "$disable_state"
     fi
     if [[ -d "$new_target/public" && ! -e "$new_target/public_html" ]]; then
       mv "$new_target/public" "$new_target/public_html"

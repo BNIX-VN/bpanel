@@ -60,5 +60,10 @@
 .wsd-php-fence{display:grid;gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
 .wsd-php-fence>h3{margin:0;font-size:14px;font-weight:700;color:var(--text)}
 .wsd-php-fence .hint{margin:0}
+.wsd-php-function-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px 14px}
+.wsd-php-function-grid code{font-size:13px}
+.wsd-php-function-add{display:flex;gap:8px;flex-wrap:wrap}
+.wsd-php-function-add input{flex:1 1 220px;min-width:0}
+.wsd-php-function-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 /* The Cache tab: its switch and Empty the cache on one row. */
 .wsd-cache-row{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:12px 0 8px}
