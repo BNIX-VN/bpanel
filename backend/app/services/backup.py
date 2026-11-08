@@ -189,6 +189,7 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
                 app_payloads[app_entry["name"]] = payload
 
         sql_files: dict[str, Path] = {}
+        linked: dict[int, dict] = {}
         for website in websites:
             site_entry = {
                 "domain": website.domain,
@@ -227,7 +228,46 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
                     "db_password": db_password,
                     "sql_member": f"databases/{sql_name}",
                 }
+                linked[db_item.id] = site_entry["database"]
             manifest["websites"].append(site_entry)
+
+        # Every database the account owns, not only the one a website points
+        # at (operator, 2026-11-08): an application's database, made on the
+        # Databases page and linked to no website, was in no backup. Same
+        # section, same shape as OPanel's archives; a site's database is listed
+        # here too, pointing at the dump its site entry already carries.
+        domain_of = {website.id: website.domain for website in websites}
+        manifest["databases"] = []
+        owned = (db.query(DatabaseAccount).filter(DatabaseAccount.owner_id == user.id)
+                 .order_by(DatabaseAccount.id.asc()).all())
+        for item in owned:
+            entry = linked.get(item.id)
+            if entry is None:
+                sql_path = tmp_dir / f"db-{item.db_name}.sql"
+                try:
+                    mariadb.export_database(item.db_name, str(sql_path))
+                except Exception as exc:
+                    # A row left behind by a database dropped outside the panel
+                    # must not cost the account its whole backup.
+                    skipped.append({"path": f"database:{item.db_name}", "reason": str(exc)[-500:]})
+                    continue
+                if settings.command_dry_run and not sql_path.exists():
+                    sql_path.write_text(f"-- DRY RUN database dump for {item.db_name}\n", encoding="utf-8")
+                if not sql_path.exists():
+                    skipped.append({"path": f"database:{item.db_name}", "reason": "Dump produced no file"})
+                    continue
+                try:
+                    db_password = decrypt(item.db_password)
+                except RuntimeError:
+                    db_password = ""
+                entry = {
+                    "db_name": item.db_name,
+                    "db_user": item.db_user,
+                    "db_password": db_password,
+                    "sql_member": f"databases/db-{item.db_name}.sql",
+                }
+                sql_files[f"db:{item.db_name}"] = sql_path
+            manifest["databases"].append({**entry, "website_domain": domain_of.get(item.website_id, "")})
 
         manifest_path = tmp_dir / BACKUP_MANIFEST
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -240,6 +280,9 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
                 sql_path = sql_files.get(website.domain)
                 if sql_path and sql_path.exists():
                     tar.add(sql_path, arcname=f"databases/{website.domain}.sql")
+            for key, sql_path in sql_files.items():
+                if key.startswith("db:") and sql_path.exists():
+                    tar.add(sql_path, arcname=f"databases/db-{key[3:]}.sql")
             for name, payload in app_payloads.items():
                 if payload.exists():
                     tar.add(payload, arcname=f"applications/{name}.tar")
@@ -680,6 +723,11 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False) -
         site_users.ensure_panel_user(user.username)
 
     restored_websites = []
+    # The archive's list of every database the account owned (OPanel's, and
+    # BPanel's since 2026-11-08). When it is there it is the whole truth, and a
+    # site entry's own "database" is not restored a second time.
+    owned_databases = manifest.get("databases") or []
+    restored_databases: list[str] = []
     # Stage under the panel-owned import area: the helper only copies site files
     # into place from there (the site dir belongs to its Linux user, not bpanel).
     site_users.IMPORT_STAGE_BASE.mkdir(parents=True, exist_ok=True)
@@ -815,7 +863,7 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False) -
                 if alias_domain not in backup_aliases:
                     db.delete(alias_obj)
 
-            db_info = site_info.get("database") or None
+            db_info = None if owned_databases else (site_info.get("database") or None)
             if db_info:
                 db_name = db_info.get("db_name")
                 db_user = db_info.get("db_user")
@@ -889,6 +937,7 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False) -
             wordpress.fix_permissions(root_path, linux_user)
             restored_websites.append({"domain": domain, "created": created_site})
 
+        restored_databases = _restore_databases(owned_databases, user, db, archive, tmp_dir)
         restored_apps = _restore_applications(manifest, user, db, archive, tmp_dir)
 
         from app.services import mail
@@ -915,9 +964,56 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False) -
         "generated_password": generated_password,
         "role": user.role,
         "websites": restored_websites,
+        "databases": restored_databases,
         "applications": restored_apps,
         "mailboxes": restored_mail,
     }
+
+
+DB_IDENTIFIER_RE = re.compile(r"[a-z0-9_]{1,64}")
+
+
+def _restore_databases(entries: list, user: User, db, archive: Path, tmp_dir: Path) -> list[str]:
+    """Bring back every database the archive says the account owned.
+
+    The archive is untrusted: a name another account owns, or a MariaDB account
+    that exists on this box without being this account's, is refused rather
+    than taken over. One that names a restored website of the account is linked
+    to it, when that website has no database yet.
+    """
+    sites = {website.domain: website for website in db.query(Website).filter(Website.owner_id == user.id).all()}
+    restored: list[str] = []
+    for entry in entries:
+        db_name = str(entry.get("db_name") or "")
+        db_user = str(entry.get("db_user") or db_name)
+        if not DB_IDENTIFIER_RE.fullmatch(db_name) or not DB_IDENTIFIER_RE.fullmatch(db_user):
+            raise ValueError(f"Invalid database in backup: {db_name!r}")
+        for column, value in ((DatabaseAccount.db_name, db_name), (DatabaseAccount.db_user, db_user)):
+            if db.query(DatabaseAccount).filter(column == value, DatabaseAccount.owner_id != user.id).first():
+                raise ValueError(f"Database {value} already belongs to another account")
+        account = db.query(DatabaseAccount).filter(DatabaseAccount.db_name == db_name).first()
+        if (account is None or account.db_user != db_user) and mariadb.user_exists(db_user):
+            raise ValueError(f"MariaDB account {db_user} already exists on this server and is not this account's")
+        password = entry.get("db_password") or mariadb.random_password()
+        mariadb.create_database_credentials(db_name, db_user, password, allow_existing_user=True)
+        sql_path = _extract_member_to_file(archive, str(entry.get("sql_member") or ""), tmp_dir)
+        if sql_path:
+            mariadb.import_database(db_name, str(sql_path))
+        if account is None:
+            account = DatabaseAccount(owner_id=user.id, db_name=db_name, db_user=db_user, db_password=encrypt(password))
+            db.add(account)
+        else:
+            account.db_user = db_user
+            account.db_password = encrypt(password)
+        site = sites.get(str(entry.get("website_domain") or "").strip().lower())
+        if site is not None and account.website_id is None:
+            taken = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == site.id,
+                                                     DatabaseAccount.db_name != db_name).first()
+            if taken is None:
+                account.website_id = site.id
+        db.flush()
+        restored.append(db_name)
+    return restored
 
 
 def _restore_applications(manifest: dict, user: User, db, archive: Path, tmp_dir: Path) -> list[dict]:

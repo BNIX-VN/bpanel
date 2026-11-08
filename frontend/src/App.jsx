@@ -875,7 +875,7 @@ function App() {
   // Create was pressed: the sheet then says under each field what is wrong.
   const [dbCreateTried, setDbCreateTried] = useState(false);
   const [dbSearch, setDbSearch] = useState('');
-  const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
+  const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '', website_id: '' });
   const [createdDbInfo, setCreatedDbInfo] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
   const [users, setUsers] = useState([]);
@@ -1177,6 +1177,8 @@ function App() {
   // What moves with the website being assigned: its app and its databases.
   const [assignPreview, setAssignPreview] = useState(null);
   const [assignDbId, setAssignDbId] = useState('');
+  // The database whose website link is being changed, and the choice (operator, 2026-11-08).
+  const [dbLink, setDbLink] = useState(null);
   const [assignDbUserId, setAssignDbUserId] = useState('');
   const [twoFactorStatus, setTwoFactorStatus] = useState(null);
   const [twoFactorSetup, setTwoFactorSetup] = useState(null);
@@ -3946,6 +3948,17 @@ function App() {
     return Array.from(arr, b => chars[b % chars.length]).join('');
   }
 
+  async function saveDatabaseWebsite() {
+    if (!dbLink) return;
+    const data = await request(`/databases/${dbLink.id}/website`, {
+      method: 'POST', body: JSON.stringify({ website_id: dbLink.website_id ? Number(dbLink.website_id) : null }),
+    }, t('Saving...'));
+    if (data) {
+      setDbLink(null);
+      await loadDatabases();
+    }
+  }
+
   async function createDatabase() {
     const validDbName = /^[a-zA-Z0-9_]+$/;
     const dbName = newDatabase.db_name.trim();
@@ -3960,11 +3973,12 @@ function App() {
       db_name: dbName,
       db_user: dbUser || null,
       db_password: dbPass || null,
+      website_id: newDatabase.website_id ? Number(newDatabase.website_id) : null,
     };
     const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, t('Creating database...'));
     if (data) {
       setCreatedDbInfo({ db_name: data.db_name, db_user: data.db_user, db_password: data.db_password });
-      setNewDatabase({ db_name: '', db_user: '', db_password: '' });
+      setNewDatabase({ db_name: '', db_user: '', db_password: '', website_id: '' });
       await refreshAll();
     }
     return !!data;
@@ -9320,9 +9334,16 @@ function App() {
       if (await createDatabase()) closeCreate();
     }
     const moving = assignDbId ? databases.find(db => String(db.id) === String(assignDbId)) : null;
+    // A website takes one database: those of the owner's that have none, or this one.
+    const linkableSites = (ownerId, databaseId) => websites.filter(site => site.owner_id === ownerId
+      && !databases.some(other => other.id !== databaseId && String(other.website_id) === String(site.id)))
+      .sort((a, b) => a.domain.localeCompare(b.domain));
+    const linking = dbLink ? databases.find(db => db.id === dbLink.id) : null;
     const rowMenu = (db) => [
       { label: t('Download as SQL'), icon: Download, disabled: !!loading, onClick: () => downloadDatabase(db.id, db.db_name) },
       { label: t('Change password'), icon: KeyRound, disabled: !!loading, onClick: () => changeDbPassword(db.id) },
+      { label: db.website_id ? t('Change website') : t('Link to a website'), icon: Globe, disabled: !!loading,
+        onClick: () => setDbLink({ id: db.id, website_id: db.website_id ? String(db.website_id) : '' }) },
       { label: t('Change owner'), icon: UserCog, hidden: !isAdmin, disabled: !!loading,
         onClick: () => { setAssignDbId(String(db.id)); setAssignDbUserId(String(db.owner_id)); } },
       'separator',
@@ -9371,6 +9392,12 @@ function App() {
               <PasswordField value={newDatabase.db_password} onChange={v => setNewDatabase(prev => ({ ...prev, db_password: v }))}
                 generate copy onGenerate={() => generateRandomPassword()} />
             </Field>
+            <Field label={t('Website')} optional hint={t('The website this database belongs to: its backups carry it, and deleting the website can delete it too.')}>
+              <select name="new-db-website" value={newDatabase.website_id} onChange={e => setNewDatabase(prev => ({ ...prev, website_id: e.target.value }))}>
+                <option value="">{t('No website')}</option>
+                {linkableSites(currentUser?.id, null).map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+              </select>
+            </Field>
           </form>
         </InlinePanel>
         {databases.length === 0 && !dbCreateOpen && <EmptyState icon={Database} title={t('No databases yet.')} message={t('A database for a website or an application: MariaDB, with phpMyAdmin.')}
@@ -9399,6 +9426,22 @@ function App() {
         </div>}
         {databases.length > 0 && <p className="hint">{t('phpMyAdmin signs you in directly; the link works for 60 seconds.')}</p>}
       </section>
+      <Drawer open={!!linking} onClose={() => setDbLink(null)}
+        title={linking ? t('Website of {name}', { name: linking.db_name }) : ''}
+        subtitle={t('The website this database belongs to: its backups carry it, and deleting the website can delete it too. The database and its password stay as they are.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setDbLink(null)}>{t('Cancel')}</button>
+          <button type="submit" form="db-link-form" disabled={!!loading}>{t('Save')}</button>
+        </>}>
+        {linking && <form id="db-link-form" onSubmit={(e) => { e.preventDefault(); saveDatabaseWebsite(); }}>
+          <Field label={t('Website')}>
+            <select value={dbLink.website_id} onChange={e => setDbLink(prev => ({ ...prev, website_id: e.target.value }))}>
+              <option value="">{t('No website')}</option>
+              {linkableSites(linking.owner_id, linking.id).map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+            </select>
+          </Field>
+        </form>}
+      </Drawer>
       <Drawer open={!!moving} onClose={() => { setAssignDbId(''); setAssignDbUserId(''); }}
         title={moving ? t('Change the owner of {name}', { name: moving.db_name }) : ''}
         subtitle={t('The database, its MariaDB user and its password stay as they are; only who manages it in the panel changes. A database linked to a website moves with that website.')}

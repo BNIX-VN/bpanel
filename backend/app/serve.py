@@ -26,7 +26,7 @@ import uvicorn
 import uvicorn.config
 from uvicorn.config import create_ssl_context
 
-from app.core import panel_sni
+from app.core import https_redirect, panel_sni
 from app.services import panel_ipv6
 
 logger = logging.getLogger("bpanel")
@@ -150,6 +150,9 @@ def build_config() -> uvicorn.Config:
             )
 
         panel_sni.install(config.ssl, factory)
+        # http:// on this port gets a redirect to https:// instead of a broken
+        # connection (operator, 2026-11-08).
+        https_redirect.install(config)
     return config
 
 

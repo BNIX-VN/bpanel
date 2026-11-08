@@ -18,6 +18,7 @@ from app.core.secrets import decrypt, encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import (
     DatabaseCreate, DatabaseCreatedOut, DatabaseOut, DatabaseOwnerUpdate, DatabasePasswordUpdate,
+    DatabaseWebsiteUpdate,
 )
 from app.services import mariadb, panel_urls
 from app.services.audit import log_action
@@ -87,6 +88,21 @@ def ensure_database_quota(db: Session, owner: User) -> None:
                 )
 
 
+def _linkable_website(db: Session, owner_id: int, website_id: int, database_id: int | None = None) -> Website:
+    """One of the owner's websites with no other database linked to it.
+
+    The link is what a website's backup carries, what deleting the website
+    can drop with it, and what WordPress Manager reads; a website has one.
+    """
+    site = db.query(Website).filter(Website.id == website_id).first()
+    if site is None or site.owner_id != owner_id:
+        raise HTTPException(status_code=400, detail="Choose one of the database owner's websites")
+    other = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == site.id).first()
+    if other is not None and other.id != database_id:
+        raise HTTPException(status_code=409, detail=f"{site.domain} already has the database {other.db_name}")
+    return site
+
+
 @router.post("", response_model=DatabaseCreatedOut)
 def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     db_name = payload.db_name
@@ -98,6 +114,9 @@ def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), curr
         raise HTTPException(status_code=409, detail="Database name already exists")
     if db.query(DatabaseAccount).filter(DatabaseAccount.db_user == db_user).first():
         raise HTTPException(status_code=409, detail="Database user already exists")
+    # The website it belongs to, if any (operator, 2026-11-08): checked before
+    # MariaDB is touched, so a refused link leaves nothing behind.
+    site = _linkable_website(db, current_user.id, payload.website_id) if payload.website_id else None
 
     try:
         mariadb.create_database_credentials(db_name, db_user, db_password)
@@ -111,6 +130,7 @@ def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), curr
 
     item = DatabaseAccount(
         owner_id=current_user.id,
+        website_id=site.id if site else None,
         db_name=db_name,
         db_user=db_user,
         db_password=encrypt(db_password),
@@ -165,6 +185,28 @@ def assign_database(
     db.refresh(item)
     log_action(db, current_user.id, "assign_database", item.db_name,
                f"{previous} -> {owner.username}", request=request)
+    return item
+
+
+@router.post("/{database_id}/website", response_model=DatabaseOut)
+def link_database_website(
+    database_id: int,
+    payload: DatabaseWebsiteUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Link a database to one of its owner's websites, or unlink it
+    (operator, 2026-11-08: there was no way to). Only the panel's record
+    changes; the database and its credentials stay as they are."""
+    item = get_accessible_database(database_id, db, current_user)
+    site = _linkable_website(db, item.owner_id, payload.website_id, item.id) if payload.website_id else None
+    previous = item.website.domain if item.website else ""
+    item.website_id = site.id if site else None
+    db.commit()
+    db.refresh(item)
+    log_action(db, current_user.id, "link_database_website", item.db_name,
+               f"{previous or '-'} -> {site.domain if site else '-'}", request=request)
     return item
 
 
