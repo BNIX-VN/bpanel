@@ -1779,6 +1779,8 @@ export const vi = {
   "Website of {name}": "Website của {name}",
   "The website this database belongs to: its backups carry it, and deleting the website can delete it too.": "Website mà database này thuộc về: backup của website sẽ kèm database, và xoá website có thể xoá luôn database.",
   "The website this database belongs to: its backups carry it, and deleting the website can delete it too. The database and its password stay as they are.": "Website mà database này thuộc về: backup của website sẽ kèm database, và xoá website có thể xoá luôn database. Database và mật khẩu giữ nguyên.",
+  "Name in your client": "Tên trong client",
+  "A client that talks to several servers needs a different name for each. This one is made from the panel’s address and your account; change it if you like.": "Client kết nối nhiều máy chủ cần mỗi máy một tên riêng. Tên này lấy từ địa chỉ panel và tài khoản của bạn; có thể đổi tuỳ ý.",
   "No files in this folder.": "Thư mục này trống.",
   "No forwarder matches.": "Không có chuyển tiếp nào khớp.",
   "No forwarders yet.": "Chưa có chuyển tiếp nào.",
