@@ -356,7 +356,9 @@ DANGEROUS_DIRECTIVES = re.compile(
     r"root\s+|"
     r"auth_basic_user_file\b|"
     # ---- arbitrary file write via logging ----
-    r"access_log\s+|"
+    # access_log writes wherever it is pointed; `access_log off;` writes nothing
+    # (operator, 2026-11-09: "location = /favicon.png { access_log off; }").
+    r"access_log\s+(?!off\s*$)|"
     r"error_log\s+|"
     # ---- HTTP response control / phishing primitives ----
     # `return` is checked on its own in validate_custom_nginx: a status, or a
@@ -389,6 +391,35 @@ CACHE_HEADER_NAMES = frozenset(
         "x-fastcgi-cache",
     }
 )
+# Response headers a site may set besides the cache ones (operator, 2026-11-09:
+# X-Content-Type-Options was refused): security, CORS and robots headers, which
+# speak only for the site's own responses. Still never Set-Cookie (a cookie for
+# a parent domain - the panel's - could be planted) or Location (a redirect to
+# anywhere; `return` covers on-site ones).
+SECURITY_HEADER_NAMES = frozenset(
+    {
+        "x-content-type-options",
+        "x-frame-options",
+        "x-xss-protection",
+        "referrer-policy",
+        "permissions-policy",
+        "strict-transport-security",
+        "content-security-policy",
+        "content-security-policy-report-only",
+        "cross-origin-opener-policy",
+        "cross-origin-embedder-policy",
+        "cross-origin-resource-policy",
+        "x-robots-tag",
+        "access-control-allow-origin",
+        "access-control-allow-methods",
+        "access-control-allow-headers",
+        "access-control-expose-headers",
+        "access-control-allow-credentials",
+        "access-control-max-age",
+        "timing-allow-origin",
+    }
+)
+ALLOWED_HEADER_NAMES = CACHE_HEADER_NAMES | SECURITY_HEADER_NAMES
 ADD_HEADER_NAME_RE = re.compile(
     r"(?mi)(?:^|[;{}])\s*add_header\s+"
     r"([!#$%&'*+\-.^_`|~0-9A-Za-z]+)(?=\s)"
@@ -1002,13 +1033,13 @@ def validate_custom_nginx(content: Optional[str]) -> str:
         {
             header
             for header in add_header_names
-            if header.lower() not in CACHE_HEADER_NAMES
+            if header.lower() not in ALLOWED_HEADER_NAMES
         },
         key=str.lower,
     )
     if unsupported_headers:
         raise ValueError(
-            "Custom add_header may only set cache-related headers; disallowed: "
+            "Custom add_header may only set cache, security, CORS and robots headers; disallowed: "
             + ", ".join(unsupported_headers)
         )
     try_files_matches = list(TRY_FILES_RE.finditer(text))
