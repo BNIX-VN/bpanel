@@ -389,6 +389,16 @@ const EMPTY_SITE_APP_DRAFT = {
   env: '',
 };
 const SITE_APP_KIND_LABELS = { node: 'Node.js', docker: 'Container', compose: 'Compose' };
+
+// The name an MCP client files this server under: this panel's address and the
+// account, so one client talking to several servers keeps them apart
+// (operator, 2026-11-08: every server was "bpanel"). Letters, digits and
+// hyphens, short enough that the tool names a client builds from it fit.
+function defaultMcpServerName(hostname, username) {
+  const clean = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const host = clean(String(hostname || '').toLowerCase().replace(/^(panel|www)\./, ''));
+  return [host, clean(username)].filter(Boolean).join('-').slice(0, 40).replace(/-+$/, '') || 'bpanel';
+}
 // DNS Manager addon, laid out like OPanel's: the record types, the TTLs the
 // form offers, and an example value for each type.
 const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'];
@@ -1177,6 +1187,8 @@ function App() {
   // What moves with the website being assigned: its app and its databases.
   const [assignPreview, setAssignPreview] = useState(null);
   const [assignDbId, setAssignDbId] = useState('');
+  // The MCP server's name in a client, when changed from the suggested one.
+  const [mcpServerName, setMcpServerName] = useState('');
   // The database whose website link is being changed, and the choice (operator, 2026-11-08).
   const [dbLink, setDbLink] = useState(null);
   const [assignDbUserId, setAssignDbUserId] = useState('');
@@ -13053,12 +13065,15 @@ function App() {
   function mcpClientSnippets(token) {
     const endpoint = `${window.location.origin}/api/mcp`;
     const bearer = `Bearer ${token || '<your-token>'}`;
+    const name = mcpName;
     return [
-      ['Claude Code', `claude mcp add --transport http bpanel ${endpoint} --header "Authorization: ${bearer}"`],
-      ['Cursor (~/.cursor/mcp.json)', JSON.stringify({ mcpServers: { bpanel: { url: endpoint, headers: { Authorization: bearer } } } }, null, 2)],
-      ['VS Code (.vscode/mcp.json)', JSON.stringify({ servers: { bpanel: { type: 'http', url: endpoint, headers: { Authorization: bearer } } } }, null, 2)],
+      ['Claude Code', `claude mcp add --transport http ${name} ${endpoint} --header "Authorization: ${bearer}"`],
+      ['Cursor (~/.cursor/mcp.json)', JSON.stringify({ mcpServers: { [name]: { url: endpoint, headers: { Authorization: bearer } } } }, null, 2)],
+      ['VS Code (.vscode/mcp.json)', JSON.stringify({ servers: { [name]: { type: 'http', url: endpoint, headers: { Authorization: bearer } } } }, null, 2)],
     ];
   }
+
+  const mcpName = mcpServerName || defaultMcpServerName(window.location.hostname, currentUser?.username);
 
   function renderMcp() {
     const enabled = mcpAddonInstalled;
@@ -13075,6 +13090,11 @@ function App() {
           {' '}<button className="mini" onClick={() => navigateToPage('addons')}><PackageOpen size={13}/> {t('Open Addons')}</button></div>}
         {enabled && !window.location.protocol.startsWith('https') && <div className="info-box"><AlertCircle size={14}/> {t('MCP clients refuse a self-signed certificate, so no assistant will connect until the panel has one. Install it under Panel settings → SSL.')}</div>}
         {enabled && renderCopyBlock(t('Endpoint'), endpoint)}
+        {enabled && <label className="field mcp-server-name"><span className="field-label">{t('Name in your client')}</span>
+          <input value={mcpName} maxLength={40} spellCheck={false} autoComplete="off"
+            onChange={e => setMcpServerName(e.target.value.replace(/[^A-Za-z0-9_-]/g, ''))} />
+          <small className="hint">{t('A client that talks to several servers needs a different name for each. This one is made from the panel’s address and your account; change it if you like.')}</small>
+        </label>}
       </section>
 
       {enabled && mcpNewToken && <section className="section token-created-notice">

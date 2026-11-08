@@ -59,6 +59,15 @@ LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 
 SERVER_INFO = {"name": "bpanel", "title": "BPanel", "version": "1.0.0"}
 
+
+def server_info() -> dict:
+    """Which server this is, for a client that lists several: the panel's
+    address goes in the title (operator, 2026-11-08)."""
+    from app.core.config import settings
+
+    where = (settings.panel_domain or "").strip()
+    return {**SERVER_INFO, "title": f"BPanel · {where}" if where else SERVER_INFO["title"]}
+
 # JSON-RPC 2.0 error codes.
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -414,7 +423,7 @@ def handle_message(ctx: Context, message: Any) -> Optional[dict]:
         return _result(request_id, {
             "protocolVersion": version,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": SERVER_INFO,
+            "serverInfo": server_info(),
         })
 
     if method == "ping":
