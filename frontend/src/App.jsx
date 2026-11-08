@@ -389,6 +389,11 @@ const EMPTY_SITE_APP_DRAFT = {
   env: '',
 };
 const SITE_APP_KIND_LABELS = { node: 'Node.js', docker: 'Container', compose: 'Compose' };
+// What every site's PHP may not call until its owner takes a function off
+// (services/php_functions.py DEFAULT_DISABLED, the helper's own copy too).
+const PHP_DEFAULT_DISABLED = ['exec', 'system', 'passthru', 'shell_exec', 'proc_close', 'proc_open', 'dl', 'show_source',
+  'posix_kill', 'posix_mkfifo', 'posix_getpwuid', 'posix_setpgid', 'posix_setsid', 'posix_setuid', 'posix_setgid',
+  'posix_seteuid', 'posix_setegid', 'posix_uname'];
 
 // The name an MCP client files this server under: this panel's address and the
 // account, so one client talking to several servers keeps them apart
@@ -1124,6 +1129,8 @@ function App() {
   // The Cache tab's switch while its change is on its way: where it is going.
   const [siteCacheGoing, setSiteCacheGoing] = useState(null);
   const [siteBasedirGoing, setSiteBasedirGoing] = useState(null);
+  // The disabled-function list being edited on a website's PHP tab: { id, names, extra }.
+  const [disableDraft, setDisableDraft] = useState(null);
   // The firewall's one address form: whether it allows or blocks.
   const [firewallRuleAction, setFirewallRuleAction] = useState('allow');
   // The PHP page's extension filter.
@@ -9056,6 +9063,7 @@ function App() {
         <button type="button" disabled={!ready || !dirty || !!loading} onClick={saveWebsiteSettings}><Save size={14} aria-hidden="true"/> {t('Save changes')}</button>
       </div>
       {['wordpress', 'php'].includes(site.app_type || 'wordpress') && renderSitePhpFence(site)}
+      {['wordpress', 'php'].includes(site.app_type || 'wordpress') && renderSiteDisableFunctions(site)}
     </section>;
   }
 
@@ -9074,6 +9082,56 @@ function App() {
         : <p className="hint">{on ? t('On, set by your host.') : t('Off.')}</p>}
       <p className="hint">{t('open_basedir makes PHP check every path it opens, so pages that are not cached run about a third slower. A package can turn it on for all of its sites.')}</p>
     </div>;
+  }
+
+  // The PHP functions this site's PHP may not call (operator, 2026-11-08):
+  // every site starts with the default list; untick what the code needs.
+  function renderSiteDisableFunctions(site) {
+    const saved = site.disable_functions == null ? PHP_DEFAULT_DISABLED : site.disable_functions.split(',').filter(Boolean);
+    const draft = disableDraft?.id === site.id ? disableDraft : { id: site.id, names: saved, extra: '' };
+    const names = draft.names;
+    const extras = names.filter(name => !PHP_DEFAULT_DISABLED.includes(name));
+    const sameAs = (a, b) => [...a].sort().join(',') === [...b].sort().join(',');
+    const dirty = !sameAs(names, saved);
+    const isDefault = site.disable_functions == null;
+    const change = next => setDisableDraft({ ...draft, ...next });
+    const toggle = name => change({ names: names.includes(name) ? names.filter(item => item !== name) : [...names, name] });
+    const addExtra = () => {
+      const more = draft.extra.toLowerCase().split(/[\s,]+/).filter(name => /^[a-z_][a-z0-9_]*$/.test(name) && !names.includes(name));
+      change({ names: [...names, ...more], extra: '' });
+    };
+    return <div className="wsd-php-fence wsd-php-functions">
+      <h3>{t('Disabled PHP functions')}</h3>
+      <p className="hint">{t('Ticked functions cannot be called by this website\'s PHP. If your code needs one, untick it and save. Command-line PHP (cron jobs, the terminal, WP-CLI) is not affected.')}</p>
+      <div className="wsd-php-function-grid">
+        {PHP_DEFAULT_DISABLED.map(name => <label className="check-line" key={name}>
+          <input type="checkbox" checked={names.includes(name)} disabled={!!loading} onChange={() => toggle(name)} /> <code>{name}</code>
+        </label>)}
+        {extras.map(name => <label className="check-line" key={name}>
+          <input type="checkbox" checked disabled={!!loading} onChange={() => toggle(name)} /> <code>{name}</code>
+        </label>)}
+      </div>
+      <div className="wsd-php-function-add">
+        <input value={draft.extra} disabled={!!loading} placeholder={t('Disable another function, e.g. popen')} aria-label={t('Disable another function')}
+          onChange={e => change({ extra: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addExtra(); } }} />
+        <button type="button" className="secondary-light" disabled={!!loading || !draft.extra.trim()} onClick={addExtra}><Plus size={14} aria-hidden="true"/> {t('Add')}</button>
+      </div>
+      <div className="wsd-php-function-actions">
+        {!isDefault && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => saveSiteDisableFunctions(site, null)}><RotateCcw size={14} aria-hidden="true"/> {t('Back to the default list')}</button>}
+        <button type="button" disabled={!!loading || !dirty} onClick={() => saveSiteDisableFunctions(site, names.join(','))}><Save size={14} aria-hidden="true"/> {t('Save')}</button>
+      </div>
+    </div>;
+  }
+
+  async function saveSiteDisableFunctions(site, functions) {
+    const data = await request(`/websites/${site.id}/disable-functions`, { method: 'PUT', body: JSON.stringify({ functions }) },
+      t('Saving PHP settings...'));
+    if (!data) return;
+    setDisableDraft(null);
+    const merge = list => list.map(item => (item.id === data.id ? { ...item, ...data } : item));
+    setWebsites(merge);
+    setWebsiteList(merge);
+    setNotice(t('Disabled PHP functions saved for {domain}.', { domain: site.domain }));
   }
 
   async function setSiteOpenBasedir(site, on) {

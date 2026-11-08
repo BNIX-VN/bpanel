@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.api.databases import ensure_database_quota
 from app.api.deps import get_current_user
@@ -37,9 +37,9 @@ from app.schemas.schemas import (
     WildcardSslRequest,
 )
 from app.services import sftp_accounts
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.services import addons, cloudflare, cron, dns, file_manager, mariadb, nginx, page_cache, php_isolation, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import addons, cloudflare, cron, dns, file_manager, mariadb, nginx, page_cache, php_functions, php_isolation, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -1251,6 +1251,36 @@ def set_website_nginx_cache(website_id: int, payload: WebsiteNginxCache, request
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.refresh(website)
     log_action(db, current_user.id, "website_nginx_cache", website.domain, "on" if payload.enabled else "off", request=request)
+    return website
+
+
+class WebsiteDisableFunctions(BaseModel):
+    # A comma list; None goes back to the default list.
+    functions: Optional[str] = Field(default=None, max_length=8000)
+
+
+@router.put("/{website_id}/disable-functions", response_model=WebsiteOut)
+def set_website_disable_functions(website_id: int, payload: WebsiteDisableFunctions, request: Request,
+                                  db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """The PHP functions this site's PHP may not call (operator, 2026-11-08).
+
+    Every site starts with the default list; the site's owner takes off the
+    ones their code needs. It is their own site's PHP, running as their own
+    user, so it is theirs to decide.
+    """
+    website = _get_authorized_website(db, website_id, current_user)
+    if (website.app_type or "wordpress") not in {"wordpress", "php"}:
+        raise HTTPException(status_code=400, detail="Disabled functions are for PHP and WordPress sites")
+    try:
+        php_functions.apply(website, payload.functions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=f"Could not rewrite the site's PHP pool: {exc}") from exc
+    db.commit()
+    db.refresh(website)
+    log_action(db, current_user.id, "website_disable_functions", website.domain,
+               "default" if website.disable_functions is None else (website.disable_functions or "none"), request=request)
     return website
 
 

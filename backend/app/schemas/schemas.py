@@ -945,6 +945,9 @@ class WebsiteOut(BaseModel):
     nginx_cache_enabled: bool = True
     # open_basedir on the site's PHP-FPM pool (services/php_isolation.py).
     open_basedir: bool = False
+    # The PHP functions the pool disables (services/php_functions.py): None is
+    # the default list.
+    disable_functions: Optional[str] = None
     # Whether this site opted into the OWASP Core Rule Set, and whether that
     # opt-in is actually being enforced (it is not, if CRS is off server-wide).
     #

@@ -208,6 +208,8 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
                 "http_flood_enabled": bool(getattr(website, "http_flood_enabled", False)),
                 "http_flood_config": getattr(website, "http_flood_config", "") or "",
                 "aliases": [alias.domain for alias in getattr(website, "aliases", []) or [] if getattr(alias, "mode", "alias") == "alias"],
+                # None is the default list (services/php_functions.py).
+                "disable_functions": getattr(website, "disable_functions", None),
                 "database": None,
             }
             db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
@@ -935,6 +937,15 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False) -
                 if result.returncode != 0:
                     raise RuntimeError((result.stderr or result.stdout or "Could not write HTTP flood zones").strip())
             wordpress.fix_permissions(root_path, linux_user)
+            # The site's own disabled-function list; an archive without one
+            # (older, or OPanel's) leaves the default list in place.
+            if site_info.get("disable_functions") is not None:
+                from app.services import php_functions
+
+                try:
+                    php_functions.apply(website, str(site_info.get("disable_functions")))
+                except ValueError:
+                    pass
             restored_websites.append({"domain": domain, "created": created_site})
 
         restored_databases = _restore_databases(owned_databases, user, db, archive, tmp_dir)

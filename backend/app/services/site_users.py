@@ -245,6 +245,16 @@ def set_php_basedir(root_path: str, php_version: Optional[str], linux_user: str,
     )
 
 
+def set_php_disable(root_path: str, php_version: Optional[str], linux_user: str, value: str) -> None:
+    """The functions one site's PHP-FPM pool disables (services/php_functions.py):
+    "default", "none" or a comma list. Kept in a marker like open_basedir's."""
+    shell.privileged(
+        "site-php-disable",
+        helper_args=[validate_linux_user(linux_user), root_path, php_version or "none", value],
+        fallback=["true"],
+    )
+
+
 def ensure_document_root(root_path: str, relative_path: str, linux_user: Optional[str]) -> Path:
     target = document_root(root_path, relative_path)
     if not linux_user:
