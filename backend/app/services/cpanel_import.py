@@ -212,8 +212,169 @@ def _account(root: Path, archive_name: str) -> dict:
     user = (values.get("USER") or user or account_of(archive_name)).strip().lower()
     if not user:
         raise CPanelImportError("The cPanel account name is not in the archive")
+    quota = None
+    quota_file = root / "quota"
+    if quota_file.is_file():
+        quota = quota_file.read_text(encoding="utf-8", errors="ignore")[:1024].strip().split("\n")[0].strip()
     return {"user": user, "email": values.get("CONTACTEMAIL", "").split(",")[0].strip(),
-            "main": (values.get("DNS") or "").strip().lower()}
+            "main": (values.get("DNS") or "").strip().lower(),
+            "plan": values.get("PLAN", ""), "cp": values, "quota": quota}
+
+
+# --- The account's package, from its cPanel plan (operator, 2026-11-08, as SNPanel
+# v2.5.1: "Import đọc tên package cũ, tạo package mới cùng tên và cấu hình bên panel
+# luôn (nếu chưa có)") --------------------------------------------------------------
+#
+# The account goes on the administrator's package of its plan's name: the exact name
+# first, then one differing only in case (the lowest id), used as it is, never
+# changed. Without one, a package of that name is made from the plan's limits
+# (cp/<user> holds the account's own copy of them). No package - the account's own
+# limits, as before - when the plan is cPanel's own default/undefined, or the name
+# is only a reseller's package here. An account already on a package keeps it.
+
+NOT_A_PLAN = ("default", "undefined")
+PLAN_NAME_MAX = 100
+# A package's most, for a limit the plan left unlimited where BPanel has no
+# unlimited: websites, aliases and mailboxes (0 allows none). Disk and databases
+# take 0, their "no limit".
+LIMIT_MAX = {"website_limit": 1000, "alias_limit": 1000, "mail_accounts_limit": 1000}
+
+
+def package_name(plan: str) -> Optional[str]:
+    """The package name a plan becomes: control characters out, whitespace
+    collapsed, at most 100 characters; None for none or cPanel's own."""
+    cleaned = "".join(" " if ord(c) < 32 or ord(c) == 127 else c for c in str(plan or ""))
+    name = " ".join(cleaned.split())[:PLAN_NAME_MAX].rstrip()
+    if not name or name.lower() in NOT_A_PLAN:
+        return None
+    return name
+
+
+def _limit(raw) -> tuple[str, int]:
+    """("count", n), ("unlimited", 0) or ("unknown", 0) for a value as cPanel writes it."""
+    text = str(raw if raw is not None else "").strip()
+    if text.lower() == "unlimited":
+        return ("unlimited", 0)
+    if not text or not text.isdigit():
+        return ("unknown", 0)
+    return ("count", int(text))
+
+
+def plan_limits(cp: dict, quota: Optional[str]) -> tuple[dict, list[str]]:
+    """The package fields of a cPanel plan, and what could not be said as the plan did.
+    Websites: the addon domains and the main one; disk: quota (MB), else
+    DISK_BLOCK_LIMIT (1 KB blocks), 0 or unlimited being none; databases MAXSQL,
+    aliases MAXPARK, mailboxes MAXPOP. What the plan does not say takes the
+    package default (the disk: the import's own default for an account)."""
+    from app.models.entities import UserPackage
+
+    defaults = {column.name: column.default.arg for column in UserPackage.__table__.columns
+                if column.default is not None and not callable(column.default.arg)}
+    notes: list[str] = []
+
+    def counted(field: str, key: str, plus: int = 0) -> int:
+        kind, n = _limit(cp.get(key))
+        if kind == "count":
+            return min(n + plus, LIMIT_MAX.get(field, n + plus))
+        if kind == "unlimited":
+            return LIMIT_MAX.get(field, 0)
+        return defaults.get(field, 0)
+
+    kind, n = _limit(quota) if quota is not None else ("unknown", 0)
+    if kind == "unknown":
+        kind, n = _limit(cp.get("DISK_BLOCK_LIMIT"))
+        n = (n + 1023) // 1024
+    storage = n if kind == "count" else 0 if kind == "unlimited" else da_import.DEFAULT_STORAGE_MB
+    values = {
+        "website_limit": counted("website_limit", "MAXADDON", plus=1),
+        "storage_limit_mb": min(storage, 1024 * 1024),
+        "database_limit": counted("database_limit", "MAXSQL"),
+        "alias_limit": counted("alias_limit", "MAXPARK"),
+        "mail_accounts_limit": counted("mail_accounts_limit", "MAXPOP"),
+    }
+    if _limit(cp.get("MAXSQL")) == ("count", 0):
+        notes.append("the plan allowed no databases, which a package here cannot say (0 is no limit): the package does not limit them")
+    if str(cp.get("HASSHELL", "")).strip().lower() in {"1", "y", "yes"}:
+        notes.append("the plan gave shell access; the package leaves the Terminal off")
+    unmapped = [f"{key}={cp[key].strip()}" for key in ("BWLIMIT", "MAXSUB", "MAXFTP", "MAXLST", "MAX_EMAILACCT_QUOTA", "MAX_EMAIL_PER_HOUR")
+                if _limit(cp.get(key))[0] == "count" and cp[key].strip() != "0"]
+    if unmapped:
+        notes.append("the plan's limits with no equivalent here were not carried over: " + ", ".join(unmapped))
+    return values, notes
+
+
+def _find_package(db, name: str):
+    """("admin", package), ("reseller", None) or (None, None) for a package name."""
+    from app.models.entities import UserPackage
+
+    packages = db.query(UserPackage).order_by(UserPackage.id).all()
+    for match in (lambda p: p.name == name, lambda p: p.name.lower() == name.lower()):
+        admins = [package for package in packages if package.owner_id is None and match(package)]
+        if admins:
+            return "admin", admins[0]
+    if any(package.name.lower() == name.lower() for package in packages):
+        return "reseller", None
+    return None, None
+
+
+def apply_package(db, account: dict, item: dict) -> None:
+    """Once everything came in, put the account on its plan's package."""
+    from app.api.users import _apply_package_limits
+    from app.models.entities import User, UserPackage, Website
+    from app.services import php_isolation
+
+    warnings = item.setdefault("warnings", [])
+    name = package_name(account.get("plan", ""))
+    if name is None:
+        return
+    user = db.query(User).filter(User.username == item.get("username")).first()
+    if user is None or user.package_id:
+        return
+    found, package = _find_package(db, name)
+    if found == "reseller":
+        warnings.append(f"Package {name} is a reseller's here; the account keeps its own limits")
+        return
+    if package is None:
+        values, notes = plan_limits(account.get("cp") or {}, account.get("quota"))
+        package = UserPackage(name=name, slug=None, terminal_enabled=False, **values)
+        db.add(package)
+        db.commit()
+        db.refresh(package)
+        warnings.append(f"Package {name} made from the cPanel plan" + (f" ({'; '.join(notes)})" if notes else ""))
+        item["package_made"] = True
+    _apply_package_limits(user, package)
+    db.commit()
+    php_isolation.sync_user(db, user)
+    item["package"] = package.name
+    sites = db.query(Website).filter(Website.owner_id == user.id).count()
+    if sites > package.website_limit:
+        warnings.append(f"The account has {sites} websites, more than its package's {package.website_limit}")
+
+
+def enable_object_cache(db, item: dict) -> None:
+    """The account's own object cache (Redis per account) on, as when the account
+    switches it on - unless the server has none, or the account's package does not
+    allow it: then the report says why, and the import still completes."""
+    from app.models.entities import User
+    from app.services import redis_accounts
+
+    warnings = item.setdefault("warnings", [])
+    user = db.query(User).filter(User.username == item.get("username")).first()
+    if user is None or user.redis_enabled:
+        return
+    reason = redis_accounts.problem(user)
+    if reason:
+        warnings.append(f"Object cache not switched on: {redis_accounts.PROBLEM_TEXT.get(reason, reason)}")
+        return
+    user.redis_enabled = True
+    db.commit()
+    try:
+        redis_accounts.apply(user)
+        item["object_cache"] = True
+    except (RuntimeError, ValueError, OSError) as exc:
+        user.redis_enabled = False
+        db.commit()
+        warnings.append(f"Object cache not switched on: {exc}")
 
 
 def _websites(root: Path, account: dict, warnings: list[str]) -> tuple[list[dict], list[str], str]:
@@ -412,7 +573,7 @@ def _notes(root: Path, account: dict, sites: list[dict], warnings: list[str]) ->
                     "change it on the website's page if it needs the old one")
 
 
-def _lay_out(archive: Path, stage_dir: Path) -> tuple[Path, list[str]]:
+def _lay_out(archive: Path, stage_dir: Path, accounts: Optional[list] = None) -> tuple[Path, list[str]]:
     """da_import.import_laid_out's lay_out for a cPanel archive. Everything
     happens under the importer's own stage folder, which is where the helper
     copies site files from (OPanel found its own cPanel import refused by the
@@ -423,6 +584,8 @@ def _lay_out(archive: Path, stage_dir: Path) -> tuple[Path, list[str]]:
     da_import._safe_extract_tar(archive, extracted)
     root = _find_root(extracted)
     account = _account(root, archive.name)
+    if accounts is not None:
+        accounts.append(account)
     sites, parked, homedir = _websites(root, account, warnings)
     target = stage_dir / "directadmin"
     _layout(root, target, account, sites, parked, homedir, warnings)
@@ -440,4 +603,22 @@ def import_cpanel_backup(archive_path: str, force: bool = False, replace_own: bo
     aliases and certificates. Same flags and result as da_import.import_da_backup."""
     path = resolve_path(archive_path)
     _log(f"Starting cPanel import: {path.name}")
-    return da_import.import_laid_out(path, _lay_out, force=force, replace_own=replace_own, source="cPanel")
+    accounts: list[dict] = []
+
+    def lay_out(archive: Path, stage_dir: Path):
+        target, warnings = _lay_out(archive, stage_dir, accounts)
+        return target, warnings
+
+    result = da_import.import_laid_out(path, lay_out, force=force, replace_own=replace_own, source="cPanel")
+    # After everything came in: the package's limits keep nothing out.
+    if accounts and not result.get("errors"):
+        from app.core.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            for item in result.get("summary") or []:
+                apply_package(db, accounts[0], item)
+                enable_object_cache(db, item)
+        finally:
+            db.close()
+    return result
