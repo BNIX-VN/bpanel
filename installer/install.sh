@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.16.2}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.16.3}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -838,8 +838,11 @@ retire_admin_group_sudo() {
   local file=/etc/sudoers tmp member gid others=()
   [[ -f "$file" ]] || return 0
   grep -qE '^[[:space:]]*%admin[[:space:]]' "$file" || return 0
-  gid="$(getent group admin | cut -d: -f3)"
-  for member in $(getent group admin | cut -d: -f4 | tr ',' ' ') \
+  # No group admin yet - a fresh server, before the panel makes its admin - is
+  # getent exit 2: under pipefail that ended the whole install without a word
+  # (103.77.240.236, 2026-11-09, right after "Installing privileged helper").
+  gid="$(getent group admin 2>/dev/null | cut -d: -f3 || true)"
+  for member in $(getent group admin 2>/dev/null | cut -d: -f4 | tr ',' ' ' || true) \
                 $(awk -F: -v gid="$gid" 'gid != "" && $4 == gid { print $1 }' /etc/passwd); do
     case "$member" in www-data|bpanel) continue ;; esac
     if [[ " $(id -nG "$member" 2>/dev/null) " == *" bpanel-sftp "* ]]; then continue; fi
@@ -1733,7 +1736,14 @@ main() {
   log "Copying source to ${APP_DIR}"
   copy_sources
 
-  log "Building frontend"
+  # Swap before the build, not only with the memory limits further down: the
+  # Vite build needs ~700 MB besides MariaDB and PHP, and a small VPS with no
+  # swap stopped there (an OPanel customer's install, 2026-11-09). The guard is
+  # safe to run twice; it runs again below once the helper is in place.
+  log "Making sure the build has memory (swap)"
+  bash "${SCRIPT_DIR}/files/bpanel-memory-guard" || true
+
+  log "Building frontend (a few minutes on a small VPS)"
   build_frontend
 
   log "Creating bpanel system user, MariaDB credentials and filesystem ACLs"
