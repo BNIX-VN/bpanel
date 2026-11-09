@@ -2762,6 +2762,13 @@ function App() {
       } else {
         setNotice(`Created site ${cleanDomain}. Upload your files to public_html/ folder.`);
       }
+      if (installWp) {
+        // The next site starts with a fresh administrator, not this one's
+        // (operator, 2026-11-09: a second install reused the same account).
+        setWpAdminUser('admin');
+        setWpAdminPassword('');
+        setAdminEmail('');
+      }
       if (createSslMode !== 'none') await applyCreateSsl(data.id, cleanDomain);
       refreshAll();
     }
@@ -12672,8 +12679,8 @@ function App() {
           {creating && <label><span>{t('Username')}</span><input value={form.username} autoComplete="off" spellCheck={false} onChange={e => setForm(prev => ({ ...prev, username: e.target.value.toLowerCase() }))} placeholder="johndoe" /></label>}
           <label><span>{t('Email')}</span><input type="email" value={form.email} autoComplete="off" onChange={set('email')} placeholder="user@domain.com" /></label>
           {creating
-            ? <label><span>{t('Password')}</span><input type="password" value={form.password} autoComplete="new-password" onChange={set('password')} placeholder={t('Min 12 characters')} /></label>
-            : <label><span>{t('New password')} <em>{t('(leave empty to keep)')}</em></span><input type="password" autoComplete="new-password" value={form.new_password} onChange={set('new_password')} placeholder={t('Min 12 characters')} /></label>}
+            ? <label><span>{t('Password')}</span><PasswordField value={form.password} onChange={value => set('password')({ target: { value } })} placeholder={t('Min 12 characters')} generate copy/></label>
+            : <label><span>{t('New password')} <em>{t('(leave empty to keep)')}</em></span><PasswordField value={form.new_password} onChange={value => set('new_password')({ target: { value } })} placeholder={t('Min 12 characters')} generate copy/></label>}
           {!creating && !!form.new_password && <label><span>{t('Confirm password')}</span><input type="password" autoComplete="new-password" value={form.confirm_password} onChange={set('confirm_password')} placeholder={t('Repeat password')} /></label>}
           {isAdmin && <label><span>{t('Role')}</span><select value={form.role} disabled={self} onChange={set('role')}>
             <option value="end_user">{t('End user')}</option><option value="reseller">{t('Reseller')}</option><option value="admin">{t('Admin')}</option>

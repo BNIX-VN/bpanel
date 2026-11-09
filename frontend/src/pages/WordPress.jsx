@@ -4,6 +4,7 @@ import {
   LogIn, Package, Palette, Plus, RefreshCw, RotateCcw, ScanSearch, Search, Settings2, ShieldCheck, Trash2, Upload, Wrench, X,
 } from 'lucide-react';
 import { usePanel } from '../lib/panel-context.jsx';
+import { generatePassword } from '../lib/password.js';
 import { t } from '../i18n.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Tabs from '../components/Tabs.jsx';
@@ -309,8 +310,16 @@ export default function WordPressPage() {
 // WordPress on a website that has none yet, at its root: the panel makes
 // its database and installs it as the website's user.
 function InstallDrawer({ open, websites, rooted, busy, close, submit }) {
-  const [form, setForm] = useState({ website_id: '', title: '', admin_user: 'admin', admin_email: '', admin_password: '' });
+  // Each install starts from a clean form with a new random password: the last
+  // one's administrator was offered again (operator, 2026-11-09).
+  const fresh = () => ({ website_id: '', title: '', admin_user: 'admin', admin_email: '', admin_password: generatePassword() });
+  const [form, setForm] = useState(fresh);
   const [tried, setTried] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setForm(fresh());
+    setTried(false);
+  }, [open]);
   const set = (key) => (value) => setForm((prev) => ({ ...prev, [key]: value }));
   // Only a website that runs PHP and has no WordPress at its root yet.
   const choices = websites.filter((w) => !rooted.has(w.id) && ['wordpress', 'php'].includes(w.app_type || 'wordpress'));
