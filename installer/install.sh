@@ -1733,7 +1733,14 @@ main() {
   log "Copying source to ${APP_DIR}"
   copy_sources
 
-  log "Building frontend"
+  # Swap before the build, not only with the memory limits further down: the
+  # Vite build needs ~700 MB besides MariaDB and PHP, and a small VPS with no
+  # swap stopped there (an OPanel customer's install, 2026-11-09). The guard is
+  # safe to run twice; it runs again below once the helper is in place.
+  log "Making sure the build has memory (swap)"
+  bash "${SCRIPT_DIR}/files/bpanel-memory-guard" || true
+
+  log "Building frontend (a few minutes on a small VPS)"
   build_frontend
 
   log "Creating bpanel system user, MariaDB credentials and filesystem ACLs"
