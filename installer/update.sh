@@ -1727,6 +1727,10 @@ if [[ -f "$SOURCE_DIR/change_IP.sh" ]]; then
   log "Refreshing panel IP change command"
   install -m 0755 -o root -g root "$SOURCE_DIR/change_IP.sh" /usr/local/sbin/bpanel-change-ip
 fi
+# `bpanel regenerate-secrets` runs this (2026-11-10).
+if [[ -f "$SOURCE_DIR/installer/files/bpanel-regenerate-secrets.sh" ]]; then
+  install -m 0755 -o root -g root "$SOURCE_DIR/installer/files/bpanel-regenerate-secrets.sh" /usr/local/sbin/bpanel-regenerate-secrets
+fi
 
 log "Refreshing panel update command"
 install_update_command

@@ -26,9 +26,16 @@ logger = logging.getLogger("bpanel.secrets")
 _ENCRYPTED_PREFIX = "fernet:"
 
 
-def _derive_key() -> bytes:
-    digest = hashlib.sha256(settings.secret_key.encode("utf-8")).digest()
+def _derive_key(secret_key: Optional[str] = None) -> bytes:
+    digest = hashlib.sha256((secret_key or settings.secret_key).encode("utf-8")).digest()
     return base64.urlsafe_b64encode(digest)
+
+
+def encrypt_with(secret_key: str, plaintext: str) -> str:
+    """encrypt() under another SECRET_KEY: app.regenerate_secrets moves every
+    stored value to the server's new key with it."""
+    token = Fernet(_derive_key(secret_key)).encrypt(plaintext.encode("utf-8")).decode("utf-8")
+    return _ENCRYPTED_PREFIX + token
 
 
 _fernet = Fernet(_derive_key())

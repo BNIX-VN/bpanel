@@ -676,9 +676,16 @@ change_panel_ip() {
   local script="/usr/local/sbin/bpanel-change-ip" old_ip new_ip current_ip
   [[ -x "$script" ]] || fail "$script not found. Reinstall/update BPanel or copy change_IP.sh to that path."
 
-  if [[ $# -eq 2 ]]; then
+  # An image's boot script runs `bpanel change-ip <image-ip> $(hostname -I |
+  # awk '{print $1}')`; with the network not up yet the second is empty, and
+  # this server's own address is the one meant (2026-11-10).
+  if [[ $# -eq 2 && -n "$2" ]]; then
     old_ip="$1"
     new_ip="$2"
+  elif [[ $# -eq 1 || ( $# -eq 2 && -z "$2" ) ]]; then
+    old_ip="$1"
+    new_ip="$(detect_ip)"
+    [[ -n "$new_ip" ]] || fail "this server's address is not known yet: bpanel change-ip <old-ip> <new-ip>"
   elif [[ $# -eq 0 ]]; then
     current_ip="$(detect_ip)"
     read -rp "Old IP: " old_ip
@@ -692,6 +699,23 @@ change_panel_ip() {
     fail "usage: bpanel change-ip <old-ip> <new-ip>"
   fi
   "$script" "$old_ip" "$new_ip"
+}
+
+# `bpanel regenerate-secrets [--once]`: keys of its own for a server cloned
+# from an image (see /usr/local/sbin/bpanel-regenerate-secrets). From the menu
+# it asks first: it signs everyone out of the panel.
+regenerate_secrets() {
+  local script="/usr/local/sbin/bpanel-regenerate-secrets" mode="${1:-}" confirm
+  [[ -x "$script" ]] || fail "$script not found. Run bpanel-update to install it."
+  if [[ "$mode" == "--ask" ]]; then
+    read -rp "Replace this server's panel secrets? Everyone is signed out. [y/N]: " confirm
+    case "$confirm" in
+      y|Y|yes|YES) ;;
+      *) echo "Canceled."; return 0 ;;
+    esac
+    mode=""
+  fi
+  "$script" ${mode:+"$mode"}
 }
 
 addon_command() {
@@ -734,6 +758,7 @@ menu() {
     echo "10) Update panel from release"
     echo "11) Change server IP"
     echo "12) Sync admin password from root"
+    echo "13) Regenerate secrets (cloned server)"
     echo "0) Exit"
     read -rp "Choose: " choice
     case "$choice" in
@@ -749,6 +774,7 @@ menu() {
       10) run_panel_update ;;
       11) change_panel_ip ;;
       12) sync_admin_root_password ;;
+      13) regenerate_secrets --ask ;;
       0) exit 0 ;;
       *) echo "Invalid choice" ;;
     esac
@@ -763,6 +789,7 @@ case "${1:-menu}" in
   repair-firewall|--repair-firewall) repair_firewall ;;
   update|--update) run_panel_update ;;
   change-ip|--change-ip) shift; change_panel_ip "$@" ;;
+  regenerate-secrets|--regenerate-secrets) regenerate_secrets "${2:-}" ;;
   set-panel-url|--set-panel-url) set_panel_url ;;
   install-panel-ssl|--install-panel-ssl) install_panel_ssl ;;
   fix-permissions|--fix-permissions) fix_permissions ;;
@@ -771,7 +798,7 @@ case "${1:-menu}" in
   status|--status) show_status ;;
   addon|--addon) addon_command "${2:-}" "${3:-}" ;;
   *)
-    echo "Usage: bpanel [menu|login|status|logs|restart|repair-firewall|change-ip [old-ip new-ip]|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|sync-admin-root-password|addon list|addon install <id>|addon remove <id>|update]"
+    echo "Usage: bpanel [menu|login|status|logs|restart|repair-firewall|change-ip [old-ip new-ip]|regenerate-secrets [--once]|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|sync-admin-root-password|addon list|addon install <id>|addon remove <id>|update]"
     exit 2
     ;;
 esac

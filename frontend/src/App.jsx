@@ -9621,8 +9621,8 @@ function App() {
     const header = <PageHeader subtitle={t('A Redis of your own, for object caching in WordPress, Laravel and other PHP apps. It runs as your account, is reached only through its socket, and keeps nothing on disk: a restart empties it.')}
       onRefresh={loadRedis} refreshDisabled={!!loading}/>;
     if (!info) return <>{header}<section className="section"><p className="hint">{t('Loading…')}</p></section></>;
-    if (isAdmin) return <>
-      {header}
+    // The administrator's own Redis first, every account's under it (2026-11-10).
+    const accountList = isAdmin && <>
       <section className="section">
         <p className="hint">{t('Each account turns its own Redis on and off on this page; for a customer, log in as the customer. The memory is set on the package, or on an account without one.')}</p>
         {redisAccounts.length === 0
@@ -9645,7 +9645,7 @@ function App() {
     </>;
     if (!info.allowed) return <>{header}<section className="section">
       <EmptyState icon={Database} message={t('Redis is not part of your package. Ask your provider to add it.')}/>
-    </section></>;
+    </section>{accountList}</>;
     const going = redisGoing;
     const shown = going ?? info.enabled;
     // Turning it off is never refused; turning it on is, for a suspended account.
@@ -9680,6 +9680,7 @@ function App() {
           </React.Fragment>)}
         </div>
       </section>
+      {accountList}
     </>;
   }
 
