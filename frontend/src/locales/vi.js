@@ -96,7 +96,6 @@ export const vi = {
   "Each package gives 64 MB unless you change it on the package. Customers turn their Redis on on the Redis page.": "Mỗi gói cho 64 MB nếu bạn không đổi trên gói. Khách hàng tự bật Redis của mình trên trang Redis.",
   "Every account's Redis was stopped and turned off. The memory set on packages and accounts is kept.": "Redis của mọi tài khoản đã được dừng và tắt. Dung lượng bộ nhớ đặt trên gói và tài khoản vẫn được giữ.",
   "The Redis per account addon is not installed.": "Addon Redis riêng cho từng tài khoản chưa được cài.",
-  "Administrators turn on a customer's Redis by logging in as the customer.": "Quản trị viên bật Redis cho khách hàng bằng cách đăng nhập với tư cách khách hàng đó.",
   "This account has no Linux user to run Redis as.": "Tài khoản này không có user Linux để chạy Redis.",
   "This account is suspended.": "Tài khoản này đang bị tạm ngưng.",
   "Redis is not part of this account's package.": "Gói của tài khoản này không có Redis.",

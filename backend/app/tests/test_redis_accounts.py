@@ -325,8 +325,11 @@ def test_the_page_says_whether_it_is_allowed(env):
     assert body["limit_mb"] == 64 and body["enabled"] is False and body["running"] is False
     assert body["socket"] == "/home/alice/.redis/redis.sock"
     assert env.calls == [], "nothing to ask the helper while it is off"
+    # The administrator's own websites run as its Linux user: it has one too
+    # (operator, 2026-11-10).
     admin = env.as_user("root_admin").get("/api/redis").json()
-    assert admin["allowed"] is False and admin["problem"] == "admin" and admin["socket"] is None
+    assert admin["allowed"] is True and admin["problem"] is None
+    assert admin["socket"] == "/home/root_admin/.redis/redis.sock"
 
 
 def test_turning_it_on_starts_the_accounts_redis_in_its_slice(env):
@@ -361,13 +364,21 @@ def test_it_is_refused_when_the_package_allows_none(env):
     assert env.user("alice").redis_enabled is False and env.calls == []
 
 
-def test_it_is_refused_to_a_suspended_account_and_an_administrator(env):
+def test_it_is_refused_to_a_suspended_account(env):
     alice = env.user("alice")
     alice.is_active = False
     env.db.commit()
     assert env.as_user("alice").post("/api/redis/enable").status_code == 403
-    assert env.as_user("root_admin").post("/api/redis/enable").status_code == 403
     assert env.calls == []
+
+
+def test_the_administrator_turns_on_its_own(env):
+    """For the websites it owns itself (operator, 2026-11-10)."""
+    admin = env.user("root_admin")
+    response = env.as_user("root_admin").post("/api/redis/enable")
+    assert response.status_code == 200, response.text
+    assert ("redis-user-apply", ["root_admin", "64", f"hosting-a{admin.id}.slice"]) in env.calls
+    assert env.user("root_admin").redis_enabled is True
 
 
 def test_a_redis_that_does_not_start_is_not_left_on(env):
@@ -393,7 +404,7 @@ def test_off_and_empty(env):
 def test_the_accounts_list_is_the_administrators(env):
     assert env.as_user("alice").get("/api/redis/accounts").status_code == 403
     items = env.as_user("root_admin").get("/api/redis/accounts").json()["items"]
-    assert [item["username"] for item in items] == ["alice", "bob"]
+    assert [item["username"] for item in items] == ["alice", "bob", "root_admin"]
     assert items[0]["limit_mb"] == 64 and items[0]["enabled"] is False
 
 

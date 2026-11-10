@@ -27,7 +27,6 @@ from typing import Iterable, Optional
 
 from sqlalchemy.orm import Session
 
-from app.core.permissions import is_admin_role
 from app.models.entities import User
 from app.services import site_users
 from app.services.shell import shell
@@ -42,7 +41,6 @@ CONF_DIR = Path("/etc/bpanel-redis")
 # Why an account cannot turn its Redis on, said on its page and in a refusal.
 PROBLEM_TEXT = {
     "not-installed": "The Redis per account addon is not installed.",
-    "admin": "Administrators turn on a customer's Redis by logging in as the customer.",
     "no-linux-user": "This account has no Linux user to run Redis as.",
     "suspended": "This account is suspended.",
     "not-allowed": "Redis is not part of this account's package.",
@@ -56,9 +54,10 @@ def installed() -> bool:
 
 
 def linux_user(user: Optional[User]) -> Optional[str]:
-    """The Linux user an account's Redis runs as; None for an administrator,
-    whose account is not a hosting account."""
-    if user is None or is_admin_role(user.role):
+    """The Linux user an account's Redis runs as -- the administrator's too:
+    the websites it owns itself run as its own Linux user (operator,
+    2026-11-10: a site created by the admin had no Redis to use)."""
+    if user is None:
         return None
     try:
         return site_users.linux_user_for_panel_username(user.username)
@@ -83,8 +82,6 @@ def problem(user: User) -> Optional[str]:
     """Why this account may not run a Redis now, or None if it may."""
     if not installed():
         return "not-installed"
-    if is_admin_role(user.role):
-        return "admin"
     if linux_user(user) is None:
         return "no-linux-user"
     if not user.is_active:
@@ -183,13 +180,11 @@ def reconcile(db: Session, user: User) -> str:
     "removed" or "none". Raises RuntimeError when the helper refuses."""
     if not installed():
         return "none"
-    # By name rather than linux_user(): an account just made an administrator
-    # still has the instance it ran as a customer, and it has to go.
     try:
         name = site_users.linux_user_for_panel_username(user.username)
     except ValueError:
         return "none"
-    if user.redis_enabled and (limit_mb(user) <= 0 or is_admin_role(user.role)):
+    if user.redis_enabled and limit_mb(user) <= 0:
         # No longer allowed: off, not merely stopped, so a later raise of the
         # limit does not start it behind the customer's back.
         user.redis_enabled = False
@@ -255,12 +250,11 @@ def view(user: User) -> dict:
 
 
 def accounts(db: Session) -> list[dict]:
-    """Every hosting account's switch and limit, for an administrator. No
-    helper call per account: the page lists, it does not measure."""
+    """Every account's switch and limit, the administrator's own among them,
+    for an administrator. No helper call per account: the page lists, it does
+    not measure."""
     rows = []
     for user in db.query(User).order_by(User.username).all():
-        if is_admin_role(user.role):
-            continue
         rows.append({
             "id": user.id,
             "username": user.username,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.16.4}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.17.0}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -879,6 +879,8 @@ install_privileged_helper() {
   if [[ -f "${PROJECT_ROOT}/change_IP.sh" ]]; then
     install -m 0755 -o root -g root "${PROJECT_ROOT}/change_IP.sh" /usr/local/sbin/bpanel-change-ip
   fi
+  # `bpanel regenerate-secrets`: a server cloned from an image gets keys of its own.
+  install -m 0755 -o root -g root "${SCRIPT_DIR}/files/bpanel-regenerate-secrets.sh" /usr/local/sbin/bpanel-regenerate-secrets
 }
 
 install_panel_cli() {
