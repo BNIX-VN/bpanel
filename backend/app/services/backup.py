@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime
 from io import StringIO
 import hashlib
@@ -67,6 +68,46 @@ def _hostname_conflicts(db, domain: str, exclude_website_id: int | None = None) 
     return safe in reserved or f"www.{safe}" in reserved
 
 
+PARTIAL_SUFFIX = ".part"
+STAGING_PREFIX = "bpanel-user-backup-"
+
+
+@contextmanager
+def _written_whole(archive: Path):
+    """Yield the path to write ``archive`` at: ``<name>.part``, renamed to
+    the real name only once it is complete. A run that dies half way (the
+    panel restarted by an update, 2026-11-13, .188) used to leave a cut-off
+    .tar.gz that the restore lists offered like any other backup."""
+    partial = archive.with_name(archive.name + PARTIAL_SUFFIX)
+    try:
+        yield partial
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    os.replace(partial, archive)
+
+
+def sweep_unfinished(root: Optional[Path] = None) -> list[str]:
+    """Remove what backups that died half way left behind: ``*.part``
+    archives and user-backup staging folders. Only call it when nothing can
+    be writing a backup (the API starting, with no scheduled run going)."""
+    root = Path(root or settings.backup_root)
+    removed = []
+    if not root.is_dir():
+        return removed
+    for path in [*root.glob(f"*/*{PARTIAL_SUFFIX}"), *root.glob(f"users/*/*{PARTIAL_SUFFIX}"),
+                 *root.glob(f"users/*/{STAGING_PREFIX}*")]:
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            removed.append(str(path))
+        except OSError as exc:
+            logger.warning("Could not remove the unfinished backup %s: %s", path, exc)
+    return removed
+
+
 def create_backup(website: Website, db_name: Optional[str] = None) -> str:
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     backup_dir = Path(settings.backup_root) / website.domain
@@ -79,7 +120,7 @@ def create_backup(website: Website, db_name: Optional[str] = None) -> str:
         if settings.command_dry_run and not sql_file.exists():
             sql_file.write_text(f"-- DRY RUN database dump for {db_name}\n", encoding="utf-8")
     try:
-        with tarfile.open(archive, "w:gz") as tar:
+        with _written_whole(archive) as partial, tarfile.open(partial, "w:gz") as tar:
             tar.add(website.root_path, arcname="site")
             if sql_file.exists():
                 tar.add(sql_file, arcname=f"database/{sql_file.name}")
@@ -149,7 +190,7 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
     archive = backup_dir / f"user-{user.username}-{stamp}.tar.gz"
     websites = db.query(Website).filter(Website.owner_id == user.id).order_by(Website.id.asc()).all()
 
-    with tempfile.TemporaryDirectory(prefix="bpanel-user-backup-", dir=str(backup_dir)) as tmp:
+    with tempfile.TemporaryDirectory(prefix=STAGING_PREFIX, dir=str(backup_dir)) as tmp:
         tmp_dir = Path(tmp)
         manifest = {
             "kind": "bpanel_user",
@@ -273,7 +314,7 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
 
         manifest_path = tmp_dir / BACKUP_MANIFEST
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
-        with tarfile.open(archive, "w:gz") as tar:
+        with _written_whole(archive) as partial, tarfile.open(partial, "w:gz") as tar:
             tar.add(manifest_path, arcname=BACKUP_MANIFEST)
             for website in websites:
                 root = Path(website.root_path)

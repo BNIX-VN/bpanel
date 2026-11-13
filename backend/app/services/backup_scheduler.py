@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import subprocess
 
 from app.core.database import SessionLocal
 from app.core.secrets import decrypt
@@ -203,6 +204,25 @@ def release_interrupted_runs(db) -> int:
     if rows:
         db.commit()
     return len(rows)
+
+
+def _timer_run_going() -> bool:
+    """The timer's runner is a process of its own, so a restart of the API
+    leaves it writing; when it cannot be asked, assume it is."""
+    try:
+        return subprocess.run(["systemctl", "is-active", "--quiet", "bpanel-backup-scheduler.service"],
+                              check=False, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+
+def sweep_after_restart() -> list[str]:
+    """What backups this process was writing when it was stopped left behind:
+    their .part archives and staging folders. Not while the timer's runner is
+    going, which may be writing one of its own."""
+    if _timer_run_going():
+        return []
+    return backup.sweep_unfinished()
 
 
 def run_due_schedules(now: datetime | None = None) -> int:

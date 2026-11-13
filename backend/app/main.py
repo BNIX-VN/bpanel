@@ -102,6 +102,8 @@ def _release_interrupted_backup_runs() -> None:
             released = backup_scheduler.release_interrupted_runs(db)
         if released:
             logger.warning("%d backup schedule run(s) were interrupted by the restart", released)
+        for path in backup_scheduler.sweep_after_restart():
+            logger.warning("Removed an unfinished backup: %s", path)
     except Exception:  # noqa: BLE001 - never let this stop the panel booting
         logger.warning("Could not release interrupted backup schedule runs", exc_info=True)
 
