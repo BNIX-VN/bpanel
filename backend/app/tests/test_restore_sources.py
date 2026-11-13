@@ -267,6 +267,25 @@ def test_the_restore_tab_asks_source_details_users_then_the_button():
     assert "restore-catalogue" not in APP and "restore-bulk" not in APP
 
 
+# --- SFTP host keys ------------------------------------------------------------------
+
+class _HostKey:
+    def __init__(self, blob): self.blob = blob
+    def asbytes(self): return self.blob
+    def get_name(self): return "ssh-ed25519"
+
+
+def test_a_pinned_host_key_is_accepted_and_any_other_refused():
+    """The pin is a fingerprint only, so paramiko always asks the policy. It
+    used to refuse unconditionally -- every SFTP upload after the first
+    (.188, 2026-11-13: "expected SHA256:fWVG..., got SHA256:fWVG...")."""
+    pinned = backup._fingerprint(_HostKey(b"right"))
+    policy = backup._PinnedHostKeyPolicy("ssh-ed25519", pinned)
+    policy.missing_host_key(None, "h", _HostKey(b"right"))
+    with pytest.raises(backup.SftpHostKeyMismatch):
+        policy.missing_host_key(None, "h", _HostKey(b"wrong"))
+
+
 # --- Upload backup, into the source picked in step 1 ---------------------------------------
 
 def _account_backup(tmp_path, name="user-acme-20260927020000.tar.gz"):
