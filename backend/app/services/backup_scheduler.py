@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import subprocess
 
 from app.core.database import SessionLocal
 from app.core.secrets import decrypt
@@ -185,6 +186,43 @@ def _notify_failure(schedule: BackupSchedule, errors: list[str], when: datetime)
                              admins=True, dedupe_key=f"backup:{schedule.id}:{when:%Y%m%d%H%M}")
     except Exception:  # noqa: BLE001 - the schedule's own record already says it failed
         pass
+
+
+INTERRUPTED_MESSAGE = "Interrupted: the panel restarted while this ran (an update?). Run it again."
+
+
+def release_interrupted_runs(db) -> int:
+    """Run now works in the API process, so a panel restart - an update -
+    ends it half way, and the schedule said "running" for good: Run now
+    stayed greyed out (operator, 2026-11-13, .188). Called when the API
+    starts, when no run of this process can still be going; the timer's own
+    runs never set "running". Returns how many were released."""
+    rows = db.query(BackupSchedule).filter(BackupSchedule.last_status == "running").all()
+    for schedule in rows:
+        schedule.last_status = "error"
+        schedule.last_message = INTERRUPTED_MESSAGE
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+def _timer_run_going() -> bool:
+    """The timer's runner is a process of its own, so a restart of the API
+    leaves it writing; when it cannot be asked, assume it is."""
+    try:
+        return subprocess.run(["systemctl", "is-active", "--quiet", "bpanel-backup-scheduler.service"],
+                              check=False, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+
+def sweep_after_restart() -> list[str]:
+    """What backups this process was writing when it was stopped left behind:
+    their .part archives and staging folders. Not while the timer's runner is
+    going, which may be writing one of its own."""
+    if _timer_run_going():
+        return []
+    return backup.sweep_unfinished()
 
 
 def run_due_schedules(now: datetime | None = None) -> int:
