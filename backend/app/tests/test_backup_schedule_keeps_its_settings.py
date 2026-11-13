@@ -104,11 +104,15 @@ def test_nothing_the_form_sends_is_accepted_and_then_dropped():
     does nothing.
     """
     source = Path(maintenance.__file__).read_text(encoding="utf-8")
-    body = source.split("def create_backup_schedule(")[1].split("\n@router")[0]
-    for field in BackupScheduleCreate.model_fields:
-        assert f"payload.{field}" in body, (
-            f"create_backup_schedule accepts {field} and never reads it"
-        )
+    # Who it covers is read by the helper both endpoints share; editing a
+    # schedule (2026-11-13) takes the same form.
+    users = source.split("def _schedule_users(")[1].split("\n@router")[0]
+    for endpoint in ("create_backup_schedule", "update_backup_schedule"):
+        body = source.split(f"def {endpoint}(")[1].split("\n@router")[0] + users
+        for field in BackupScheduleCreate.model_fields:
+            assert f"payload.{field}" in body, (
+                f"{endpoint} accepts {field} and never reads it"
+            )
 
 
 def test_the_frontend_and_the_schema_offer_the_same_four_modes():

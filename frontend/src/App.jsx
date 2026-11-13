@@ -4612,9 +4612,12 @@ function App() {
       target_id: newBackupSchedule.target_id ? Number(newBackupSchedule.target_id) : null,
       name_suffix: newBackupSchedule.name_suffix || 'full_date',
       retention: Number(newBackupSchedule.retention || 7),
-      is_active: true,
+      is_active: newBackupSchedule.is_active !== false,
     };
-    const data = await request('/maintenance/backup-schedules', { method: 'POST', body: JSON.stringify(body) }, t('Saving backup schedule...'));
+    // With an id it is a saved schedule being changed.
+    const editing = newBackupSchedule.id;
+    const data = await request(editing ? `/maintenance/backup-schedules/${editing}` : '/maintenance/backup-schedules',
+      { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) }, t('Saving backup schedule...'));
     if (data) {
       setNotice(t('Backup schedule saved.'));
       await loadBackupSchedules();
@@ -4673,10 +4676,41 @@ function App() {
     }
   }
 
+  // A blank schedule to add, or a saved one to edit.
+  function openBackupSchedule(item) {
+    setNewBackupSchedule(item ? {
+      id: item.id, all_users: !!item.all_users, schedule: item.schedule, target_id: item.target_id ? String(item.target_id) : '',
+      name_suffix: item.name_suffix || 'full_date', retention: item.retention || 7, is_active: item.is_active !== false,
+      user_ids: ((item.user_ids && item.user_ids.length) ? item.user_ids : (item.user_id ? [item.user_id] : [])).map(String),
+    } : {
+      user_ids: users[0] ? [String(users[0].id)] : [], all_users: false, schedule: '0 2 * * *', target_id: '',
+      name_suffix: 'full_date', retention: 7, is_active: true,
+    });
+    setScheduleSheet(true);
+  }
+
+  // A blank destination to add, or a saved one to edit: its password, key
+  // and secret are never sent back, so they start empty and empty keeps them.
+  function openSftpTarget(target) {
+    setNewSftpTarget(target ? {
+      id: target.id, name: target.name, kind: target.kind || 'sftp',
+      host: target.host || '', port: target.port || 22, username: target.username || '', password: '', private_key: '',
+      remote_path: target.remote_path || '/backups/bpanel', endpoint: target.endpoint || '', region: target.region || '',
+      bucket: target.bucket || '', access_key: target.access_key || '', secret_key: '', prefix: target.prefix || '',
+      secure: target.secure !== false, reset_host_key: false, pinned: target.host_key_fingerprint || '',
+    } : {
+      name: '', kind: newSftpTarget.id ? 'sftp' : newSftpTarget.kind, host: '', port: 22, username: '', password: '', private_key: '',
+      remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true,
+    });
+    setDestinationSheet(true);
+  }
+
   async function createSftpTarget() {
     const isS3 = newSftpTarget.kind === 's3';
+    const { id: editing, ...fields } = newSftpTarget;
+    delete fields.pinned;
     const body = {
-      ...newSftpTarget,
+      ...fields,
       port: Number(newSftpTarget.port || 22),
       password: newSftpTarget.password || null,
       private_key: newSftpTarget.private_key || null,
@@ -4688,9 +4722,11 @@ function App() {
       prefix: newSftpTarget.prefix || null,
     };
     // An S3 target is checked against the bucket before it is saved, so this
-    // can take a moment and can come back refused. That is the point.
-    const data = await request('/maintenance/sftp-targets', { method: 'POST', body: JSON.stringify(body) },
-      isS3 ? 'Checking the bucket...' : 'Saving SFTP target...');
+    // can take a moment and can come back refused. That is the point. With an
+    // id it is a saved destination being changed: secrets left empty stay.
+    const data = await request(editing ? `/maintenance/sftp-targets/${editing}` : '/maintenance/sftp-targets',
+      { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) },
+      isS3 ? t('Checking the bucket...') : t('Saving SFTP target...'));
     if (data) {
       setNotice(`Saved ${isS3 ? 'S3' : 'SFTP'} target ${data.name}`);
       setNewSftpTarget({ name: '', kind: newSftpTarget.kind, host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true });
@@ -10778,9 +10814,12 @@ function App() {
       logs: t('Recent queued, running, completed, and failed backup tasks.'),
     };
     const scheduleReady = newBackupSchedule.all_users || (newBackupSchedule.user_ids || []).length > 0;
+    // A saved destination keeps its password, key or secret when left empty.
+    const editingTarget = !!newSftpTarget.id;
+    const keepHint = t('Saved secrets are kept when this is left empty.');
     const destinationReady = !!newSftpTarget.name && (newSftpTarget.kind === 's3'
-      ? (!!newSftpTarget.endpoint && !!newSftpTarget.bucket && !!newSftpTarget.access_key && !!newSftpTarget.secret_key)
-      : (!!newSftpTarget.host && !!newSftpTarget.username && (!!newSftpTarget.password || !!newSftpTarget.private_key)));
+      ? (!!newSftpTarget.endpoint && !!newSftpTarget.bucket && !!newSftpTarget.access_key && (editingTarget || !!newSftpTarget.secret_key))
+      : (!!newSftpTarget.host && !!newSftpTarget.username && (editingTarget || !!newSftpTarget.password || !!newSftpTarget.private_key)));
     const setTarget = key => e => setNewSftpTarget(prev => ({ ...prev, [key]: e.target.value }));
     const backupRow = (file, { onDownload, onRestore, restoreLabel, onDelete, sub, restoreDisabled = false }) => <div className="backup-item" key={file}>
       <span>{file.split('/').pop()}{sub && <small>{sub}</small>}</span>
@@ -10873,13 +10912,14 @@ function App() {
           <div className="bk-sched-section">
             <PageHeader title={<>{t('Full backups')} <span className="badge bk-engine">{t('Whole accounts')}</span></>}
               subtitle={t('With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.')}
-              actions={<button type="button" onClick={() => setScheduleSheet(true)}><Plus size={15} aria-hidden="true"/> {t('Add schedule')}</button>}/>
+              actions={<button type="button" onClick={() => openBackupSchedule(null)}><Plus size={15} aria-hidden="true"/> {t('Add schedule')}</button>}/>
             {backupSchedules.length === 0 && <EmptyState compact icon={Clock} message={t('No backup schedules yet.')} />}
             {backupSchedules.length > 0 && <div className="backup-list">
               {backupSchedules.map(item => {
                 const suffix = item.name_suffix && item.name_suffix !== 'full_date' && nameSuffixLabels[item.name_suffix];
                 return <div className="backup-item bk-schedule-row" key={item.id}>
                   <span>
+                    {item.is_active === false && <><span className="badge warn">{t('Paused')}</span>{' '}</>}
                     {scheduleUserLabel(item)} · <code>{item.schedule}</code> · {cronScheduleLabel(item.schedule)} · {targetName(item.target_id) || t('Local only')}{suffix ? ` · ${t(suffix)}` : ''}
                     {item.last_status === 'running'
                       ? <><small>{item.last_message || t('Running')}</small>
@@ -10894,6 +10934,7 @@ function App() {
                   <div className="actions bk-row-actions">
                     <button className="secondary-light" disabled={busy || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14} aria-hidden="true"/> {t('Run now')}</button>
                     <ActionMenu label={t('More actions for {name}', { name: scheduleUserLabel(item) })} items={[
+                      { label: t('Edit schedule'), icon: Pencil, disabled: busy, onClick: () => openBackupSchedule(item) },
                       { label: t('Delete schedule'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteBackupSchedule(item.id) },
                     ]}/>
                   </div>
@@ -10906,7 +10947,7 @@ function App() {
         {isAdmin && active === 'destination' && <div className="backup-tab-panel bk-destinations">
           <div className="bk-sched-section">
             <PageHeader title={t('Destinations')} subtitle={t('Every place backups go.')}
-              actions={<button type="button" onClick={() => setDestinationSheet(true)}><Plus size={15} aria-hidden="true"/> {t('Add destination')}</button>}/>
+              actions={<button type="button" onClick={() => openSftpTarget(null)}><Plus size={15} aria-hidden="true"/> {t('Add destination')}</button>}/>
             {sftpTargets.length === 0 && <EmptyState compact icon={Network} message={t('No backup destinations found.')} />}
             <div className="backup-list">
               {sftpTargets.map(target => {
@@ -10920,6 +10961,7 @@ function App() {
                   </span>
                   <div className="actions bk-row-actions">
                     <ActionMenu label={t('More actions for {name}', { name: target.name })} items={[
+                      { label: t('Edit destination'), icon: Pencil, disabled: busy, onClick: () => openSftpTarget(target) },
                       { label: t('Delete'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteSftpTarget(target.id) },
                     ]}/>
                   </div>
@@ -10948,10 +10990,10 @@ function App() {
         </div>}
       </section>
 
-      <Drawer open={scheduleSheet} onClose={() => setScheduleSheet(false)} title={t('Add schedule')} subtitle={t('Full backups')}
+      <Drawer open={scheduleSheet} onClose={() => setScheduleSheet(false)} title={newBackupSchedule.id ? t('Edit schedule') : t('Add schedule')} subtitle={t('Full backups')}
         footer={<>
           <button type="button" className="secondary-light" onClick={() => setScheduleSheet(false)}>{t('Cancel')}</button>
-          <button type="submit" form="bk-schedule-form" disabled={!scheduleReady || busy}><Clock size={14} aria-hidden="true"/> {t('Add schedule')}</button>
+          <button type="submit" form="bk-schedule-form" disabled={!scheduleReady || busy}><Clock size={14} aria-hidden="true"/> {newBackupSchedule.id ? t('Save schedule') : t('Add schedule')}</button>
         </>}>
         <form id="bk-schedule-form" className="bk-sheet-form" onSubmit={async (e) => { e.preventDefault(); if (await createBackupSchedule()) setScheduleSheet(false); }}>
           <Field label={t('Users')}>
@@ -10980,10 +11022,12 @@ function App() {
               <option value="full_date">{t('Append: full date')}</option>
             </select>
           </Field>
+          <Checkbox checked={newBackupSchedule.is_active !== false} label={t('Active: runs on its timetable')}
+            onChange={on => setNewBackupSchedule(prev => ({ ...prev, is_active: on }))}/>
         </form>
       </Drawer>
 
-      <Drawer open={destinationSheet} onClose={() => setDestinationSheet(false)} title={t('Add destination')}
+      <Drawer open={destinationSheet} onClose={() => setDestinationSheet(false)} title={editingTarget ? t('Edit destination') : t('Add destination')}
         subtitle={newSftpTarget.kind === 's3'
           ? t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')
           : t('An SFTP server the backups are copied to.')}
@@ -10994,8 +11038,8 @@ function App() {
         <form id="bk-destination-form" className="bk-sheet-form" onSubmit={async (e) => { e.preventDefault(); if (await createSftpTarget()) setDestinationSheet(false); }}>
           <div className="sn-drawer-grid">
             <Field label={t('Destination name')} required><input value={newSftpTarget.name} onChange={setTarget('name')} autoComplete="off" /></Field>
-            <Field label={t('Destination type')}>
-              <select value={newSftpTarget.kind} onChange={setTarget('kind')}>
+            <Field label={t('Destination type')} hint={editingTarget ? t("A destination's kind cannot change.") : undefined}>
+              <select value={newSftpTarget.kind} disabled={editingTarget} onChange={setTarget('kind')}>
                 <option value="sftp">SFTP</option>
                 <option value="s3">{t('S3 compatible')}</option>
               </select>
@@ -11005,17 +11049,20 @@ function App() {
             <Field label={t('Host')} required><input value={newSftpTarget.host} onChange={setTarget('host')} autoComplete="off" spellCheck={false} /></Field>
             <Field label={t('Port')}><input value={newSftpTarget.port} onChange={setTarget('port')} placeholder="22" inputMode="numeric" /></Field>
             <Field label={t('Username')} required><input value={newSftpTarget.username} onChange={setTarget('username')} autoComplete="off" spellCheck={false} /></Field>
-            <Field label={t('Password')}><PasswordField value={newSftpTarget.password} autoComplete="off" onChange={value => setNewSftpTarget(prev => ({ ...prev, password: value }))} /></Field>
+            <Field label={t('Password')} hint={editingTarget ? keepHint : undefined}><PasswordField value={newSftpTarget.password} autoComplete="off" onChange={value => setNewSftpTarget(prev => ({ ...prev, password: value }))} /></Field>
             <Field className="is-wide" label={t('Remote folder')}><input value={newSftpTarget.remote_path} onChange={setTarget('remote_path')} placeholder="/backups/bpanel" spellCheck={false} /></Field>
-            <Field className="is-wide" label={t('Private key (optional)')} optional hint={t('A password or a private key: one is enough.')}>
+            <Field className="is-wide" label={t('Private key (optional)')} optional hint={editingTarget ? keepHint : t('A password or a private key: one is enough.')}>
               <textarea value={newSftpTarget.private_key} onChange={setTarget('private_key')} rows={4} spellCheck={false} />
             </Field>
+            {editingTarget && newSftpTarget.pinned && <Checkbox className="is-wide" checked={!!newSftpTarget.reset_host_key}
+              label={t('Forget the saved host key ({key}): the server was rebuilt', { key: newSftpTarget.pinned })}
+              onChange={on => setNewSftpTarget(prev => ({ ...prev, reset_host_key: on }))}/>}
           </div> : <div className="sn-drawer-grid">
             <Field label={t('Bucket')} required><input id="s3-bucket" value={newSftpTarget.bucket} onChange={setTarget('bucket')} spellCheck={false} /></Field>
             <Field label={t('Endpoint')} required><input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={setTarget('endpoint')} placeholder="s3.wasabisys.com" spellCheck={false} /></Field>
             <Field label={t('Region (optional)')} optional><input id="s3-region" value={newSftpTarget.region} onChange={setTarget('region')} spellCheck={false} /></Field>
             <Field label={t('Access key')} required><input id="s3-access" value={newSftpTarget.access_key} onChange={setTarget('access_key')} autoComplete="off" spellCheck={false} /></Field>
-            <Field label={t('Secret key')} required><PasswordField id="s3-secret" value={newSftpTarget.secret_key} autoComplete="off" onChange={value => setNewSftpTarget(prev => ({ ...prev, secret_key: value }))} /></Field>
+            <Field label={t('Secret key')} required={!editingTarget} hint={editingTarget ? keepHint : undefined}><PasswordField id="s3-secret" value={newSftpTarget.secret_key} autoComplete="off" onChange={value => setNewSftpTarget(prev => ({ ...prev, secret_key: value }))} /></Field>
             <Field label={t('Prefix, e.g. bpanel/nightly (optional)')} optional><input id="s3-prefix" value={newSftpTarget.prefix} onChange={setTarget('prefix')} spellCheck={false} /></Field>
             <Checkbox className="is-wide" checked={!!newSftpTarget.secure} label={t('Use HTTPS')} onChange={on => setNewSftpTarget(prev => ({ ...prev, secure: on }))}/>
           </div>}

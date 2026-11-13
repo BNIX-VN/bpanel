@@ -1490,6 +1490,25 @@ class SftpBackupTargetCreate(BaseModel):
         return value.rstrip("/") or "/"
 
 
+class SftpBackupTargetUpdate(SftpBackupTargetCreate):
+    """A saved destination, changed. Its kind stays; a password, key or
+    secret left empty keeps the saved one."""
+
+    # A server that was rebuilt presents a new host key: the saved one is
+    # forgotten and the next connection pins what it sees.
+    reset_host_key: bool = False
+
+    @model_validator(mode="after")
+    def check_kind(self):
+        if self.kind == "s3":
+            missing = [name for name in ("endpoint", "bucket", "access_key") if not getattr(self, name)]
+            if missing:
+                raise ValueError("An S3 target needs " + ", ".join(missing))
+        elif not self.host or not self.username:
+            raise ValueError("An SFTP target needs a host and a username")
+        return self
+
+
 class SftpBackupTargetOut(BaseModel):
     id: int
     name: str

@@ -38,6 +38,7 @@ from app.schemas.schemas import (
     RestoreSource,
     SftpBackupRun,
     SftpBackupTargetCreate,
+    SftpBackupTargetUpdate,
     SftpBackupTargetOut,
     UserBackupCreate,
     UserRestoreBackup,
@@ -838,9 +839,8 @@ def list_backup_schedules(db: Session = Depends(get_db), current_user: User = De
     return db.query(BackupSchedule).order_by(BackupSchedule.id.desc()).all()
 
 
-@router.post("/backup-schedules", response_model=BackupScheduleOut)
-def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
+def _schedule_users(db: Session, payload: BackupScheduleCreate) -> tuple[list[int], list[User]]:
+    """The accounts a schedule being saved covers, checked, and its destination."""
     user_ids = [] if payload.all_users else (payload.user_ids or ([payload.user_id] if payload.user_id else []))
     user_ids = sorted({int(user_id) for user_id in user_ids if int(user_id) > 0})
     users = []
@@ -854,6 +854,13 @@ def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: 
             raise HTTPException(status_code=404, detail=f"User not found: {', '.join(missing_ids)}")
     if payload.target_id and not db.query(SftpBackupTarget).filter(SftpBackupTarget.id == payload.target_id, SftpBackupTarget.is_active == True).first():  # noqa: E712
         raise HTTPException(status_code=404, detail="SFTP target not found")
+    return user_ids, users
+
+
+@router.post("/backup-schedules", response_model=BackupScheduleOut)
+def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    user_ids, users = _schedule_users(db, payload)
     item = BackupSchedule(
         user_id=user_ids[0] if user_ids else None,
         user_ids=json.dumps(user_ids),
@@ -874,6 +881,34 @@ def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: 
     db.refresh(item)
     target = "all_users" if payload.all_users else ",".join(user.username for user in users)
     log_action(db, current_user.id, "create_backup_schedule", target, payload.schedule, request=request)
+    return item
+
+
+@router.put("/backup-schedules/{schedule_id}", response_model=BackupScheduleOut)
+def update_backup_schedule(schedule_id: int, payload: BackupScheduleCreate, request: Request,
+                           db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Change a schedule: who, when, where, how its files are named, and
+    whether it runs. The backups it already made stay where they are, under
+    the names they were written with."""
+    ensure_role(current_user.role, Role.admin)
+    item = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Backup schedule not found")
+    user_ids, users = _schedule_users(db, payload)
+    item.user_id = user_ids[0] if user_ids else None
+    item.user_ids = json.dumps(user_ids)
+    item.all_users = payload.all_users
+    item.target_id = payload.target_id
+    item.schedule = payload.schedule
+    item.name_suffix = payload.name_suffix
+    item.retention = payload.retention
+    item.is_active = payload.is_active
+    db.commit()
+    db.refresh(item)
+    who = "all_users" if payload.all_users else ",".join(user.username for user in users)
+    log_action(db, current_user.id, "update_backup_schedule", str(item.id),
+               f"{who} {payload.schedule} {payload.name_suffix}{'' if payload.is_active else ' paused'}",
+               request=request)
     return item
 
 
@@ -994,6 +1029,66 @@ def create_sftp_target(
     db.commit()
     db.refresh(target)
     log_action(db, current_user.id, "create_backup_target", f"{target.kind}:{target.name}", request=request)
+    return target
+
+
+@router.put("/sftp-targets/{target_id}", response_model=SftpBackupTargetOut)
+def update_sftp_target(
+    target_id: int,
+    payload: SftpBackupTargetUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Change a saved destination. A password, key or secret left empty keeps
+    the saved one.
+
+    A different SFTP host or port is a different server: its pinned host key
+    is forgotten, and the next connection pins the new one. An S3 target is
+    checked against its bucket again before the change is kept, as when it
+    was added.
+    """
+    ensure_role(current_user.role, Role.admin)
+    target = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="SFTP target not found")
+    if payload.kind != (target.kind or "sftp"):
+        raise HTTPException(status_code=400, detail="A destination's kind cannot change; add a new one")
+    if payload.name != target.name and db.query(SftpBackupTarget).filter(SftpBackupTarget.name == payload.name).first():
+        raise HTTPException(status_code=409, detail="A target with that name already exists")
+    target.name = payload.name
+    if target.kind == "s3":
+        target.endpoint = payload.endpoint
+        target.region = payload.region
+        target.bucket = payload.bucket
+        target.access_key = payload.access_key
+        target.prefix = payload.prefix
+        target.secure = payload.secure
+        if payload.secret_key:
+            target.secret_key = encrypt(payload.secret_key)
+        try:
+            backup_s3.check(target)
+        except backup_s3.S3Error as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        if payload.host != target.host or payload.port != target.port or payload.reset_host_key:
+            target.host_key_type = None
+            target.host_key_fingerprint = None
+        target.host = payload.host
+        target.port = payload.port
+        target.username = payload.username
+        target.remote_path = payload.remote_path
+        if payload.password:
+            target.password = encrypt(payload.password)
+        if payload.private_key:
+            target.private_key = encrypt(payload.private_key)
+        if not target.password and not target.private_key:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="An SFTP target needs a password or a private key")
+    db.commit()
+    db.refresh(target)
+    log_action(db, current_user.id, "update_backup_target", f"{target.kind}:{target.name}", request=request)
     return target
 
 
