@@ -1315,6 +1315,9 @@ class BackupScheduleOut(BaseModel):
     last_run_at: Optional[datetime] = None
     last_status: str
     last_message: str = ""
+    # While a Run now goes: percent, the account it is on (index of total),
+    # its step, and the accounts done and failed so far. None otherwise.
+    progress: Optional[dict] = None
 
     @field_validator("user_ids", mode="before")
     @classmethod

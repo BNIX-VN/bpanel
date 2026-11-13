@@ -4592,7 +4592,11 @@ function App() {
 
   async function loadBackupSchedules() {
     const data = await request('/maintenance/backup-schedules');
-    if (data) setBackupSchedules(data);
+    if (data) {
+      setBackupSchedules(data);
+      // A run started before this page opened is followed too.
+      data.filter(row => row.last_status === 'running').forEach(row => pollBackupSchedule(row.id));
+    }
   }
 
   async function loadRestoreBackups() {
@@ -4641,25 +4645,34 @@ function App() {
     if (data) {
       setNotice(data.detail || 'Running now.');
       await loadBackupSchedules();
-      pollBackupSchedule(item.id);
     }
   }
 
-  function pollBackupSchedule(scheduleId, attempts = 60) {
+  // Schedules being followed, so a second Refresh does not start a second
+  // poll of the same run.
+  const polledSchedules = useRef(new Set());
+
+  function pollBackupSchedule(scheduleId) {
     // A schedule covering every account takes minutes, and the work runs in a
     // thread the request already let go of. Without this the row sits on
-    // "running" until the operator reloads the page and guesses.
-    if (attempts <= 0) return;
-    window.setTimeout(async () => {
+    // "running" until the operator reloads the page and guesses. Followed
+    // until it ends: the five minutes it used to stop after were shorter
+    // than a server's 15 accounts (.188, 2026-11-13).
+    if (polledSchedules.current.has(scheduleId)) return;
+    polledSchedules.current.add(scheduleId);
+    let misses = 0;
+    const tick = () => window.setTimeout(async () => {
       const rows = await request('/maintenance/backup-schedules', { silent: true });
-      if (!rows) return;
-      setBackupSchedules(rows);
-      const row = rows.find(entry => entry.id === scheduleId);
+      const row = rows?.find(entry => entry.id === scheduleId);
+      if (rows) setBackupSchedules(rows);
+      misses = rows ? 0 : misses + 1;
+      if ((!rows && misses < 20) || row?.last_status === 'running') return tick();
+      polledSchedules.current.delete(scheduleId);
       if (!row) return;
-      if (row.last_status === 'running') return pollBackupSchedule(scheduleId, attempts - 1);
       if (row.last_status === 'error') setError(`Schedule failed - ${row.last_message || 'no detail'}`);
       else setNotice(`Schedule finished - ${row.last_message || 'ok'}`);
-    }, 5000);
+    }, 3000);
+    tick();
   }
 
   async function deleteBackupSchedule(id) {
@@ -10922,8 +10935,20 @@ function App() {
                     {item.is_active === false && <><span className="badge warn">{t('Paused')}</span>{' '}</>}
                     {scheduleUserLabel(item)} · <code>{item.schedule}</code> · {cronScheduleLabel(item.schedule)} · {targetName(item.target_id) || t('Local only')}{suffix ? ` · ${t(suffix)}` : ''}
                     {item.last_status === 'running'
-                      ? <><small>{item.last_message || t('Running')}</small>
-                        <span className="job-progress"><span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span></span></>
+                      ? (item.progress?.total ? (() => {
+                        // Run now says where it is: the account (of how many),
+                        // what it is packing or sending, and who is through.
+                        const run = item.progress;
+                        const step = { databases: t('databases'), mail: t('mail'), uploading: t('uploading to the destination') }[run.step] ?? run.step;
+                        const pct = Math.max(0, Math.min(100, Math.floor(Number(run.percent) || 0)));
+                        return <>
+                          <small className="bk-run-now">{run.on ? `${run.on} (${run.index}/${run.total})` : `${run.index}/${run.total}`}{step ? ` · ${step}` : ''} · {pct}%</small>
+                          <span className="job-progress"><span className="progress-bar"><span className="progress-bar-fill" style={{ width: `${pct}%` }} /></span></span>
+                          {run.done?.length > 0 && <small>{t('Done ({n}): {names}', { n: run.done.length, names: run.done.join(', ') })}</small>}
+                          {run.failed?.length > 0 && <small className="bk-run-failed">{t('Failed ({n}): {names}', { n: run.failed.length, names: run.failed.join(', ') })}</small>}
+                        </>;
+                      })() : <><small>{item.last_message || t('Running')}</small>
+                        <span className="job-progress"><span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span></span></>)
                       : <small>
                         {item.last_status === 'ok' && <span className="badge ok">{t('OK')}</span>}
                         {item.last_status === 'warning' && <span className="badge warn">{t('Warning')}</span>}

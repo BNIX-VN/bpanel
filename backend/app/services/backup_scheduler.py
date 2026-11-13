@@ -41,7 +41,7 @@ def _cron_due(schedule: str, now: datetime) -> bool:
     )
 
 
-def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
+def _upload_if_configured(db, schedule: BackupSchedule, archive: str, on_progress=None) -> str:
     """Send the archive wherever the schedule points, under whatever name.
 
     The name is not cosmetic. A schedule set to `none` overwrites one file per
@@ -85,6 +85,7 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
         remote_path=target.remote_path,
         expected_host_key_type=target.host_key_type,
         expected_host_key_fingerprint=target.host_key_fingerprint,
+        on_progress=on_progress,
     )
     if not target.host_key_fingerprint and result.get("host_key_fingerprint"):
         target.host_key_type = result["host_key_type"]
@@ -123,12 +124,18 @@ def _short_message(parts: list[str]) -> str:
     return message[:4000]
 
 
-def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
+def run_one(db, schedule: BackupSchedule, now: datetime | None = None, on_progress=None) -> bool:
     """Run one schedule, exactly as the timer would. Returns whether it worked.
 
     Extracted so "Run now" is not a second implementation. A test run that
     took a different path would prove nothing about the real one - the cron
     expression is the only thing it is allowed to skip.
+
+    ``on_progress(state)``, when given (Run now), hears where the run is:
+    ``percent`` of the whole schedule, the account it is ``on`` and its
+    ``index`` of ``total``, the ``step`` (databases, a website, mail,
+    uploading), and the accounts already ``done`` and ``failed`` (operator,
+    2026-11-13: the row said nothing until every account was through).
     """
     now = (now or datetime.now()).replace(second=0, microsecond=0)
 
@@ -144,11 +151,32 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
     messages = []
     errors = []
     warnings = []
-    for user in users:
+    done: list[str] = []
+    failed: list[str] = []
+    # Of one account's share: packing, then sending it to the destination.
+    pack_share = 0.85 if schedule.target_id else 1.0
+
+    def tell(index: int, username: str, inner: float, step: str) -> None:
+        if on_progress is None:
+            return
+        on_progress({
+            "percent": round(100.0 * (index + min(max(inner, 0.0), 1.0)) / len(users), 1),
+            "on": username, "index": index + 1, "total": len(users), "step": step,
+            "done": list(done), "failed": list(failed),
+        })
+
+    for index, user in enumerate(users):
         try:
             skipped: list = []
-            archive = backup.create_user_backup(user, db, skipped=skipped)
-            target = _upload_if_configured(db, schedule, archive)
+            # Only a run someone watches (Run now) passes the hooks on.
+            packing = {"on_progress": lambda fraction, label, _i=index, _u=user.username:
+                       tell(_i, _u, fraction * pack_share, label)} if on_progress else {}
+            sending = {"on_progress": lambda sent, size, _i=index, _u=user.username:
+                       tell(_i, _u, pack_share + (1 - pack_share) * (sent / size if size else 1.0),
+                            "uploading")} if on_progress else {}
+            archive = backup.create_user_backup(user, db, skipped=skipped, **packing)
+            tell(index, user.username, pack_share, "uploading" if schedule.target_id else "")
+            target = _upload_if_configured(db, schedule, archive, **sending)
             if schedule.target_id:
                 # The copies live on the destination now; keeping them here
                 # too doubled the disk a destination is meant to spare. A
@@ -160,8 +188,11 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
             # but the operator has to be told before a restore needs the file.
             if skipped:
                 warnings.append(f"{user.username}: {backup.describe_skipped(skipped)}")
+            done.append(user.username)
         except Exception as exc:  # pragma: no cover - operational path
             errors.append(f"{user.username}: {exc}")
+            failed.append(user.username)
+        tell(index, user.username, 1.0, "")
 
     ok = not errors
     if ok:
