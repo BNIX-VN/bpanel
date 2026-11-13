@@ -90,6 +90,24 @@ def _sync_dns_zones() -> None:
 
 _sync_dns_zones()
 
+
+def _release_interrupted_backup_runs() -> None:
+    """A backup schedule's Run now that this process's last life was in the
+    middle of is over: say so, instead of "running" for good."""
+    try:
+        from app.core.database import SessionLocal
+        from app.services import backup_scheduler
+
+        with SessionLocal() as db:
+            released = backup_scheduler.release_interrupted_runs(db)
+        if released:
+            logger.warning("%d backup schedule run(s) were interrupted by the restart", released)
+    except Exception:  # noqa: BLE001 - never let this stop the panel booting
+        logger.warning("Could not release interrupted backup schedule runs", exc_info=True)
+
+
+_release_interrupted_backup_runs()
+
 # Secure default umask: files get 644 (-rw-r--r--), dirs get 755 (rwxr-xr-x)
 os.umask(0o022)
 
