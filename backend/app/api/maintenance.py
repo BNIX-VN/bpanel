@@ -836,7 +836,16 @@ def delete_user_backup(backup_file: str, request: Request, db: Session = Depends
 @router.get("/backup-schedules", response_model=list[BackupScheduleOut])
 def list_backup_schedules(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    return db.query(BackupSchedule).order_by(BackupSchedule.id.desc()).all()
+    rows = db.query(BackupSchedule).order_by(BackupSchedule.id.desc()).all()
+    with _schedule_progress_lock:
+        progress = {key: dict(value) for key, value in _schedule_progress.items()}
+    out = []
+    for row in rows:
+        item = BackupScheduleOut.model_validate(row)
+        if row.last_status == "running":
+            item.progress = progress.get(row.id)
+        out.append(item)
+    return out
 
 
 def _schedule_users(db: Session, payload: BackupScheduleCreate) -> tuple[list[int], list[User]]:
@@ -933,26 +942,42 @@ def run_backup_schedule_now(
     schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
+    if schedule.last_status == "running":
+        raise HTTPException(status_code=409, detail="This schedule is already running")
 
     schedule.last_status = "running"
     schedule.last_message = f"Started by {current_user.username}"
     db.commit()
 
+    with _schedule_progress_lock:
+        _schedule_progress[schedule_id] = {"percent": 0.0, "on": "", "index": 0, "total": 0,
+                                           "step": "", "done": [], "failed": []}
     _backup_job_executor.submit(_run_schedule_now_job, schedule_id)
     log_action(db, current_user.id, "run_backup_schedule", str(schedule_id), request=request)
     return {"ok": True, "schedule_id": schedule_id,
             "detail": "Running now. Refresh to see the result on this schedule."}
 
 
+_schedule_progress: dict[int, dict] = {}
+_schedule_progress_lock = threading.Lock()
+
+
 def _run_schedule_now_job(schedule_id: int) -> None:
-    """The worker side. Owns its own session: the request's is long gone."""
+    """The worker side. Owns its own session: the request's is long gone.
+    Where it is goes to _schedule_progress, which the schedule list shows
+    while it runs (operator, 2026-11-13: the row said nothing until every
+    account was through)."""
     from app.services import backup_scheduler
+
+    def heard(state: dict) -> None:
+        with _schedule_progress_lock:
+            _schedule_progress[schedule_id] = state
 
     db = SessionLocal()
     try:
         schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
         if schedule:
-            backup_scheduler.run_one(db, schedule)
+            backup_scheduler.run_one(db, schedule, on_progress=heard)
     except Exception as exc:  # noqa: BLE001 - the outcome belongs on the row
         try:
             schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
@@ -963,6 +988,8 @@ def _run_schedule_now_job(schedule_id: int) -> None:
         except Exception:  # pragma: no cover
             pass
     finally:
+        with _schedule_progress_lock:
+            _schedule_progress.pop(schedule_id, None)
         db.close()
 
 

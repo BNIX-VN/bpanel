@@ -146,3 +146,7 @@
 
 /* The top bar's CPU/RAM/disk, the sidebar foot and the File manager's folder
    tree are in shared/ (ui.css, file-manager.css), OPanel's as well. */
+
+/* Backups > Schedules: a Run now in progress names its account and who failed. */
+.bk-run-now{font-weight:600;color:var(--text)}
+.bk-run-failed{color:var(--danger-text);font-weight:600}

@@ -65,7 +65,8 @@ def test_a_symlinked_directory_is_stored_not_walked(tmp_path):
 
 def test_the_user_backup_walks_sites_with_the_recording_walk():
     source = inspect.getsource(backup.create_user_backup)
-    assert '_add_tree(tar, root, f"sites/{website.domain}/site", skipped)' in source
+    # It also hears the bytes for Run now's progress (2026-11-13).
+    assert '_add_tree(tar, root, f"sites/{website.domain}/site", skipped,' in source
     assert "tar.add(root," not in source
     assert "BACKUP_SKIPPED" in source
 

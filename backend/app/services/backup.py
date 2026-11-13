@@ -10,6 +10,7 @@ import posixpath
 import re
 import secrets
 import shutil
+import stat
 import tarfile
 import tempfile
 from typing import List, Optional
@@ -182,9 +183,28 @@ def _ensure_user_dir(path: Path) -> Path:
     return path
 
 
-def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
+def _tree_size(root: Path) -> int:
+    """Bytes of the regular files under ``root``, for a progress bar only."""
+    total = 0
+    for folder, _dirs, files in os.walk(root, onerror=lambda _exc: None):
+        for name in files:
+            try:
+                info = os.lstat(os.path.join(folder, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                total += info.st_size
+    return total
+
+
+def create_user_backup(user: User, db, skipped: Optional[list] = None, on_progress=None) -> str:
+    """Pack one account. ``on_progress(fraction, label)``, when given, hears
+    how far the archive is (0..1, by the bytes of its websites) and what it
+    is on: databases, then each website by name."""
     if skipped is None:
         skipped = []
+    report = on_progress or (lambda _fraction, _label: None)
+    report(0.0, "databases")
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     backup_dir = _ensure_user_dir(_user_backup_dir(user.username))
     archive = backup_dir / f"user-{user.username}-{stamp}.tar.gz"
@@ -314,12 +334,24 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
 
         manifest_path = tmp_dir / BACKUP_MANIFEST
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
+        # The websites are where the time goes; counted only when someone is
+        # watching, since it walks every tree once more.
+        sizes = {website.id: _tree_size(Path(website.root_path)) for website in websites} if on_progress else {}
+        total_bytes = sum(sizes.values())
+        written = [0]
+
+        def wrote(size: int, label: str) -> None:
+            written[0] += size
+            report(min(written[0] / total_bytes, 1.0) if total_bytes else 0.0, label)
+
         with _written_whole(archive) as partial, tarfile.open(partial, "w:gz") as tar:
             tar.add(manifest_path, arcname=BACKUP_MANIFEST)
             for website in websites:
                 root = Path(website.root_path)
+                report(min(written[0] / total_bytes, 1.0) if total_bytes else 0.0, website.domain)
                 if root.exists():
-                    _add_tree(tar, root, f"sites/{website.domain}/site", skipped)
+                    _add_tree(tar, root, f"sites/{website.domain}/site", skipped,
+                              on_bytes=(lambda size, _label=website.domain: wrote(size, _label)) if on_progress else None)
                 sql_path = sql_files.get(website.domain)
                 if sql_path and sql_path.exists():
                     tar.add(sql_path, arcname=f"databases/{website.domain}.sql")
@@ -329,6 +361,8 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
             for name, payload in app_payloads.items():
                 if payload.exists():
                     tar.add(payload, arcname=f"applications/{name}.tar")
+            if mail_boxes:
+                report(1.0, "mail")
             for arcname, box in mail_boxes:
                 _add_readable_tree(tar, box, arcname)
             # Only known once the walk is done, so it goes last; the gap
@@ -343,7 +377,7 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None) -> str:
     return str(archive)
 
 
-def _add_tree(tar: tarfile.TarFile, source, arcname: str, skipped: list) -> None:
+def _add_tree(tar: tarfile.TarFile, source, arcname: str, skipped: list, on_bytes=None) -> None:
     """Add a site tree, recording what could not be read instead of dying.
 
     ``tarfile.add()`` walks the tree itself and aborts the whole archive on the
@@ -361,6 +395,13 @@ def _add_tree(tar: tarfile.TarFile, source, arcname: str, skipped: list) -> None
         except (OSError, ValueError) as exc:
             skipped.append({"path": str(path), "reason": str(exc)})
             continue
+        if on_bytes is not None:
+            try:
+                info = path.lstat()
+            except OSError:
+                info = None
+            if info is not None and stat.S_ISREG(info.st_mode):
+                on_bytes(info.st_size)
         # is_dir() follows symlinks; a link was stored as a link and must not
         # be walked, or a link pointing up the tree would loop.
         if path.is_symlink() or not path.is_dir():
@@ -1383,8 +1424,10 @@ def upload_to_sftp(
     private_key: Optional[str] = None,
     expected_host_key_type: Optional[str] = None,
     expected_host_key_fingerprint: Optional[str] = None,
+    on_progress=None,
 ) -> dict:
-    """Upload ``local_file`` to ``host:port`` via SFTP.
+    """Upload ``local_file`` to ``host:port`` via SFTP. ``on_progress(sent,
+    total)`` hears the bytes as they go.
 
     Host key handling:
       * If a fingerprint is pinned, the server's key is compared against it
@@ -1475,7 +1518,7 @@ def upload_to_sftp(
             captured_fp = server_fp
         with client.open_sftp() as sftp:
             _ensure_remote_dir(sftp, remote_dir)
-            sftp.put(str(local_path), remote_file)
+            sftp.put(str(local_path), remote_file, callback=on_progress)
     finally:
         client.close()
     return {

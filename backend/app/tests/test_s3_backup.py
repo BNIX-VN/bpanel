@@ -317,7 +317,10 @@ def test_the_row_is_polled_until_the_run_stops():
     page = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
     handler = page[page.index("async function runBackupScheduleNow"):]
     handler = handler[:handler.index("\n  async function deleteBackupSchedule")]
-    assert "pollBackupSchedule(item.id)" in handler
+    # Run now reloads the list, and the list follows every running row
+    # (2026-11-13: also one started before the page was opened).
+    assert "await loadBackupSchedules();" in handler.split("function pollBackupSchedule")[0]
+    assert "forEach(row => pollBackupSchedule(row.id))" in page
     assert "last_status === 'running'" in handler, "it has to know when to stop"
 
 
