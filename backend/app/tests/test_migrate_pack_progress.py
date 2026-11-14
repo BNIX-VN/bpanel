@@ -91,6 +91,17 @@ def test_sizes_read_as_people_say_them():
     assert migrate_ssh._size_label(3 * 1024 * 1024 + 512 * 1024) == "3.5 GB"
 
 
+def test_a_reloaded_page_picks_the_running_restore_up_again():
+    """.232, 2026-11-14: "reload cái mất tích" - the import ran on, the page
+    had forgotten it."""
+    app = (Path(__file__).resolve().parents[3] / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    enter = app.split("function enterRestoreMode(mode) {")[1].split("\n  }\n")[0]
+    assert "adoptRunningRestore();" in enter
+    adopt = app.split("async function adoptRunningRestore() {")[1].split("\n  }\n")[0]
+    assert "job.kind === 'user_restore'" in adopt and "setRestoreJob(" in adopt
+    assert "RESTORE_MODES[kind] ? kind : 'bpanel'" in adopt, "a cPanel import shows on the cPanel page"
+
+
 def test_the_migration_login_keeps_its_connection_alive():
     source = Path(restore_sources.__file__).read_text(encoding="utf-8")
     body = source.split("def _transport(")[1].split("\ndef ")[0]

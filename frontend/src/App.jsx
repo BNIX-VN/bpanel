@@ -4798,6 +4798,22 @@ function App() {
       setRestoreFilter('');
     }
     if (source === 'local') listRestoreSource('local', mode);
+    adoptRunningRestore();
+  }
+
+  // A restore keeps running on the server when the page is reloaded or
+  // closed; coming back, the page picks it up again instead of looking as if
+  // it had vanished (operator, 2026-11-14, .232: "reload cái mất tích"). Its
+  // page is the kind of its archives.
+  async function adoptRunningRestore() {
+    if (restoreJob && ['queued', 'running'].includes(restoreJob.status)) return;
+    const data = await request('/maintenance/backup-jobs', { silent: true });
+    const running = (data?.jobs || [])
+      .filter(job => job.kind === 'user_restore' && ['queued', 'running'].includes(job.status))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    if (!running.length) return;
+    const kind = (running[0].results || []).find(row => row.kind)?.kind;
+    setRestoreJob({ ...running[0], mode: RESTORE_MODES[kind] ? kind : 'bpanel' });
   }
 
   function editRestoreSsh(changes) {
