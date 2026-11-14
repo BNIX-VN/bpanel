@@ -1321,9 +1321,12 @@ def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: lis
 
                     def heard(text: str, _index: int = index) -> None:
                         # What the old server is doing: packing, waiting for
-                        # DirectAdmin's queue, then the download.
+                        # DirectAdmin's queue, then the download - and the
+                        # check of what came down, which is still fetching.
+                        fetched = text.startswith("Downloading") or (
+                            text.startswith("Checking ") and "on the other server" not in text)
                         _set_restore_result(job_id, _index, detail=text[:300],
-                                            status="fetching" if text.startswith("Downloading") else "packing")
+                                            status="fetching" if fetched else "packing")
 
                     # Only an old server over SSH has anything to say while
                     # it works; every other source is a plain download.
