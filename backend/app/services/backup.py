@@ -1329,12 +1329,18 @@ def list_backups(domain: str) -> List[str]:
 
 
 def _load_private_key(private_key: str, password: Optional[str] = None):
+    # A PuTTY .ppk (PuTTYgen's own format) is read into OpenSSH form first;
+    # its passphrase is used there (operator, 2026-11-14, cPanel import).
+    from app.services import ppk
+
+    if ppk.is_ppk(private_key):
+        private_key, password = ppk.to_openssh(private_key, password or ""), None
     key_stream = StringIO(private_key)
-    key_classes = (
-        paramiko.RSAKey,
-        paramiko.ECDSAKey,
-        paramiko.Ed25519Key,
-        paramiko.DSSKey,
+    # DSSKey is looked up: paramiko 5 dropped it, as OPanel's does.
+    key_classes = tuple(
+        cls
+        for cls in (paramiko.RSAKey, paramiko.ECDSAKey, paramiko.Ed25519Key, getattr(paramiko, "DSSKey", None))
+        if cls is not None
     )
     last_error = None
     for key_class in key_classes:
@@ -1343,7 +1349,10 @@ def _load_private_key(private_key: str, password: Optional[str] = None):
             return key_class.from_private_key(key_stream, password=password or None)
         except Exception as exc:  # pragma: no cover - depends on key type
             last_error = exc
-    raise ValueError(f"Cannot load SFTP private key: {last_error}")
+    if "-----BEGIN" not in private_key:
+        raise ValueError("Cannot load SFTP private key: paste the whole key, from its -----BEGIN line "
+                         "(an OpenSSH or PEM key), or a PuTTY .ppk file")
+    raise ValueError(f"Cannot load SFTP private key (or its passphrase is wrong): {last_error}")
 
 
 def _ensure_remote_dir(sftp, remote_dir: str) -> None:

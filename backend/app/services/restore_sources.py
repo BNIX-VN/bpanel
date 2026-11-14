@@ -63,8 +63,13 @@ import paramiko
 from app.core.config import settings
 from app.core.secrets import decrypt
 from app.models.entities import SftpBackupTarget
-from app.services import addons, backup, backup_s3, cpanel_import, da_import, fastpanel_import, migrate_ssh
+from app.services import addons, backup, backup_s3, cpanel_import, da_import, fastpanel_import, migrate_ssh, ppk
 from app.services.shell import shell
+
+# A key that is neither OpenSSH/PEM nor a PuTTY .ppk, or whose passphrase is
+# wrong; a .ppk says itself what is wrong with it.
+PRIVATE_KEY_UNREADABLE = ("The private key could not be read (or its passphrase is wrong). Paste the whole "
+                          "key, from its -----BEGIN line, or the contents of a PuTTY .ppk file")
 
 DEFAULT_PORTS = {"sftp": 22, "ftp": 21, "ftps": 21, "ssh": 22}
 TIMEOUT = 30
@@ -433,8 +438,11 @@ def _transport(host: str, port: int, username: str, *, password: str = "", priva
             if private_key:
                 try:
                     pkey = backup._load_private_key(private_key, password or None)
+                except ppk.PpkError as exc:
+                    # A .ppk says itself what is wrong: its passphrase, its format.
+                    raise RestoreSourceError(str(exc)) from None
                 except (ValueError, paramiko.SSHException):
-                    raise RestoreSourceError("The private key could not be read (or its passphrase is wrong)") from None
+                    raise RestoreSourceError(PRIVATE_KEY_UNREADABLE) from None
                 transport.auth_publickey(username, pkey)
             else:
                 transport.auth_password(username, password)
