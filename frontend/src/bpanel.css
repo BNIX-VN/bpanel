@@ -150,3 +150,7 @@
 /* Backups > Schedules: a Run now in progress names its account and who failed. */
 .bk-run-now{font-weight:600;color:var(--text)}
 .bk-run-failed{color:var(--danger-text);font-weight:600}
+
+/* A private key field: its "Choose key file" button and the formats it takes. */
+.key-file-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:8px}
+.key-file-button.disabled input{cursor:not-allowed}

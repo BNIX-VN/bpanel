@@ -63,8 +63,13 @@ import paramiko
 from app.core.config import settings
 from app.core.secrets import decrypt
 from app.models.entities import SftpBackupTarget
-from app.services import addons, backup, backup_s3, cpanel_import, da_import, fastpanel_import, migrate_ssh
+from app.services import addons, backup, backup_s3, cpanel_import, da_import, fastpanel_import, migrate_ssh, ppk
 from app.services.shell import shell
+
+# A key that is neither OpenSSH/PEM nor a PuTTY .ppk, or whose passphrase is
+# wrong; a .ppk says itself what is wrong with it.
+PRIVATE_KEY_UNREADABLE = ("The private key could not be read (or its passphrase is wrong). Paste the whole "
+                          "key, from its -----BEGIN line, or the contents of a PuTTY .ppk file")
 
 DEFAULT_PORTS = {"sftp": 22, "ftp": 21, "ftps": 21, "ssh": 22}
 TIMEOUT = 30
@@ -423,6 +428,12 @@ def _transport(host: str, port: int, username: str, *, password: str = "", priva
             transport.start_client(timeout=TIMEOUT)
         except paramiko.SSHException as exc:
             raise RestoreSourceError(f"{host}:{port} is not an {what} server ({exc})") from None
+        # A pack on the old server runs for many minutes with nothing said on
+        # the connection; a keepalive stops a router between dropping it, and
+        # notices one that is gone (2026-11-14, .232).
+        keepalive = getattr(transport, "set_keepalive", None)
+        if keepalive:
+            keepalive(30)
         key = transport.get_remote_server_key()
         seen = {"type": key.get_name(), "fingerprint": backup._fingerprint(key)}
         if pinned and pinned != seen["fingerprint"]:
@@ -433,8 +444,11 @@ def _transport(host: str, port: int, username: str, *, password: str = "", priva
             if private_key:
                 try:
                     pkey = backup._load_private_key(private_key, password or None)
+                except ppk.PpkError as exc:
+                    # A .ppk says itself what is wrong: its passphrase, its format.
+                    raise RestoreSourceError(str(exc)) from None
                 except (ValueError, paramiko.SSHException):
-                    raise RestoreSourceError("The private key could not be read (or its passphrase is wrong)") from None
+                    raise RestoreSourceError(PRIVATE_KEY_UNREADABLE) from None
                 transport.auth_publickey(username, pkey)
             else:
                 transport.auth_password(username, password)
@@ -832,7 +846,7 @@ def fetch(source: dict, key: str, size: int, db, on_status=None) -> tuple[str, b
     kind = key_kind(source, key)
     require_kind(kind)
     if source["kind"] == "ssh":
-        return _fetch_over_ssh(source, name, kind, on_status), True
+        return _fetch_over_ssh(source, name, kind, on_status, size), True
     if source["kind"] == "local":
         path, kind, where = local_archive(key)
         if where == "inbox":
@@ -876,23 +890,34 @@ def fetch(source: dict, key: str, size: int, db, on_status=None) -> tuple[str, b
     return staged, True
 
 
-def _fetch_over_ssh(source: dict, account: str, kind: str, on_status=None) -> str:
+def _fetch_over_ssh(source: dict, account: str, kind: str, on_status=None, size: int = 0) -> str:
     """Have the old server pack one account, bring the archive into the
     folder its kind is imported from, and return where it is.
 
     The server's key is the one it showed when it was listed: the root login
-    is only ever sent to that server.
+    is only ever sent to that server - also each time the connection drops
+    and the panel signs in again (2026-11-14, as SNPanel). ``size`` is the
+    account's size as listed.
     """
     if not source.get("host_key"):
         raise RestoreSourceError("List the server first, so its key can be checked")
     _ensure_foreign_dir(kind)
     folder = foreign_dir(kind)
-    with _ssh(source, pinned=source["host_key"]) as (session, _seen):
-        try:
-            return migrate_ssh.pack_and_fetch(
-                session, kind, account,
-                stage=lambda name, pull: _stage_foreign(pull, name, kind),
-                ensure_room=lambda size: _room_for(size, folder),
-                on_status=on_status)
-        except migrate_ssh.MigrateError as exc:
-            raise RestoreSourceError(str(exc)) from None
+
+    @contextmanager
+    def connect():
+        with _ssh(source, pinned=source["host_key"]) as (session, _seen):
+            yield session
+
+    link = migrate_ssh.Link(connect=connect)
+    try:
+        link.open()
+        return migrate_ssh.pack_and_fetch(
+            link, kind, account,
+            stage=lambda name, pull: _stage_foreign(pull, name, kind),
+            ensure_room=lambda need: _room_for(need, folder),
+            on_status=on_status, size_hint=size or 0)
+    except migrate_ssh.MigrateError as exc:
+        raise RestoreSourceError(str(exc)) from None
+    finally:
+        link.close()

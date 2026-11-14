@@ -4798,12 +4798,44 @@ function App() {
       setRestoreFilter('');
     }
     if (source === 'local') listRestoreSource('local', mode);
+    adoptRunningRestore();
+  }
+
+  // A restore keeps running on the server when the page is reloaded or
+  // closed; coming back, the page picks it up again instead of looking as if
+  // it had vanished (operator, 2026-11-14, .232: "reload cái mất tích"). Its
+  // page is the kind of its archives.
+  async function adoptRunningRestore() {
+    if (restoreJob && ['queued', 'running'].includes(restoreJob.status)) return;
+    const data = await request('/maintenance/backup-jobs', { silent: true });
+    const running = (data?.jobs || [])
+      .filter(job => job.kind === 'user_restore' && ['queued', 'running'].includes(job.status))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    if (!running.length) return;
+    const kind = (running[0].results || []).find(row => row.kind)?.kind;
+    setRestoreJob({ ...running[0], mode: RESTORE_MODES[kind] ? kind : 'bpanel' });
   }
 
   function editRestoreSsh(changes) {
     setRestoreSsh(prev => ({ ...prev, ...changes }));
     // What was listed belongs to the login it was listed with.
     if (restoreListing?.source === 'ssh') { setRestoreListing(null); setRestorePicks([]); }
+  }
+
+  // A private key file - PuTTY .ppk, .pem, id_rsa - read into its field in
+  // the browser, instead of opening it and pasting (operator, 2026-11-14,
+  // cPanel import). No accept filter: id_rsa has no extension.
+  function keyFileButton(onLoad, disabled = false) {
+    return <label className={`upload-button secondary-light key-file-button${disabled ? ' disabled' : ''}`}>
+      <Upload size={14} aria-hidden="true"/> {t('Choose key file')}
+      <input type="file" disabled={disabled} onChange={async e => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        if (file.size > 16384) { setError(t('{name} is too big to be a private key.', { name: file.name })); return; }
+        onLoad((await file.text()).trim());
+      }} />
+    </label>;
   }
 
   // Step 1 has a card per source; the destination itself is picked in step 2.
@@ -10588,9 +10620,11 @@ function App() {
             <input type="checkbox" checked={ssh.use_key} disabled={jobActive} onChange={e => editRestoreSsh({ use_key: e.target.checked })} />
             <span>{t('Sign in with a private key')}</span>
           </label>
-          {ssh.use_key && <label className="field restore-remote-wide"><span className="field-label">{t('Private key')}</span>
-            <textarea rows={4} value={ssh.private_key} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ private_key: e.target.value })} />
-          </label>}
+          {ssh.use_key && <div className="field restore-remote-wide"><span className="field-label">{t('Private key')}</span>
+            <textarea rows={4} value={ssh.private_key} aria-label={t('Private key')} placeholder={t('-----BEGIN OPENSSH PRIVATE KEY----- or the contents of a PuTTY .ppk file')} spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ private_key: e.target.value })} />
+            <span className="key-file-row">{keyFileButton(text => editRestoreSsh({ private_key: text }), jobActive)}
+              <span className="hint">{t('OpenSSH, PEM or PuTTY .ppk. The key passphrase, if it has one, goes in the field above.')}</span></span>
+          </div>}
           <div className="actions restore-remote-wide">
             <button type="submit" disabled={!canUse}><Search size={14}/> {t('Connect and list accounts')}</button>
             <span className="hint">{t('Used for this import only; nothing here is saved.')}</span>
@@ -11078,6 +11112,8 @@ function App() {
             <Field className="is-wide" label={t('Remote folder')}><input value={newSftpTarget.remote_path} onChange={setTarget('remote_path')} placeholder="/backups/bpanel" spellCheck={false} /></Field>
             <Field className="is-wide" label={t('Private key (optional)')} optional hint={editingTarget ? keepHint : t('A password or a private key: one is enough.')}>
               <textarea value={newSftpTarget.private_key} onChange={setTarget('private_key')} rows={4} spellCheck={false} />
+              <span className="key-file-row">{keyFileButton(text => setNewSftpTarget(prev => ({ ...prev, private_key: text })))}
+                <span className="hint">{t('OpenSSH, PEM or PuTTY .ppk.')}</span></span>
             </Field>
             {editingTarget && newSftpTarget.pinned && <Checkbox className="is-wide" checked={!!newSftpTarget.reset_host_key}
               label={t('Forget the saved host key ({key}): the server was rebuilt', { key: newSftpTarget.pinned })}
