@@ -56,8 +56,11 @@ def check_account(name: str) -> str:
     return name
 
 
-def _exec(client, command: str, timeout: float) -> tuple[int, str, str]:
-    """Run one command, reading both streams as they come so neither fills up."""
+def _exec(client, command: str, timeout: float, on_tick: Optional[Callable[[], None]] = None,
+          tick_every: float = 20.0) -> tuple[int, str, str]:
+    """Run one command, reading both streams as they come so neither fills up.
+    ``on_tick``, while it runs, is called every ``tick_every`` seconds - to
+    look at how far a long pack is."""
     transport = client.get_transport()
     if transport is None:
         raise MigrateError("The SSH connection closed")
@@ -65,7 +68,14 @@ def _exec(client, command: str, timeout: float) -> tuple[int, str, str]:
     channel.exec_command(command)
     out, err = bytearray(), bytearray()
     deadline = time.monotonic() + timeout
+    next_tick = time.monotonic() + tick_every
     while True:
+        if on_tick is not None and time.monotonic() >= next_tick:
+            next_tick = time.monotonic() + tick_every
+            try:
+                on_tick()
+            except Exception:  # noqa: BLE001 - a look at progress must never stop the work
+                pass
         while channel.recv_ready():
             out.extend(channel.recv(65536))
         while channel.recv_stderr_ready():
@@ -84,8 +94,8 @@ def _exec(client, command: str, timeout: float) -> tuple[int, str, str]:
     return code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
-def _must(client, command: str, timeout: float, what: str) -> str:
-    code, out, err = _exec(client, command, timeout)
+def _must(client, command: str, timeout: float, what: str, on_tick: Optional[Callable[[], None]] = None) -> str:
+    code, out, err = _exec(client, command, timeout, **({"on_tick": on_tick} if on_tick else {}))
     if code != 0:
         detail = (err or out).strip().splitlines()[-1:] or [f"exit {code}"]
         raise MigrateError(f"{what} failed on the other server: {detail[0][:300]}")
@@ -213,11 +223,35 @@ def _archives(client, folder: str) -> list[tuple[str, int]]:
     return found
 
 
-def _pack_cpanel(client, account: str, folder: str) -> str:
+def _size_label(kib: int) -> str:
+    for unit, step in (("GB", 1024 * 1024), ("MB", 1024)):
+        if kib >= step:
+            return f"{kib / step:.1f} {unit}"
+    return f"{kib} KB"
+
+
+def _pack_cpanel(client, account: str, folder: str, on_status: StatusFn = None) -> str:
     log = shlex.quote(posixpath.join(folder, "pkgacct.log"))
     command = (f"/usr/local/cpanel/scripts/pkgacct {shlex.quote(account)} {shlex.quote(folder)} "
                f"</dev/null >{log} 2>&1 || {{ tail -n 5 {log} >&2; exit 1; }}")
-    _must(client, command, PACK_TIMEOUT, f"pkgacct {account}")
+
+    def look() -> None:
+        # pkgacct writes its log over there, so the connection is silent the
+        # whole time: say what it is on, and how much it has packed (operator,
+        # 2026-11-14, .232: "Packing thanhnam1" for a quarter of an hour).
+        _code, out, _err = _exec(client, f"tail -n 1 {log} 2>/dev/null; du -sk {shlex.quote(folder)} 2>/dev/null",
+                                 LIST_TIMEOUT)
+        lines = [line.strip() for line in out.splitlines() if line.strip()]
+        size = lines.pop().split()[0] if lines and lines[-1].split()[0].isdigit() else ""
+        step = re.sub(r"\s+", " ", lines[-1])[:120] if lines else ""
+        text = f"Packing {account} on the other server"
+        if size:
+            text += f" ({_size_label(int(size))} so far)"
+        if step:
+            text += f": {step}"
+        on_status(text)
+
+    _must(client, command, PACK_TIMEOUT, f"pkgacct {account}", on_tick=look if on_status else None)
     for name, _size in _archives(client, folder):
         if name.startswith(f"cpmove-{account}.tar"):
             return name
@@ -437,7 +471,7 @@ def pack_and_fetch(client, panel: str, account: str,
         if on_status:
             on_status(f"Packing {account} on the other server")
         if panel == "cpanel":
-            name = _pack_cpanel(client, account, folder)
+            name = _pack_cpanel(client, account, folder, on_status)
         elif panel == "directadmin":
             name = _pack_directadmin(client, account, folder, on_status)
         elif panel == "fastpanel":

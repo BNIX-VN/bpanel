@@ -428,6 +428,12 @@ def _transport(host: str, port: int, username: str, *, password: str = "", priva
             transport.start_client(timeout=TIMEOUT)
         except paramiko.SSHException as exc:
             raise RestoreSourceError(f"{host}:{port} is not an {what} server ({exc})") from None
+        # A pack on the old server runs for many minutes with nothing said on
+        # the connection; a keepalive stops a router between dropping it, and
+        # notices one that is gone (2026-11-14, .232).
+        keepalive = getattr(transport, "set_keepalive", None)
+        if keepalive:
+            keepalive(30)
         key = transport.get_remote_server_key()
         seen = {"type": key.get_name(), "fingerprint": backup._fingerprint(key)}
         if pinned and pinned != seen["fingerprint"]:
