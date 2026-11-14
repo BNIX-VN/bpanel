@@ -31,7 +31,7 @@ PANELS = {"directadmin": "DirectAdmin", "cpanel": "cPanel", "fastpanel": "FastPa
 ACCOUNT_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 # What mktemp makes on the other server, and the only folder ever removed there.
-WORK_RE = re.compile(r"^/home/bpanel-migrate\.[A-Za-z0-9]{6,16}$")
+WORK_RE = re.compile(r"^/(?:home|backup)/bpanel-migrate\.[A-Za-z0-9]{6,16}$")
 LIST_TIMEOUT = 120
 # A big account takes a long time to pack; a stuck pack still has to end.
 PACK_TIMEOUT = 6 * 3600
@@ -56,26 +56,25 @@ def check_account(name: str) -> str:
     return name
 
 
-def _exec(client, command: str, timeout: float, on_tick: Optional[Callable[[], None]] = None,
-          tick_every: float = 20.0) -> tuple[int, str, str]:
+def _exec(client, command: str, timeout: float) -> tuple[int, str, str]:
     """Run one command, reading both streams as they come so neither fills up.
-    ``on_tick``, while it runs, is called every ``tick_every`` seconds - to
-    look at how far a long pack is."""
-    transport = client.get_transport()
-    if transport is None:
-        raise MigrateError("The SSH connection closed")
-    channel = transport.open_session()
-    channel.exec_command(command)
+    A connection that is gone raises ConnectionLost, which Link answers by
+    signing in again."""
+    transport = client.get_transport() if client is not None else None
+    if transport is None or not getattr(transport, "is_active", lambda: True)():
+        raise ConnectionLost("The SSH connection to the other server closed")
+    try:
+        channel = transport.open_session()
+        channel.exec_command(command)
+    except (EOFError, OSError) as exc:
+        raise ConnectionLost(f"The SSH connection to the other server closed ({exc})") from None
+    except Exception as exc:  # noqa: BLE001 - paramiko.SSHException, without importing it here
+        if type(exc).__name__ in {"SSHException", "ChannelException"}:
+            raise ConnectionLost(f"The SSH connection to the other server closed ({exc})") from None
+        raise
     out, err = bytearray(), bytearray()
     deadline = time.monotonic() + timeout
-    next_tick = time.monotonic() + tick_every
     while True:
-        if on_tick is not None and time.monotonic() >= next_tick:
-            next_tick = time.monotonic() + tick_every
-            try:
-                on_tick()
-            except Exception:  # noqa: BLE001 - a look at progress must never stop the work
-                pass
         while channel.recv_ready():
             out.extend(channel.recv(65536))
         while channel.recv_stderr_ready():
@@ -91,11 +90,14 @@ def _exec(client, command: str, timeout: float, on_tick: Optional[Callable[[], N
             del out[: len(out) - 1024 * 1024]
     code = channel.recv_exit_status()
     channel.close()
+    if code == -1 and not getattr(transport, "is_active", lambda: True)():
+        # The connection died under the command: no status came back.
+        raise ConnectionLost("The SSH connection to the other server closed while it worked")
     return code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
-def _must(client, command: str, timeout: float, what: str, on_tick: Optional[Callable[[], None]] = None) -> str:
-    code, out, err = _exec(client, command, timeout, **({"on_tick": on_tick} if on_tick else {}))
+def _must(client, command: str, timeout: float, what: str) -> str:
+    code, out, err = _exec(client, command, timeout)
     if code != 0:
         detail = (err or out).strip().splitlines()[-1:] or [f"exit {code}"]
         raise MigrateError(f"{what} failed on the other server: {detail[0][:300]}")
@@ -230,32 +232,333 @@ def _size_label(kib: int) -> str:
     return f"{kib} KB"
 
 
-def _pack_cpanel(client, account: str, folder: str, on_status: StatusFn = None) -> str:
-    log = shlex.quote(posixpath.join(folder, "pkgacct.log"))
-    command = (f"/usr/local/cpanel/scripts/pkgacct {shlex.quote(account)} {shlex.quote(folder)} "
-               f"</dev/null >{log} 2>&1 || {{ tail -n 5 {log} >&2; exit 1; }}")
+def _bytes_label(size: int) -> str:
+    return _size_label(max(int(size) // 1024, 0))
 
-    def look() -> None:
-        # pkgacct writes its log over there, so the connection is silent the
-        # whole time: say what it is on, and how much it has packed (operator,
-        # 2026-11-14, .232: "Packing thanhnam1" for a quarter of an hour).
-        _code, out, _err = _exec(client, f"tail -n 1 {log} 2>/dev/null; du -sk {shlex.quote(folder)} 2>/dev/null",
-                                 LIST_TIMEOUT)
-        lines = [line.strip() for line in out.splitlines() if line.strip()]
-        size = lines.pop().split()[0] if lines and lines[-1].split()[0].isdigit() else ""
-        step = re.sub(r"\s+", " ", lines[-1])[:120] if lines else ""
-        text = f"Packing {account} on the other server"
-        if size:
-            text += f" ({_size_label(int(size))} so far)"
-        if step:
-            text += f": {step}"
-        on_status(text)
 
-    _must(client, command, PACK_TIMEOUT, f"pkgacct {account}", on_tick=look if on_status else None)
-    for name, _size in _archives(client, folder):
-        if name.startswith(f"cpmove-{account}.tar"):
-            return name
-    raise MigrateError(f"pkgacct finished but left no cpmove-{account} archive")
+# --- cPanel, as SNPanel pulls it (operator, 2026-11-14, .232) ---------------------------
+#
+# A big account (14 GB and more) packs for most of an hour and downloads for
+# as long. pkgacct used to run in the foreground of the SSH channel: the
+# connection said nothing the whole time, a drop or a panel restart lost the
+# pack, and a download that failed half way threw the archive away on both
+# sides. Now, as SNPanel's cpanel_pull does: pkgacct runs in a session of its
+# own on the other server (setsid nohup, nice, ionice) with its pid, exit
+# status and log in files; the panel looks at those every CPANEL_POLL seconds,
+# signing in again when the connection drops; the archive comes down in
+# pieces, picked up where it stopped, and is checked against its SHA-256
+# there before anything over there is removed.
+
+CPANEL_POLL = 10
+# A pkgacct still alive after this is not going to finish.
+CPANEL_PACK_CAP = 24 * 3600
+DOWNLOAD_ATTEMPTS = 4
+# Room kept on the other server beyond the account's own size while it packs.
+SOURCE_MARGIN = 512 * 1024 * 1024
+
+
+class ConnectionLost(MigrateError):
+    """The SSH connection to the other server went away."""
+
+
+class Link:
+    """The login to the other server, signed in again when it drops.
+
+    ``connect()`` returns a context manager that yields a signed-in client (the
+    host key checked against the pin every time). Built around a client alone
+    - the tests, a caller with no way to sign in again - a drop is final.
+    Only what is safe to do twice is done again; starting pkgacct is not.
+    """
+
+    RETRY_WAITS = (0, 5, 20)
+
+    def __init__(self, client=None, connect: Optional[Callable[[], object]] = None):
+        self.client, self._connect, self._opened = client, connect, None
+
+    def open(self) -> "Link":
+        if self.client is None:
+            opened = self._connect()
+            self.client = opened.__enter__()
+            self._opened = opened
+        return self
+
+    def close(self) -> None:
+        opened, self._opened = self._opened, None
+        if opened is not None:
+            self.client = None
+            try:
+                opened.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 - it is gone either way
+                pass
+
+    def reconnect(self) -> None:
+        if self._connect is None:
+            raise ConnectionLost("The SSH connection to the other server was lost")
+        self.close()
+        last: Exception | None = None
+        for wait in self.RETRY_WAITS:
+            time.sleep(wait)
+            try:
+                self.open()
+                return
+            except Exception as exc:  # noqa: BLE001 - every way of not getting back in
+                last = exc
+        raise ConnectionLost(f"The SSH connection to the other server was lost and could not be made again ({last})")
+
+    def run(self, command: str, timeout: float, *, again: bool = True) -> tuple[int, str, str]:
+        try:
+            return _exec(self.client, command, timeout)
+        except ConnectionLost:
+            if not again:
+                raise
+        self.reconnect()
+        return _exec(self.client, command, timeout)
+
+    def must(self, command: str, timeout: float, what: str) -> str:
+        code, out, err = self.run(command, timeout)
+        if code != 0:
+            detail = (err or out).strip().splitlines()[-1:] or [f"exit {code}"]
+            raise MigrateError(f"{what} failed on the other server: {detail[0][:300]}")
+        return out
+
+
+def _cpanel_archive_names(account: str) -> list[str]:
+    """The names pkgacct may give the archive, the usual first."""
+    return [f"cpmove-{account}.tar.gz", f"{account}.tar.gz", f"cpmove-{account}.tar"]
+
+
+def _cpanel_work_folder(link: Link, need: int) -> str:
+    """A private folder for the pack, on /home or /backup - whichever has room
+    for the account (its size as listed) plus a margin, /home first."""
+    base = "/home"
+    if need:
+        out = link.must("df -Pk /home /backup 2>/dev/null | tail -n +2", LIST_TIMEOUT, "Checking the disk space")
+        free = {}
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 6 and parts[3].isdigit() and parts[5] in ("/home", "/backup"):
+                free[parts[5]] = int(parts[3]) * 1024
+        if not free:
+            # df names the mount the folder is on, not the folder: / for both.
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 4 and parts[3].isdigit():
+                    free.setdefault("/home", int(parts[3]) * 1024)
+        wanted = need + SOURCE_MARGIN
+        roomy = [path for path in ("/home", "/backup") if free.get(path, 0) >= wanted]
+        if not roomy and free:
+            most = max(free.values())
+            raise MigrateError(f"Not enough disk space on the other server to pack it: about "
+                               f"{_bytes_label(wanted)} needed, {_bytes_label(most)} free")
+        base = roomy[0] if roomy else "/home"
+    folder = link.must(f"umask 077; mktemp -d {base}/bpanel-migrate.XXXXXXXXXX", LIST_TIMEOUT,
+                       "Making a work folder").strip().splitlines()[-1:]
+    folder = folder[0].strip() if folder else ""
+    if not WORK_RE.fullmatch(folder):
+        raise MigrateError(f"Unexpected work folder on the other server: {folder!r}")
+    return folder
+
+
+def _start_detached(link: Link, folder: str, command: str) -> None:
+    """``command`` started in ``folder`` in a session of its own, so it outlives
+    this connection: its output in run.log, its exit status in run.exit, its
+    pid in run.pid. Started once: a lost reply is answered by looking for the
+    pid, never by starting it again."""
+    inner = shlex.quote(f"{command} > {folder}/run.log 2>&1; echo $? > {folder}/run.exit")
+    script = (f"cd {folder} && rm -f run.exit run.pid && L=''; "
+              f"command -v ionice >/dev/null 2>&1 && L='ionice -c2 -n7'; "
+              f"setsid nohup nice -n 10 $L sh -c {inner} </dev/null >/dev/null 2>&1 & "
+              f"echo $! > {folder}/run.pid; cat {folder}/run.pid")
+    try:
+        code, out, err = link.run(script, LIST_TIMEOUT, again=False)
+    except ConnectionLost:
+        link.reconnect()
+        _code, out, _err = link.run(f"cat {folder}/run.pid 2>/dev/null", LIST_TIMEOUT)
+        if out.strip().isdigit():
+            return
+        code, out, err = link.run(script, LIST_TIMEOUT, again=False)
+    if code != 0 or not out.strip().splitlines()[-1:] or not out.strip().splitlines()[-1].strip().isdigit():
+        raise MigrateError(f"pkgacct could not be started on the other server: {(err or out).strip()[-300:]}")
+
+
+def _detached_status(link: Link, folder: str, names: list[str]) -> tuple[str, str, int]:
+    """How the detached run stands - "running", "exit <code>" or "gone" - the
+    last line of its log worth reading, and how big its archive is so far."""
+    stats = " ".join(f"{folder}/{shlex.quote(name)}" for name in names)
+    command = (f"if [ -s {folder}/run.exit ]; then echo \"STATE exit $(cat {folder}/run.exit)\"; "
+               f"elif P=$(cat {folder}/run.pid 2>/dev/null) && [ -n \"$P\" ] && kill -0 \"$P\" 2>/dev/null; "
+               f"then echo 'STATE running'; else echo 'STATE gone'; fi; "
+               f"printf 'LOG %s\\n' \"$(tail -c 4000 {folder}/run.log 2>/dev/null | tr '\\r' '\\n' "
+               f"| grep -v '^[[:space:].]*$' | tail -n 1)\"; "
+               f"printf 'SIZE %s\\n' \"$(stat -c %s {stats} 2>/dev/null | head -n 1)\"")
+    _code, out, _err = link.run(command, LIST_TIMEOUT)
+    state, step, size = "gone", "", 0
+    for line in out.splitlines():
+        if line.startswith("STATE "):
+            state = line[6:].strip()
+        elif line.startswith("LOG "):
+            step = re.sub(r"\s+", " ", line[4:]).strip()[:160]
+        elif line.startswith("SIZE ") and line[5:].strip().isdigit():
+            size = int(line[5:].strip())
+    return state, step, size
+
+
+def _stop_detached(link: Link, folder: str) -> None:
+    """The detached run stopped, if it is still going and still ours: its
+    process group, after its command line is seen to name this folder."""
+    try:
+        link.run(f"P=$(cat {folder}/run.pid 2>/dev/null); [ -n \"$P\" ] && kill -0 \"$P\" 2>/dev/null && "
+                 f"tr '\\0' ' ' < /proc/$P/cmdline | grep -qF {folder} && kill -TERM -- -\"$P\" 2>/dev/null; true",
+                 LIST_TIMEOUT)
+    except Exception:  # noqa: BLE001 - best effort, on the way out
+        pass
+
+
+def _pack_cpanel(link: Link, account: str, folder: str, on_status: StatusFn = None) -> tuple[str, int]:
+    """pkgacct, started detached and followed until it ends; the archive's
+    name and size."""
+    names = _cpanel_archive_names(account)
+    _start_detached(link, folder,
+                    f"/usr/local/cpanel/scripts/pkgacct {shlex.quote(account)} {shlex.quote(folder)}")
+    started = time.monotonic()
+    while True:
+        state, step, size = _detached_status(link, folder, names)
+        if on_status:
+            text = f"Packing {account} on the other server"
+            if size:
+                text += f" ({_bytes_label(size)} so far)"
+            if step:
+                text += f": {step}"
+            on_status(text)
+        if state.startswith("exit"):
+            code = state[4:].strip()
+            if code == "0":
+                break
+            raise MigrateError(f"pkgacct {account} failed on the other server (exit {code}): {step or 'no detail'}")
+        if state != "running":
+            raise MigrateError(f"pkgacct {account} stopped on the other server before it finished: {step or 'no detail'}")
+        if time.monotonic() - started > CPANEL_PACK_CAP:
+            raise MigrateError(f"pkgacct {account} was still running after {CPANEL_PACK_CAP // 3600} hours")
+        time.sleep(CPANEL_POLL)
+    stats = " ".join(f"{folder}/{shlex.quote(name)}" for name in names)
+    out = link.must(f"stat --printf '%n\\t%s\\n' {stats} 2>/dev/null; true", LIST_TIMEOUT, "Looking for the backup")
+    for line in out.splitlines():
+        path, _, size = line.partition("\t")
+        name = posixpath.basename(path)
+        if name in names and size.isdigit():
+            return name, int(size)
+    raise MigrateError(f"pkgacct finished, but no archive of {account} is in {folder}")
+
+
+def _remote_sha256(link: Link, remote: str, size: int) -> str:
+    out = link.must(f"sha256sum {shlex.quote(remote)}", 120 + size / (20 * 1024 * 1024),
+                    "Checking the backup")
+    digest = out.strip().split()[:1]
+    if not digest or not re.fullmatch(r"[0-9a-f]{64}", digest[0]):
+        raise MigrateError(f"Could not read the backup's checksum on the other server: {out.strip()[:200]}")
+    return digest[0]
+
+
+def _download(link: Link, remote: str, size: int, destination: str, digest: str, name: str,
+              on_status: StatusFn = None, on_progress: ProgressFn = None) -> None:
+    """``remote`` into ``destination``, picked up where it stopped when the
+    connection drops (DOWNLOAD_ATTEMPTS times), and checked against
+    ``digest``."""
+    import hashlib
+    import os
+
+    import paramiko
+
+    attempt = 0
+    last_said = [0.0, 0, time.monotonic()]
+
+    def said(done: int) -> None:
+        if on_progress:
+            on_progress(done, size)
+        now = time.monotonic()
+        if on_status and (now - last_said[0] >= 2 or done >= size):
+            rate = (done - last_said[1]) / max(now - last_said[2], 0.001) if last_said[0] else 0
+            last_said[:] = [now, done, now]
+            pct = int(done * 100 / size) if size else 100
+            text = f"Downloading {name}: {_bytes_label(done)} of {_bytes_label(size)} ({pct}%)"
+            if rate:
+                text += f", {_bytes_label(int(rate))}/s"
+            on_status(text)
+
+    while True:
+        done = os.path.getsize(destination) if os.path.exists(destination) else 0
+        if done > size:
+            raise MigrateError(f"The download of {name} is bigger than the backup on the other server")
+        try:
+            if done < size:
+                sftp = link.client.open_sftp()
+                try:
+                    with sftp.open(remote, "rb") as source, open(destination, "ab") as target:
+                        source.seek(done)
+                        try:
+                            source.prefetch(size, max_concurrent_requests=64)
+                        except TypeError:  # paramiko before 3.3
+                            source.prefetch(size)
+                        while done < size:
+                            chunk = source.read(min(1024 * 1024, size - done))
+                            if not chunk:
+                                break
+                            target.write(chunk)
+                            done += len(chunk)
+                            said(done)
+                finally:
+                    sftp.close()
+            if done < size:
+                raise ConnectionLost(f"the transfer stopped at {_bytes_label(done)}")
+            break
+        except (ConnectionLost, EOFError, OSError, paramiko.SSHException) as exc:
+            attempt += 1
+            if attempt >= DOWNLOAD_ATTEMPTS:
+                raise MigrateError(f"The download of {name} kept failing ({exc})") from None
+            if on_status:
+                on_status(f"Downloading {name}: the connection dropped at {_bytes_label(done)}, "
+                          f"picking it up again ({attempt}/{DOWNLOAD_ATTEMPTS - 1})")
+            time.sleep(5 * attempt)
+            link.reconnect()
+    if on_status:
+        on_status(f"Checking {name}")
+    sha = hashlib.sha256()
+    with open(destination, "rb") as handle:
+        for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            sha.update(block)
+    if sha.hexdigest() != digest:
+        raise MigrateError(f"The download of {name} does not match the backup on the other server "
+                           "(checksum differs); it was not imported")
+
+
+def _pull_cpanel(link: Link, account: str, stage, ensure_room, on_status: StatusFn = None,
+                 on_progress: ProgressFn = None, size_hint: int = 0) -> str:
+    """One cPanel account: packed there (detached), downloaded (resumable,
+    checked), and only then removed there. Whatever happens, the run there is
+    stopped and its folder removed - signing in again for it if need be."""
+    if size_hint:
+        ensure_room(size_hint)
+    folder = _cpanel_work_folder(link, size_hint)
+    try:
+        if on_status:
+            on_status(f"Packing {account} on the other server")
+        name, size = _pack_cpanel(link, account, folder, on_status)
+        ensure_room(size)
+        remote = posixpath.join(folder, name)
+        if on_status:
+            on_status(f"Checking {name} on the other server")
+        digest = _remote_sha256(link, remote, size)
+        # Imported under the name cPanel's importer knows, whatever pkgacct
+        # called it.
+        local_name = f"cpmove-{account}.tar" if name.endswith(".tar") else f"cpmove-{account}.tar.gz"
+        return stage(local_name, lambda destination: _download(
+            link, remote, size, destination, digest, name, on_status, on_progress))
+    finally:
+        try:
+            _stop_detached(link, folder)
+            link.run(f"rm -rf -- {shlex.quote(folder)}", LIST_TIMEOUT)
+        except Exception:  # noqa: BLE001 - best effort; the folder is root's and private
+            pass
 
 
 def _da_admin(client) -> str:
@@ -457,22 +760,26 @@ def _pack_fastpanel(client, account: str, folder: str) -> str:
 def pack_and_fetch(client, panel: str, account: str,
                    stage: Callable[[str, Callable[[str], None]], str],
                    ensure_room: Callable[[int], None],
-                   on_status: StatusFn = None, on_progress: ProgressFn = None) -> str:
+                   on_status: StatusFn = None, on_progress: ProgressFn = None, size_hint: int = 0) -> str:
     """Have the other server back up ``account``, download it, clean up there.
 
-    ``stage(name, pull)`` puts the archive where its kind is imported from -
-    calling ``pull(destination)`` to fill the file - and returns that path;
-    ``ensure_room(size)`` refuses an archive the disk here cannot take. The
-    folder on the other server goes whatever happens.
+    ``client`` is a signed-in client or a Link (which signs in again when the
+    connection drops). ``stage(name, pull)`` puts the archive where its kind
+    is imported from - calling ``pull(destination)`` to fill the file - and
+    returns that path; ``ensure_room(size)`` refuses an archive the disk here
+    cannot take; ``size_hint`` is the account's size as listed, when known.
+    The folder on the other server goes whatever happens.
     """
     check_account(account)
+    link = client if isinstance(client, Link) else Link(client=client)
+    if panel == "cpanel":
+        return _pull_cpanel(link, account, stage, ensure_room, on_status, on_progress, size_hint)
+    client = link.client
     folder = _work_folder(client)
     try:
         if on_status:
             on_status(f"Packing {account} on the other server")
-        if panel == "cpanel":
-            name = _pack_cpanel(client, account, folder, on_status)
-        elif panel == "directadmin":
+        if panel == "directadmin":
             name = _pack_directadmin(client, account, folder, on_status)
         elif panel == "fastpanel":
             name = _pack_fastpanel(client, account, folder)

@@ -13,6 +13,7 @@ only the panel's own backups and each Migration page only its own panel's.
 DirectAdmin restore was part of Backups > Restore before: a server that used
 it keeps it.
 """
+import hashlib
 import io
 import json
 import tarfile
@@ -263,7 +264,7 @@ def test_an_ssh_account_is_packed_and_lands_in_its_panels_folder(folders, monkey
         seen["pinned"] = pinned
         yield Session(), {"type": "ssh-ed25519", "fingerprint": pinned}
 
-    def pack(session, panel, account, stage, ensure_room, on_status=None, on_progress=None):
+    def pack(session, panel, account, stage, ensure_room, on_status=None, on_progress=None, size_hint=0):
         ensure_room(10)
         on_status(f"Packing {account} on the other server")
         return stage(f"cpmove-{account}.tar.gz", lambda destination: Path(destination).write_bytes(b"cp"))
@@ -309,12 +310,33 @@ class _FakeServer:
         self.fail_verify, self.pack_output = fail_verify, pack_output
         self.folder = "/home/bpanel-migrate.Ab12Cd34Ef"
 
+    # A cPanel archive as pkgacct leaves it: pkgacct runs detached there and
+    # is looked at until it ends (2026-11-14, as SNPanel).
+    ARCHIVE = b"archive"
+    statuses = 0
+
     def run(self, client, command, timeout):
         self.commands.append(command)
         if command.startswith("umask 077; mktemp"):
             return 0, self.folder + "\n", ""
         if command.startswith("rm -rf -- "):
             self.removed.append(command)
+            return 0, "", ""
+        if "setsid nohup nice -n 10" in command:
+            return 0, "4242\n", ""
+        if command.startswith("if [ -s ") and "STATE" in command:
+            self.statuses += 1
+            if self.fail_pack:
+                return 0, "STATE exit 1\nLOG pkgacct: no such user\nSIZE \n", ""
+            if self.statuses == 1:
+                return 0, "STATE running\nLOG Copying homedir\nSIZE 3\n", ""
+            return 0, f"STATE exit 0\nLOG pkgacct completed\nSIZE {len(self.ARCHIVE)}\n", ""
+        if command.startswith("stat --printf"):
+            return 0, f"{self.folder}/cpmove-bob.tar.gz\t{len(self.ARCHIVE)}\n", ""
+        if command.startswith("sha256sum "):
+            return 0, f"{hashlib.sha256(self.ARCHIVE).hexdigest()}  {command.split()[-1]}\n", ""
+        if command.startswith("P=$(cat "):
+            self.stopped = True
             return 0, "", ""
         if "tar -tf -" in command and "grep -m1" in command:
             # _verify_da_backup_full: empty = metadata only; a path = real data.
@@ -345,10 +367,19 @@ class _FakeServer:
                 server.downloaded = remote
                 Path(local).write_bytes(b"archive")
 
+            def open(self, remote, mode="rb"):
+                server.downloaded = remote
+                handle = io.BytesIO(server.ARCHIVE)
+                handle.prefetch = lambda *a, **k: None
+                return handle
+
             def close(self):
                 pass
 
         return Sftp()
+
+    def get_transport(self):
+        return SimpleNamespace(is_active=lambda: True)
 
 
 def _stage_into(folder):
@@ -368,7 +399,7 @@ def test_an_account_is_packed_there_downloaded_and_the_folder_removed(tmp_path, 
     rooms = []
     got = migrate_ssh.pack_and_fetch(server, panel, "bob", _stage_into(tmp_path), rooms.append)
     assert Path(got) == tmp_path / name and Path(got).read_bytes() == b"archive"
-    assert rooms == [1234], "the disk here is asked before the download"
+    assert rooms == [len(server.ARCHIVE) if panel == "cpanel" else 1234], "the disk here is asked before the download"
     assert server.downloaded == f"{server.folder}/{name}"
     assert server.removed == [f"rm -rf -- {server.folder}"]
     if panel == "fastpanel":
@@ -377,7 +408,9 @@ def test_an_account_is_packed_there_downloaded_and_the_folder_removed(tmp_path, 
         return
     pack = next(c for c in server.commands if "pkgacct" in c or "taskq" in c)
     if panel == "cpanel":
-        assert pack.startswith(f"/usr/local/cpanel/scripts/pkgacct bob {server.folder} ")
+        # In a session of its own, so a dropped connection does not end it.
+        assert "setsid nohup nice -n 10" in pack and f"/usr/local/cpanel/scripts/pkgacct bob {server.folder}" in pack
+        assert any(c.startswith("sha256sum ") for c in server.commands), "the download is checked"
     else:
         assert "select%30=bob" in pack and "owner=admin" in pack and "local%5Fpath=%2Fhome%2Fbpanel-migrate.Ab12Cd34Ef" in pack
         # Full backup: the data categories must be selected or DA writes a

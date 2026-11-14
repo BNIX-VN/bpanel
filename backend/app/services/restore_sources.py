@@ -846,7 +846,7 @@ def fetch(source: dict, key: str, size: int, db, on_status=None) -> tuple[str, b
     kind = key_kind(source, key)
     require_kind(kind)
     if source["kind"] == "ssh":
-        return _fetch_over_ssh(source, name, kind, on_status), True
+        return _fetch_over_ssh(source, name, kind, on_status, size), True
     if source["kind"] == "local":
         path, kind, where = local_archive(key)
         if where == "inbox":
@@ -890,23 +890,34 @@ def fetch(source: dict, key: str, size: int, db, on_status=None) -> tuple[str, b
     return staged, True
 
 
-def _fetch_over_ssh(source: dict, account: str, kind: str, on_status=None) -> str:
+def _fetch_over_ssh(source: dict, account: str, kind: str, on_status=None, size: int = 0) -> str:
     """Have the old server pack one account, bring the archive into the
     folder its kind is imported from, and return where it is.
 
     The server's key is the one it showed when it was listed: the root login
-    is only ever sent to that server.
+    is only ever sent to that server - also each time the connection drops
+    and the panel signs in again (2026-11-14, as SNPanel). ``size`` is the
+    account's size as listed.
     """
     if not source.get("host_key"):
         raise RestoreSourceError("List the server first, so its key can be checked")
     _ensure_foreign_dir(kind)
     folder = foreign_dir(kind)
-    with _ssh(source, pinned=source["host_key"]) as (session, _seen):
-        try:
-            return migrate_ssh.pack_and_fetch(
-                session, kind, account,
-                stage=lambda name, pull: _stage_foreign(pull, name, kind),
-                ensure_room=lambda size: _room_for(size, folder),
-                on_status=on_status)
-        except migrate_ssh.MigrateError as exc:
-            raise RestoreSourceError(str(exc)) from None
+
+    @contextmanager
+    def connect():
+        with _ssh(source, pinned=source["host_key"]) as (session, _seen):
+            yield session
+
+    link = migrate_ssh.Link(connect=connect)
+    try:
+        link.open()
+        return migrate_ssh.pack_and_fetch(
+            link, kind, account,
+            stage=lambda name, pull: _stage_foreign(pull, name, kind),
+            ensure_room=lambda need: _room_for(need, folder),
+            on_status=on_status, size_hint=size or 0)
+    except migrate_ssh.MigrateError as exc:
+        raise RestoreSourceError(str(exc)) from None
+    finally:
+        link.close()
