@@ -741,12 +741,13 @@ fetch_external_addon() {
   local slug="$1" project="$2" api tag work dest
   local py=(/usr/bin/python3 -I)
   api="$ADDONS_GITLAB_URL/api/v4/projects/${project//\//%2F}"
-  tag="$(curl -fsS --max-time 30 "$api/releases/permalink/latest" 2>/dev/null \
+  # permalink/latest answers with a redirect to the release itself.
+  tag="$(curl -fsSL --max-time 30 "$api/releases/permalink/latest" 2>/dev/null \
     | "${py[@]}" -c 'import json, sys; print(json.load(sys.stdin).get("tag_name", ""))' 2>/dev/null || true)"
   [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "No release of the $slug addon found at $ADDONS_GITLAB_URL/$project"
   work="$(mktemp -d)"
   echo "Fetching the $slug addon $tag from $ADDONS_GITLAB_URL/$project ..."
-  if ! curl -fsS --max-time 300 -o "$work/addon.tar.gz" "$api/repository/archive.tar.gz?sha=$tag"; then
+  if ! curl -fsSL --max-time 300 -o "$work/addon.tar.gz" "$api/repository/archive.tar.gz?sha=$tag"; then
     rm -rf "$work"; fail "Could not download the $slug addon $tag"
   fi
   mkdir "$work/addon"
