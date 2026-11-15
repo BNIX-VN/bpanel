@@ -41,6 +41,20 @@ def _cron_due(schedule: str, now: datetime) -> bool:
     )
 
 
+def send_to_target(db, target: SftpBackupTarget, archive: str, remote_name: str, on_progress=None) -> str:
+    """An archive to an S3 destination or to one an addon brings (Google
+    Drive), under ``remote_name``; where it went, as the run's message says it.
+    SFTP keeps its own path below, with its host-key pinning."""
+    from app.services import destinations
+
+    if destinations.is_external(target.kind):
+        with destinations.opened(target, db) as (driver, config):
+            remote = driver.upload(config, archive, remote_name, on_progress=on_progress)
+        return f"{target.name}:{remote}"
+    result = backup_s3.upload(target, archive, remote_name=remote_name)
+    return f"{target.name}:{result['remote_file']}"
+
+
 def _upload_if_configured(db, schedule: BackupSchedule, archive: str, on_progress=None) -> str:
     """Send the archive wherever the schedule points, under whatever name.
 
@@ -58,9 +72,8 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str, on_progres
 
     remote_name = backup_s3.stored_name(archive, getattr(schedule, "name_suffix", None))
 
-    if (target.kind or "sftp") == "s3":
-        result = backup_s3.upload(target, archive, remote_name=remote_name)
-        return f"{target.name}:{result['remote_file']}"
+    if (target.kind or "sftp") != "sftp":
+        return send_to_target(db, target, archive, remote_name, on_progress=on_progress)
 
     try:
         password = decrypt(target.password) if target.password else None

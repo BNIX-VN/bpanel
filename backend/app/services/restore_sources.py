@@ -63,7 +63,8 @@ import paramiko
 from app.core.config import settings
 from app.core.secrets import decrypt
 from app.models.entities import SftpBackupTarget
-from app.services import addons, backup, backup_s3, cpanel_import, da_import, fastpanel_import, migrate_ssh, ppk
+from app.services import (addons, backup, backup_s3, cpanel_import, da_import, destinations, fastpanel_import,
+                          migrate_ssh, ppk)
 from app.services.shell import shell
 
 # A key that is neither OpenSSH/PEM nor a PuTTY .ppk, or whose passphrase is
@@ -670,6 +671,17 @@ def _list_archives(source: dict, db) -> dict:
         return {"items": list_local(), "location": str(users_dir()), "host_key": None}
     if kind == "target":
         target = _target(db, source.get("target_id"))
+        if destinations.is_external(target.kind):
+            # An addon's destination (Google Drive): its driver lists it.
+            try:
+                with destinations.opened(target, db) as (driver, config):
+                    found = driver.listing(config)
+                    where = driver.summary(config)
+            except destinations.DestinationError as exc:
+                raise RestoreSourceError(str(exc)) from None
+            rows = _rows(_row(row["name"], row["key"], row.get("size"), row.get("modified")) for row in found)
+            return {"items": _newest_first(rows), "location": f"{destinations.label(target.kind)}: {where}",
+                    "host_key": None}
         if (target.kind or "sftp") == "s3":
             try:
                 rows = _rows(_row(row["name"], row["key"], row["size"], row["modified"])
@@ -711,6 +723,12 @@ def push(source: dict, local_file: str, db) -> str:
     name = Path(local_file).name
     if source["kind"] == "target":
         target = _target(db, source.get("target_id"))
+        if destinations.is_external(target.kind):
+            try:
+                with destinations.opened(target, db) as (driver, config):
+                    return driver.upload(config, local_file, name)
+            except destinations.DestinationError as exc:
+                raise RestoreSourceError(str(exc)) from None
         if (target.kind or "sftp") == "s3":
             try:
                 return backup_s3.upload(target, local_file, remote_name=name)["remote_file"]
@@ -864,7 +882,13 @@ def fetch(source: dict, key: str, size: int, db, on_status=None) -> tuple[str, b
     _room_for(size, folder)
     if source["kind"] == "target":
         target = _target(db, source.get("target_id"))
-        if (target.kind or "sftp") == "s3":
+        if destinations.is_external(target.kind):
+            try:
+                with destinations.opened(target, db) as (driver, config):
+                    staged = stage(lambda destination: driver.download(config, key, destination), name)
+            except destinations.DestinationError as exc:
+                raise RestoreSourceError(str(exc)) from None
+        elif (target.kind or "sftp") == "s3":
             def pull(destination: str) -> None:
                 backup_s3.download(target, key, destination)
             staged = stage(pull, name)

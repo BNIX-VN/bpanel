@@ -199,7 +199,8 @@ def test_the_scheduler_names_the_upload_before_sending_it():
     body = source[source.index("def _upload_if_configured"):]
     body = body[:body.index("\ndef _decode_user_ids")]
     assert "backup_s3.stored_name" in body
-    assert body.index("stored_name") < body.index("backup_s3.upload"), (
+    # S3 and an addon's destination go through send_to_target (2026-11-16).
+    assert body.index("stored_name") < body.index("send_to_target(db, target, archive, remote_name"), (
         "the name has to be decided before the upload, not after"
     )
     assert "remote_name=remote_name" in body, "and the SFTP path takes it too"

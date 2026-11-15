@@ -1410,7 +1410,11 @@ class SftpBackupTargetCreate(BaseModel):
     """An SSH server or an object store. `kind` decides which fields matter."""
 
     name: str = Field(min_length=2, max_length=100, pattern=r"^[A-Za-z0-9._ -]+$")
-    kind: str = Field(default="sftp", pattern=r"^(sftp|s3)$")
+    # sftp and s3 are the panel's own; any other is an addon's (Google Drive,
+    # services/destinations.py), checked by its driver against `options`.
+    kind: str = Field(default="sftp", pattern=r"^(sftp|s3|[a-z][a-z0-9]{1,7})$")
+    # The form fields of an addon kind, as its driver declared them.
+    options: dict = Field(default_factory=dict)
 
     # S3 and anything that speaks its API
     endpoint: Optional[str] = Field(default=None, max_length=255)
@@ -1470,8 +1474,21 @@ class SftpBackupTargetCreate(BaseModel):
             raise ValueError("Invalid prefix")
         return text
 
+    @field_validator("options")
+    @classmethod
+    def validate_options(cls, value: dict) -> dict:
+        # Plain values only, and not many: the driver reads them.
+        if len(value) > 20 or any(not isinstance(key, str) or len(key) > 40 for key in value):
+            raise ValueError("Invalid options")
+        if any(not isinstance(item, (str, int, float, bool, type(None))) or (isinstance(item, str) and len(item) > 2000)
+               for item in value.values()):
+            raise ValueError("Invalid options")
+        return value
+
     @model_validator(mode="after")
     def check_kind(self):
+        if self.kind not in ("sftp", "s3"):
+            return self           # an addon kind: its driver checks the options
         if self.kind == "s3":
             missing = [name for name in ("endpoint", "bucket", "access_key", "secret_key")
                        if not getattr(self, name)]
@@ -1503,6 +1520,8 @@ class SftpBackupTargetUpdate(SftpBackupTargetCreate):
 
     @model_validator(mode="after")
     def check_kind(self):
+        if self.kind not in ("sftp", "s3"):
+            return self
         if self.kind == "s3":
             missing = [name for name in ("endpoint", "bucket", "access_key") if not getattr(self, name)]
             if missing:
@@ -1529,6 +1548,12 @@ class SftpBackupTargetOut(BaseModel):
     is_active: bool
     host_key_type: Optional[str] = None
     host_key_fingerprint: Optional[str] = None
+    # An addon kind's: its label, one line about it, whether it is signed in
+    # (services/destinations.public_view). No secret is ever in here.
+    kind_label: str = ""
+    summary: str = ""
+    connected: bool = True
+    options: dict = Field(default_factory=dict)
 
     class Config:
         from_attributes = True

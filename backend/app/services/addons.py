@@ -327,6 +327,17 @@ CATALOGUE: dict[str, dict] = {
     },
 }
 
+# Addons whose code lives in a repository of their own (Google Drive backup,
+# 2026-11-16): named here all the same, shell-only, their version the one
+# on disk (services/external_addons.py).
+from app.services import external_addons as _external  # noqa: E402
+
+CATALOGUE.update(_external.catalogue_entries())
+
+
+def is_external(slug: str) -> bool:
+    return bool(CATALOGUE.get(slug, {}).get("external"))
+
 
 # Addons the panel no longer offers (operator, 2026-11-02: "Muốn cài sẽ dùng
 # lệnh để cài vào"). They are left out of the Addons page until installed,
