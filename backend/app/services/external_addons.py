@@ -129,8 +129,13 @@ class PanelApi:
     api_version = PANEL_API
 
     def __init__(self, slug: str):
+        from app.services.destinations import DestinationError
+
         self.slug = slug
         self.logger = logging.getLogger(f"bpanel.addon.{slug}")
+        # What a driver raises with a sentence the page shows: the addon does
+        # not import the panel's modules, so it works on OPanel as well.
+        self.DestinationError = DestinationError
 
     def register_destination(self, driver) -> None:
         from app.services import destinations
