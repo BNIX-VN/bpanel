@@ -154,3 +154,9 @@
 /* A private key field: its "Choose key file" button and the formats it takes. */
 .key-file-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:8px}
 .key-file-button.disabled input{cursor:not-allowed}
+
+/* Backups > Destinations: signing an addon destination in with a code. */
+.bk-connect p{margin:0 0 10px}
+.bk-connect-code code{font-size:22px;font-weight:700;letter-spacing:2px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt);color:var(--text)}
+.bk-connect-state{font-weight:600;color:var(--text)}
+.bk-connect-state.denied,.bk-connect-state.expired{color:var(--danger-text)}

@@ -221,6 +221,18 @@ def test_only_the_panels_own_list_names_an_addon_and_the_shell_knows_the_same():
     assert 'chown -R root:root "$dest.new"' in fetch and "-type l -delete" in fetch
 
 
+def test_the_page_offers_the_addon_kind_its_fields_and_the_sign_in_code():
+    app = (ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    assert "request('/maintenance/destination-kinds', { silent: true })" in app
+    assert "destinationKinds.filter(kind => !kind.builtin).map(kind => <option key={kind.kind} value={kind.kind}>" in app
+    assert "(addonKind.fields || []).map(field =>" in app, "its form is the fields its driver declared"
+    connect = app.split("async function connectDestination(target) {")[1].split("\n  }\n")[0]
+    assert "/connect/poll" in connect and "connectFlow.current !== flow.startedAt" in connect
+    assert "if (state === 'slow_down') wait += 5;" in connect, "Google's slow_down is honoured"
+    assert "kind?.auth === 'oauth_device' && !data.connected) connectDestination(data)" in app, "connected straight after saving"
+    assert "{destinationConnect.user_code}" in app and "destinationConnect.verification_url" in app
+
+
 def test_the_kind_is_a_short_word_and_the_options_plain_values():
     with pytest.raises(ValueError):
         SftpBackupTargetCreate(name="x1", kind="Drive!", options={})
