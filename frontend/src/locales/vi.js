@@ -2156,6 +2156,8 @@ export const vi = {
   "Failed ({n}): {names}": "Lỗi ({n}): {names}",
   "Google Drive backup": "Backup lên Google Drive",
   "Not connected": "Chưa kết nối",
+  "Folder in Google Drive": "Thư mục trong Google Drive",
+  "Made in the Drive the first time a backup goes there; a / makes folders inside folders.": "Được tạo trên Drive ở lần backup đầu tiên; dấu / tạo thư mục lồng nhau.",
   "Connect": "Kết nối",
   "Test": "Kiểm tra",
   "Connect again": "Kết nối lại",
