@@ -199,13 +199,7 @@ def import_database(db_name: str, input_file: str):
         raise FileNotFoundError("SQL file not found")
     if settings.command_dry_run:
         return shell.run(["mysql", safe_name], sensitive=True)
-    # The mysql client's own max_allowed_packet defaults to ~16 MB, so a single
-    # oversized statement -- a WordPress post with a base64-embedded image, a big
-    # serialised option, a long wp_postmeta row -- is rejected mid-import with
-    # "Got a packet bigger than 'max_allowed_packet'", leaving a half-loaded
-    # database. Raise the client limit so the whole dump loads; the server still
-    # enforces its own cap.
-    args = _mysql_args(["--max-allowed-packet=1G", safe_name])
+    args = _mysql_args([safe_name])
     with sql_path.open("rb") as source:
         completed = subprocess.run(args, stdin=source, capture_output=True, check=False)
     if completed.returncode != 0:
