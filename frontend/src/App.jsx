@@ -6046,7 +6046,7 @@ function App() {
     if (page !== 'updates') setUpdatesView('');
     if (isAuthenticated && page === 'security') {
       loadTwoFactorStatus();
-      if (isAdmin) { loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); }
+      if (isAdmin) { loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); loadNotifyMe(); }
       if (!websites.length) refreshAll();
     }
     if (isAuthenticated && page === 'panel-settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
@@ -12406,6 +12406,24 @@ function App() {
           </div>
         </div>}
       </section>
+      {(() => {
+        const ev = (notifyMe?.events || []).find(e => e.key === 'login_new_ip');
+        if (!ev) return null;
+        const muted = new Set(notifyMe?.muted || []);
+        return <section className="section">
+          <div className="section-title">
+            <div>
+              <h2>{t('Sign-in alerts')}</h2>
+              <p className="hint">{t('Email me when my account signs in from an address it has not been seen from before.')}</p>
+            </div>
+          </div>
+          <label className="check-line">
+            <input type="checkbox" checked={!muted.has('login_new_ip')} disabled={!!loading}
+              onChange={e => toggleNotifyEvent('login_new_ip', e.target.checked)} />
+            {t('Email me on sign-in from a new address')}
+          </label>
+        </section>;
+      })()}
     </>;
   }
 
