@@ -92,6 +92,12 @@ CATALOGUE: dict[str, dict] = {
     LIMITS: {
         "name": "Resource limits",
         "cli_only": True,
+        # The operator installs it from the shell for the accounts that need
+        # it; the panel admin never sees a tile for it on the Addons page (its
+        # limits still show on packages and accounts once it is on). The list
+        # still carries it so those forms know it is installed; the page skips
+        # anything "operator_only" when it draws the tiles.
+        "operator_only": True,
         "version": "1.0.0",
         "summary": "CPU, memory, processes and disk I/O limits for each hosting account.",
         "details": [

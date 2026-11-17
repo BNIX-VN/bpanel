@@ -8235,7 +8235,7 @@ function App() {
         onRefresh={loadAddons} refreshDisabled={!!loading}/>
       <section className="section">
         <div className="addon-rows">
-          {addons.items.map(addon => {
+          {addons.items.filter(addon => !addon.operator_only).map(addon => {
             const version = addon.installed ? (addon.installed_version || addon.version) : addon.version;
             const installedAt = addon.installed_at ? new Date(addon.installed_at) : null;
             const label = addonLabel(addon, t);
