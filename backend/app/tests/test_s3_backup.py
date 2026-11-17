@@ -291,7 +291,7 @@ def test_the_button_is_not_offered_while_a_run_is_in_flight():
     # the one that also has an onClick.
     line = next(l for l in page.splitlines()
                 if "runBackupScheduleNow(item)" in l and "onClick" in l)
-    assert "item.last_status === 'running'" in line
+    assert "item.running}" in line
 
 
 def test_the_handler_only_calls_helpers_it_can_actually_see():
@@ -322,7 +322,7 @@ def test_the_row_is_polled_until_the_run_stops():
     # (2026-11-13: also one started before the page was opened).
     assert "await loadBackupSchedules();" in handler.split("function pollBackupSchedule")[0]
     assert "forEach(row => pollBackupSchedule(row.id))" in page
-    assert "last_status === 'running'" in handler, "it has to know when to stop"
+    assert "row?.running" in handler, "it has to know when to stop"
 
 
 def test_run_now_and_delete_share_one_row():

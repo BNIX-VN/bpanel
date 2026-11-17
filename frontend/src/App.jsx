@@ -4602,8 +4602,9 @@ function App() {
     const data = await request('/maintenance/backup-schedules');
     if (data) {
       setBackupSchedules(data);
-      // A run started before this page opened is followed too.
-      data.filter(row => row.last_status === 'running').forEach(row => pollBackupSchedule(row.id));
+      // A run started before this page opened is followed too. `running` is the
+      // live heartbeat (fresh), so a run killed mid-way is not followed for ever.
+      data.filter(row => row.running).forEach(row => pollBackupSchedule(row.id));
     }
   }
 
@@ -4674,7 +4675,7 @@ function App() {
       const row = rows?.find(entry => entry.id === scheduleId);
       if (rows) setBackupSchedules(rows);
       misses = rows ? 0 : misses + 1;
-      if ((!rows && misses < 20) || row?.last_status === 'running') return tick();
+      if ((!rows && misses < 20) || row?.running) return tick();
       polledSchedules.current.delete(scheduleId);
       if (!row) return;
       if (row.last_status === 'error') setError(`Schedule failed - ${row.last_message || 'no detail'}`);
@@ -6070,6 +6071,14 @@ function App() {
     if (isAuthenticated && page === 'panel-settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
     if (isAuthenticated && page === 'mcp' && mcpAddonInstalled) loadMcpTokens();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
+  }, [isAuthenticated, page, currentUser?.role]);
+
+  // Keep the schedules list fresh on the backups page so a run the timer
+  // started shows up (then pollBackupSchedule follows it closely while it runs).
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'backups' || currentUser?.role !== 'admin') return undefined;
+    const timer = setInterval(loadBackupSchedules, 15000);
+    return () => clearInterval(timer);
   }, [isAuthenticated, page, currentUser?.role]);
 
   useEffect(() => {
@@ -11057,7 +11066,7 @@ function App() {
                   <span>
                     {item.is_active === false && <><span className="badge warn">{t('Paused')}</span>{' '}</>}
                     {scheduleUserLabel(item)} · <code>{item.schedule}</code> · {cronScheduleLabel(item.schedule)} · {targetName(item.target_id) || t('Local only')}{suffix ? ` · ${t(suffix)}` : ''}
-                    {item.last_status === 'running'
+                    {item.running
                       ? (item.progress?.total ? (() => {
                         // Run now says where it is: the account (of how many),
                         // what it is packing or sending, and who is through.
@@ -11080,7 +11089,7 @@ function App() {
                       </small>}
                   </span>
                   <div className="actions bk-row-actions">
-                    <button className="secondary-light" disabled={busy || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14} aria-hidden="true"/> {t('Run now')}</button>
+                    <button className="secondary-light" disabled={busy || item.running} onClick={() => runBackupScheduleNow(item)}><Play size={14} aria-hidden="true"/> {t('Run now')}</button>
                     <ActionMenu label={t('More actions for {name}', { name: scheduleUserLabel(item) })} items={[
                       { label: t('Edit schedule'), icon: Pencil, disabled: busy, onClick: () => openBackupSchedule(item) },
                       { label: t('Delete schedule'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteBackupSchedule(item.id) },

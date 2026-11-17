@@ -7,6 +7,11 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
+# A schedule counts as running while its heartbeat (running_since) is no older
+# than this. The runner refreshes it every ~20s, so a run killed mid-way stops
+# reading as running within this window instead of for ever.
+BACKUP_SCHEDULE_RUNNING_FRESH_SECONDS = 90
+
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 SUPPORTED_APP_TYPES = {"wordpress", "php", "static", "application", "proxy"}
@@ -1318,6 +1323,18 @@ class BackupScheduleOut(BaseModel):
     # While a Run now goes: percent, the account it is on (index of total),
     # its step, and the accounts done and failed so far. None otherwise.
     progress: Optional[dict] = None
+    running_since: Optional[datetime] = None
+    # True while a run's heartbeat is fresh, so a schedule the timer is running
+    # shows as running too (it has no Run-now progress to watch). A run killed
+    # mid-way lets this fall back to not-running once the heartbeat goes stale.
+    running: bool = False
+
+    @model_validator(mode="after")
+    def _derive_running(self):
+        if self.running_since is not None:
+            age = (datetime.utcnow() - self.running_since).total_seconds()
+            self.running = 0 <= age <= BACKUP_SCHEDULE_RUNNING_FRESH_SECONDS
+        return self
 
     @field_validator("user_ids", mode="before")
     @classmethod
