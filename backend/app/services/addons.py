@@ -407,8 +407,14 @@ def state() -> list[dict]:
 
 
 def listed() -> list[dict]:
-    """What the Addons page shows: a shell-only addon only once it is installed."""
-    return [entry for entry in state() if not entry["cli_only"] or entry["installed"]]
+    """What the Addons page shows: a shell-only addon only once it is installed;
+    an addon from a repository of its own (external, e.g. Google Drive) never -
+    it is installed, managed and removed only from the server's shell, not
+    offered to every customer, so the page stays silent about it on or off. It
+    still works once installed (it adds its backup destination); it just has no
+    tile here."""
+    return [entry for entry in state()
+            if not entry.get("external") and (not entry["cli_only"] or entry["installed"])]
 
 
 def install(slug: str) -> dict:
