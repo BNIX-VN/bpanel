@@ -1225,6 +1225,40 @@ def test_destination(target_id: int, db: Session = Depends(get_db), current_user
     return {"ok": True, "message": message}
 
 
+@router.get("/sftp-targets/{target_id}/objects")
+def list_destination_objects(target_id: int, db: Session = Depends(get_db),
+                             current_user: User = Depends(get_current_user)):
+    """What an addon destination is holding (Google Drive's Files button), so
+    the backups there can be seen and removed by hand."""
+    ensure_role(current_user.role, Role.admin)
+    target = _addon_target(db, target_id)
+    try:
+        with destinations.opened(target, db) as (driver, config):
+            rows, where = driver.listing(config), driver.summary(config)
+    except destinations.DestinationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"location": f"{destinations.label(target.kind)}: {where}",
+            "items": [{"key": row["key"], "name": row["name"], "size": row.get("size") or 0,
+                       "modified": row.get("modified") or ""} for row in rows]}
+
+
+@router.delete("/sftp-targets/{target_id}/objects")
+def delete_destination_object(target_id: int, key: str, request: Request, db: Session = Depends(get_db),
+                              current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    target = _addon_target(db, target_id)
+    try:
+        with destinations.opened(target, db) as (driver, config):
+            names = {row["key"]: row["name"] for row in driver.listing(config)}
+            if key not in names:
+                raise HTTPException(status_code=404, detail="That file is not in this destination")
+            driver.delete(config, key)
+    except destinations.DestinationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    log_action(db, current_user.id, "delete_destination_backup", target.name, names[key], request=request)
+    return {"deleted": key}
+
+
 # Where an archive of each kind is restored from, for an upload on the wrong
 # page (operator, 2026-10-27: each Migration page restores its own panel's
 # backups, Backups > Restore the panel's own, as on OPanel).

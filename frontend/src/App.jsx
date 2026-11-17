@@ -946,6 +946,8 @@ function App() {
   const [destinationKinds, setDestinationKinds] = useState([]);
   // An addon destination being signed in: the code shown, and how it stands.
   const [destinationConnect, setDestinationConnect] = useState(null);
+  // The files an addon destination (Google Drive) holds, when its Files is open.
+  const [targetObjects, setTargetObjects] = useState({ id: null, location: '', items: [] });
   const connectFlow = useRef(null);
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', kind: 'sftp', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true });
@@ -4734,6 +4736,22 @@ function App() {
   async function testDestination(target) {
     const data = await request(`/maintenance/sftp-targets/${target.id}/test`, { method: 'POST' }, t('Testing destination...'));
     if (data?.ok) setNotice(data.message || t('Destination works.'));
+  }
+
+  // The files an addon destination holds (Google Drive's "Files").
+  async function loadTargetObjects(id) {
+    if (targetObjects.id === id) { setTargetObjects({ id: null, location: '', items: [] }); return; }
+    const data = await request(`/maintenance/sftp-targets/${id}/objects`, {}, t('Reading destination...'));
+    if (data) setTargetObjects({ id, location: data.location || '', items: data.items || [] });
+  }
+
+  async function deleteTargetObject(id, key, name) {
+    if (!(await confirmDialog({ message: t('Delete {name} from this destination?', { name }), danger: true }))) return;
+    const data = await request(`/maintenance/sftp-targets/${id}/objects?key=${encodeURIComponent(key)}`, { method: 'DELETE' }, t('Deleting...'));
+    if (data?.deleted) {
+      setNotice(t('Deleted {name}.', { name }));
+      setTargetObjects(prev => ({ ...prev, items: prev.items.filter(item => item.key !== key) }));
+    }
   }
 
   // A blank schedule to add, or a saved one to edit.
@@ -11084,6 +11102,7 @@ function App() {
                 const uses = backupSchedules.filter(item => item.target_id === target.id).length;
                 const addon = isAddonKind(target.kind);
                 const signsIn = addon && destinationKind(target.kind)?.auth === 'oauth_device';
+                const canListFiles = addon && (!signsIn || target.connected);
                 return <div className="backup-item" key={target.id}>
                   <span>
                     <span className="badge">{destinationLabel(target)}</span>{' '}{target.name}
@@ -11095,6 +11114,8 @@ function App() {
                   <div className="actions bk-row-actions">
                     {signsIn && !target.connected && <button className="secondary-light" disabled={busy}
                       onClick={() => connectDestination(target)}><KeyRound size={14} aria-hidden="true"/> {t('Connect')}</button>}
+                    {canListFiles && <button className="secondary-light" disabled={busy} onClick={() => loadTargetObjects(target.id)}>
+                      <FolderOpen size={14} aria-hidden="true"/> {targetObjects.id === target.id ? t('Hide files') : t('Files')}</button>}
                     <ActionMenu label={t('More actions for {name}', { name: target.name })} items={[
                       ...(addon ? [{ label: t('Test'), icon: CheckCircle, disabled: busy || (signsIn && !target.connected), onClick: () => testDestination(target) }] : []),
                       ...(signsIn && target.connected ? [{ label: t('Connect again'), icon: KeyRound, disabled: busy, onClick: () => connectDestination(target) }] : []),
@@ -11105,6 +11126,20 @@ function App() {
                 </div>;
               })}
             </div>
+            {/* The files an addon destination holds (Google Drive), when its Files is open. */}
+            {targetObjects.id && <div className="backup-list target-objects">
+              <small className="bk-objects-where">{targetObjects.location}</small>
+              {targetObjects.items.length === 0
+                ? <EmptyState compact icon={Archive} message={t('Nothing in this destination yet.')} />
+                : targetObjects.items.map(item => <div className="backup-item" key={item.key}>
+                  <span>{item.name}<small>{formatBytes(item.size)}{item.modified ? ` · ${item.modified.slice(0, 19).replace('T', ' ')}` : ''}</small></span>
+                  <div className="actions bk-row-actions">
+                    <ActionMenu label={t('More actions for {name}', { name: item.name })} items={[
+                      { label: t('Delete from the destination'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteTargetObject(targetObjects.id, item.key, item.name) },
+                    ]}/>
+                  </div>
+                </div>)}
+            </div>}
           </div>
         </div>}
 
