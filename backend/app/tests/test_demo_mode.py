@@ -56,6 +56,11 @@ REVIEWED_READS = {
     "/api/maintenance/files/jobs/{job_id}", "/api/maintenance/files/{website_id}",
     "/api/maintenance/php-config", "/api/maintenance/php-extensions", "/api/maintenance/php-tune",
     "/api/maintenance/php-versions", "/api/maintenance/sftp-targets",
+    # An addon's destinations (Google Drive): the kinds a destination can be and
+    # their form fields (no secret is sent), and the archive names in a
+    # destination (a listing like the backups above; the download and delete
+    # are a POST and a DELETE, blocked from a demo visitor as writes).
+    "/api/maintenance/destination-kinds", "/api/maintenance/sftp-targets/{target_id}/objects",
     "/api/maintenance/user-backups/{user_id}", "/api/maintenance/user-restore-backups",
     "/api/malware/jobs", "/api/malware/jobs/latest", "/api/malware/jobs/{job_id}",
     "/api/malware/schedule", "/api/malware/status", "/api/mcp", "/api/mcp/tokens",

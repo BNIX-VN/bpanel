@@ -1,11 +1,36 @@
 from datetime import datetime
 import json
+import logging
 import subprocess
+import threading
 
 from app.core.database import SessionLocal
 from app.core.secrets import decrypt
 from app.models.entities import BackupSchedule, SftpBackupTarget, User
 from app.services import backup, backup_s3
+
+logger = logging.getLogger(__name__)
+
+HEARTBEAT_SECONDS = 20
+
+
+def _heartbeat_loop(schedule_id: int, label: list, stop: threading.Event) -> None:
+    """Keep a running schedule's heartbeat fresh on a session of its own until
+    the run ends, so the page keeps seeing it as running through a long pack or
+    upload. A Session is not shared across threads, hence its own one."""
+    while not stop.wait(HEARTBEAT_SECONDS):
+        hb = SessionLocal()
+        try:
+            s = hb.get(BackupSchedule, schedule_id)
+            if s is not None:
+                s.running_since = datetime.utcnow()
+                s.last_status = "running"
+                s.last_message = label[0]
+                hb.commit()
+        except Exception:  # noqa: BLE001 - a heartbeat must never break the run
+            logger.warning("backup schedule heartbeat failed", exc_info=True)
+        finally:
+            hb.close()
 
 
 def _field_matches(field: str, value: int) -> bool:
@@ -41,6 +66,20 @@ def _cron_due(schedule: str, now: datetime) -> bool:
     )
 
 
+def send_to_target(db, target: SftpBackupTarget, archive: str, remote_name: str, on_progress=None) -> str:
+    """An archive to an S3 destination or to one an addon brings (Google
+    Drive), under ``remote_name``; where it went, as the run's message says it.
+    SFTP keeps its own path below, with its host-key pinning."""
+    from app.services import destinations
+
+    if destinations.is_external(target.kind):
+        with destinations.opened(target, db) as (driver, config):
+            remote = driver.upload(config, archive, remote_name, on_progress=on_progress)
+        return f"{target.name}:{remote}"
+    result = backup_s3.upload(target, archive, remote_name=remote_name)
+    return f"{target.name}:{result['remote_file']}"
+
+
 def _upload_if_configured(db, schedule: BackupSchedule, archive: str, on_progress=None) -> str:
     """Send the archive wherever the schedule points, under whatever name.
 
@@ -58,9 +97,8 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str, on_progres
 
     remote_name = backup_s3.stored_name(archive, getattr(schedule, "name_suffix", None))
 
-    if (target.kind or "sftp") == "s3":
-        result = backup_s3.upload(target, archive, remote_name=remote_name)
-        return f"{target.name}:{result['remote_file']}"
+    if (target.kind or "sftp") != "sftp":
+        return send_to_target(db, target, archive, remote_name, on_progress=on_progress)
 
     try:
         password = decrypt(target.password) if target.password else None
@@ -144,6 +182,7 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None, on_progre
         schedule.last_run_at = now
         schedule.last_status = "error"
         schedule.last_message = "No users selected"
+        schedule.running_since = None
         db.commit()
         _notify_failure(schedule, ["No users selected"], now)
         return False
@@ -165,34 +204,58 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None, on_progre
             "done": list(done), "failed": list(failed),
         })
 
-    for index, user in enumerate(users):
-        try:
-            skipped: list = []
-            # Only a run someone watches (Run now) passes the hooks on.
-            packing = {"on_progress": lambda fraction, label, _i=index, _u=user.username:
-                       tell(_i, _u, fraction * pack_share, label)} if on_progress else {}
-            sending = {"on_progress": lambda sent, size, _i=index, _u=user.username:
-                       tell(_i, _u, pack_share + (1 - pack_share) * (sent / size if size else 1.0),
-                            "uploading")} if on_progress else {}
-            archive = backup.create_user_backup(user, db, skipped=skipped, **packing)
-            tell(index, user.username, pack_share, "uploading" if schedule.target_id else "")
-            target = _upload_if_configured(db, schedule, archive, **sending)
-            if schedule.target_id:
-                # The copies live on the destination now; keeping them here
-                # too doubled the disk a destination is meant to spare. A
-                # failed upload raised above and leaves the archive in place.
-                backup.discard_local_copy(archive)
-            backup.prune_user_backups(user.username, schedule.retention)
-            messages.append(f"{user.username}: {target}")
-            # An archive with a hole in it still ran, so it is not an error,
-            # but the operator has to be told before a restore needs the file.
-            if skipped:
-                warnings.append(f"{user.username}: {backup.describe_skipped(skipped)}")
-            done.append(user.username)
-        except Exception as exc:  # pragma: no cover - operational path
-            errors.append(f"{user.username}: {exc}")
-            failed.append(user.username)
-        tell(index, user.username, 1.0, "")
+    # Running from the first moment, with a heartbeat kept fresh in the
+    # background through every phase, so a schedule the timer is running (no
+    # Run-now progress to watch) still shows as running on the page.
+    hb_label = [f"Backing up {users[0].username} (1/{len(users)})"]
+    schedule.running_since = datetime.utcnow()
+    schedule.last_status = "running"
+    schedule.last_message = hb_label[0]
+    db.commit()
+    stop = threading.Event()
+    # The heartbeat re-reads the row by id on a session of its own; without a
+    # persisted id (a stubbed schedule in a test) there is nothing to refresh.
+    schedule_id = getattr(schedule, "id", None)
+    heartbeat = (threading.Thread(target=_heartbeat_loop, args=(schedule_id, hb_label, stop), daemon=True)
+                 if schedule_id is not None else None)
+    if heartbeat:
+        heartbeat.start()
+    try:
+        for index, user in enumerate(users):
+            hb_label[0] = f"Backing up {user.username} ({index + 1}/{len(users)})"
+            try:
+                skipped: list = []
+                # Only a run someone watches (Run now) passes the hooks on.
+                packing = {"on_progress": lambda fraction, label, _i=index, _u=user.username:
+                           tell(_i, _u, fraction * pack_share, label)} if on_progress else {}
+                sending = {"on_progress": lambda sent, size, _i=index, _u=user.username:
+                           tell(_i, _u, pack_share + (1 - pack_share) * (sent / size if size else 1.0),
+                                "uploading")} if on_progress else {}
+                archive = backup.create_user_backup(user, db, skipped=skipped, **packing)
+                if schedule.target_id:
+                    hb_label[0] = f"Uploading {user.username} ({index + 1}/{len(users)})"
+                tell(index, user.username, pack_share, "uploading" if schedule.target_id else "")
+                target = _upload_if_configured(db, schedule, archive, **sending)
+                if schedule.target_id:
+                    # The copies live on the destination now; keeping them here
+                    # too doubled the disk a destination is meant to spare. A
+                    # failed upload raised above and leaves the archive in place.
+                    backup.discard_local_copy(archive)
+                backup.prune_user_backups(user.username, schedule.retention)
+                messages.append(f"{user.username}: {target}")
+                # An archive with a hole in it still ran, so it is not an error,
+                # but the operator has to be told before a restore needs the file.
+                if skipped:
+                    warnings.append(f"{user.username}: {backup.describe_skipped(skipped)}")
+                done.append(user.username)
+            except Exception as exc:  # pragma: no cover - operational path
+                errors.append(f"{user.username}: {exc}")
+                failed.append(user.username)
+            tell(index, user.username, 1.0, "")
+    finally:
+        stop.set()
+        if heartbeat:
+            heartbeat.join(timeout=5)
 
     ok = not errors
     if ok:
@@ -202,6 +265,7 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None, on_progre
         schedule.last_status = "error"
         schedule.last_message = _short_message([f"ok {len(messages)} user(s)"] + errors + warnings)
     schedule.last_run_at = now
+    schedule.running_since = None
     db.commit()
     if not ok:
         _notify_failure(schedule, errors, now)

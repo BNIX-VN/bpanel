@@ -941,6 +941,14 @@ function App() {
   const [backupSchedules, setBackupSchedules] = useState([]);
   const [newBackupSchedule, setNewBackupSchedule] = useState({ user_ids: [], all_users: false, schedule: '0 2 * * *', target_id: '', name_suffix: 'full_date', retention: 7 });
   const [sftpTargets, setSftpTargets] = useState([]);
+  // The kinds the destination form offers: SFTP, S3 and each one an
+  // installed addon brings (Google Drive), with its own fields.
+  const [destinationKinds, setDestinationKinds] = useState([]);
+  // An addon destination being signed in: the code shown, and how it stands.
+  const [destinationConnect, setDestinationConnect] = useState(null);
+  // The files an addon destination (Google Drive) holds, when its Files is open.
+  const [targetObjects, setTargetObjects] = useState({ id: null, location: '', items: [] });
+  const connectFlow = useRef(null);
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', kind: 'sftp', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true });
   // The restore catalogue: local archives and whatever is in each S3 bucket,
@@ -4594,8 +4602,9 @@ function App() {
     const data = await request('/maintenance/backup-schedules');
     if (data) {
       setBackupSchedules(data);
-      // A run started before this page opened is followed too.
-      data.filter(row => row.last_status === 'running').forEach(row => pollBackupSchedule(row.id));
+      // A run started before this page opened is followed too. `running` is the
+      // live heartbeat (fresh), so a run killed mid-way is not followed for ever.
+      data.filter(row => row.running).forEach(row => pollBackupSchedule(row.id));
     }
   }
 
@@ -4666,7 +4675,7 @@ function App() {
       const row = rows?.find(entry => entry.id === scheduleId);
       if (rows) setBackupSchedules(rows);
       misses = rows ? 0 : misses + 1;
-      if ((!rows && misses < 20) || row?.last_status === 'running') return tick();
+      if ((!rows && misses < 20) || row?.running) return tick();
       polledSchedules.current.delete(scheduleId);
       if (!row) return;
       if (row.last_status === 'error') setError(`Schedule failed - ${row.last_message || 'no detail'}`);
@@ -4686,6 +4695,63 @@ function App() {
     if (data) {
       setSftpTargets(data);
       if (!selectedSftpTargetId && data[0]) setSelectedSftpTargetId(String(data[0].id));
+    }
+    const kinds = await request('/maintenance/destination-kinds', { silent: true });
+    if (kinds?.kinds) setDestinationKinds(kinds.kinds);
+  }
+
+  const destinationKind = kind => destinationKinds.find(entry => entry.kind === kind);
+  const isAddonKind = kind => !!kind && kind !== 'sftp' && kind !== 's3';
+  const destinationLabel = target => target.kind_label || (target.kind === 's3' ? 'S3' : 'SFTP');
+
+  // Signing an addon destination in (Google Drive): the page shows a code and
+  // where to enter it, then asks every few seconds whether it was entered.
+  async function connectDestination(target) {
+    const data = await request(`/maintenance/sftp-targets/${target.id}/connect`, { method: 'POST' }, t('Asking for a code...'));
+    if (!data?.user_code) return;
+    const flow = { target, ...data, state: 'pending', startedAt: Date.now() };
+    connectFlow.current = flow.startedAt;
+    setDestinationConnect(flow);
+    let wait = Math.max(Number(data.interval) || 5, 3);
+    const poll = () => window.setTimeout(async () => {
+      // Closed, or another sign-in started since: this one stops asking.
+      if (connectFlow.current !== flow.startedAt) return;
+      const result = await request(`/maintenance/sftp-targets/${target.id}/connect/poll`, { method: 'POST', silent: true });
+      const state = result?.state || 'pending';
+      if (state === 'slow_down') wait += 5;
+      if (state === 'pending' || state === 'slow_down' || !result) {
+        if (Date.now() - flow.startedAt < (Number(data.expires_in) || 900) * 1000) return poll();
+        setDestinationConnect(prev => prev && prev.startedAt === flow.startedAt ? { ...prev, state: 'expired' } : prev);
+        return;
+      }
+      setDestinationConnect(prev => prev && prev.startedAt === flow.startedAt ? { ...prev, state } : prev);
+      if (state === 'done') {
+        setNotice(t('{name} is connected.', { name: target.name }));
+        await loadSftpTargets();
+        window.setTimeout(() => setDestinationConnect(prev => prev && prev.startedAt === flow.startedAt ? null : prev), 1500);
+      }
+    }, wait * 1000);
+    poll();
+  }
+
+  async function testDestination(target) {
+    const data = await request(`/maintenance/sftp-targets/${target.id}/test`, { method: 'POST' }, t('Testing destination...'));
+    if (data?.ok) setNotice(data.message || t('Destination works.'));
+  }
+
+  // The files an addon destination holds (Google Drive's "Files").
+  async function loadTargetObjects(id) {
+    if (targetObjects.id === id) { setTargetObjects({ id: null, location: '', items: [] }); return; }
+    const data = await request(`/maintenance/sftp-targets/${id}/objects`, {}, t('Reading destination...'));
+    if (data) setTargetObjects({ id, location: data.location || '', items: data.items || [] });
+  }
+
+  async function deleteTargetObject(id, key, name) {
+    if (!(await confirmDialog({ message: t('Delete {name} from this destination?', { name }), danger: true }))) return;
+    const data = await request(`/maintenance/sftp-targets/${id}/objects?key=${encodeURIComponent(key)}`, { method: 'DELETE' }, t('Deleting...'));
+    if (data?.deleted) {
+      setNotice(t('Deleted {name}.', { name }));
+      setTargetObjects(prev => ({ ...prev, items: prev.items.filter(item => item.key !== key) }));
     }
   }
 
@@ -4711,9 +4777,11 @@ function App() {
       remote_path: target.remote_path || '/backups/bpanel', endpoint: target.endpoint || '', region: target.region || '',
       bucket: target.bucket || '', access_key: target.access_key || '', secret_key: '', prefix: target.prefix || '',
       secure: target.secure !== false, reset_host_key: false, pinned: target.host_key_fingerprint || '',
+      options: { ...(target.options || {}) },
     } : {
       name: '', kind: newSftpTarget.id ? 'sftp' : newSftpTarget.kind, host: '', port: 22, username: '', password: '', private_key: '',
       remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true,
+      options: {},
     });
     setDestinationSheet(true);
   }
@@ -4722,6 +4790,24 @@ function App() {
     const isS3 = newSftpTarget.kind === 's3';
     const { id: editing, ...fields } = newSftpTarget;
     delete fields.pinned;
+    if (isAddonKind(newSftpTarget.kind)) {
+      // An addon's kind (Google Drive): its own fields; one that signs in
+      // with a code is connected straight after it is first saved.
+      const kind = destinationKind(newSftpTarget.kind);
+      // A field shown with its default and left alone still sends it.
+      const defaults = Object.fromEntries((kind?.fields || []).filter(field => field.default !== undefined)
+        .map(field => [field.name, field.default]));
+      const data = await request(editing ? `/maintenance/sftp-targets/${editing}` : '/maintenance/sftp-targets', {
+        method: editing ? 'PUT' : 'POST',
+        body: JSON.stringify({ name: newSftpTarget.name, kind: newSftpTarget.kind, options: { ...defaults, ...(newSftpTarget.options || {}) } }),
+      }, t('Saving backup destination...'));
+      if (data) {
+        setNotice(t('Saved {kind} destination {name}', { kind: data.kind_label || kind?.label || data.kind, name: data.name }));
+        await loadSftpTargets();
+        if (kind?.auth === 'oauth_device' && !data.connected) connectDestination(data);
+      }
+      return !!data;
+    }
     const body = {
       ...fields,
       port: Number(newSftpTarget.port || 22),
@@ -5985,6 +6071,14 @@ function App() {
     if (isAuthenticated && page === 'panel-settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
     if (isAuthenticated && page === 'mcp' && mcpAddonInstalled) loadMcpTokens();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
+  }, [isAuthenticated, page, currentUser?.role]);
+
+  // Keep the schedules list fresh on the backups page so a run the timer
+  // started shows up (then pollBackupSchedule follows it closely while it runs).
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'backups' || currentUser?.role !== 'admin') return undefined;
+    const timer = setInterval(loadBackupSchedules, 15000);
+    return () => clearInterval(timer);
   }, [isAuthenticated, page, currentUser?.role]);
 
   useEffect(() => {
@@ -8150,7 +8244,7 @@ function App() {
         onRefresh={loadAddons} refreshDisabled={!!loading}/>
       <section className="section">
         <div className="addon-rows">
-          {addons.items.map(addon => {
+          {addons.items.filter(addon => !addon.operator_only).map(addon => {
             const version = addon.installed ? (addon.installed_version || addon.version) : addon.version;
             const installedAt = addon.installed_at ? new Date(addon.installed_at) : null;
             const label = addonLabel(addon, t);
@@ -10581,7 +10675,7 @@ function App() {
             <select value={restoreTargetId} disabled={!!loading || jobActive} aria-label={t('Destination')}
               onChange={e => { setRestoreTargetId(e.target.value); if (e.target.value) listRestoreSource(`target:${e.target.value}`); }}>
               {!restoreTargetId && <option value="">{t('Choose a destination')}</option>}
-              {targets.map(target => <option key={target.id} value={target.id}>{target.name} ({target.kind === 's3' ? 'S3' : 'SFTP'})</option>)}
+              {targets.map(target => <option key={target.id} value={target.id}>{target.name} ({destinationLabel(target)})</option>)}
             </select>
             <div className="actions restore-local-actions">{restoreRefresh}{restoreUpload}</div>
           </div>
@@ -10864,9 +10958,13 @@ function App() {
     // A saved destination keeps its password, key or secret when left empty.
     const editingTarget = !!newSftpTarget.id;
     const keepHint = t('Saved secrets are kept when this is left empty.');
-    const destinationReady = !!newSftpTarget.name && (newSftpTarget.kind === 's3'
-      ? (!!newSftpTarget.endpoint && !!newSftpTarget.bucket && !!newSftpTarget.access_key && (editingTarget || !!newSftpTarget.secret_key))
-      : (!!newSftpTarget.host && !!newSftpTarget.username && (editingTarget || !!newSftpTarget.password || !!newSftpTarget.private_key)));
+    const addonKind = isAddonKind(newSftpTarget.kind) ? destinationKind(newSftpTarget.kind) : null;
+    const destinationReady = !!newSftpTarget.name && (addonKind
+      ? (addonKind.fields || []).every(field => !field.required || field.secret || String((newSftpTarget.options || {})[field.name] ?? '').trim())
+      : newSftpTarget.kind === 's3'
+        ? (!!newSftpTarget.endpoint && !!newSftpTarget.bucket && !!newSftpTarget.access_key && (editingTarget || !!newSftpTarget.secret_key))
+        : (!!newSftpTarget.host && !!newSftpTarget.username && (editingTarget || !!newSftpTarget.password || !!newSftpTarget.private_key)));
+    const setOption = name => e => setNewSftpTarget(prev => ({ ...prev, options: { ...(prev.options || {}), [name]: e.target.value } }));
     const setTarget = key => e => setNewSftpTarget(prev => ({ ...prev, [key]: e.target.value }));
     const backupRow = (file, { onDownload, onRestore, restoreLabel, onDelete, sub, restoreDisabled = false }) => <div className="backup-item" key={file}>
       <span>{file.split('/').pop()}{sub && <small>{sub}</small>}</span>
@@ -10968,7 +11066,7 @@ function App() {
                   <span>
                     {item.is_active === false && <><span className="badge warn">{t('Paused')}</span>{' '}</>}
                     {scheduleUserLabel(item)} · <code>{item.schedule}</code> · {cronScheduleLabel(item.schedule)} · {targetName(item.target_id) || t('Local only')}{suffix ? ` · ${t(suffix)}` : ''}
-                    {item.last_status === 'running'
+                    {item.running
                       ? (item.progress?.total ? (() => {
                         // Run now says where it is: the account (of how many),
                         // what it is packing or sending, and who is through.
@@ -10991,7 +11089,7 @@ function App() {
                       </small>}
                   </span>
                   <div className="actions bk-row-actions">
-                    <button className="secondary-light" disabled={busy || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14} aria-hidden="true"/> {t('Run now')}</button>
+                    <button className="secondary-light" disabled={busy || item.running} onClick={() => runBackupScheduleNow(item)}><Play size={14} aria-hidden="true"/> {t('Run now')}</button>
                     <ActionMenu label={t('More actions for {name}', { name: scheduleUserLabel(item) })} items={[
                       { label: t('Edit schedule'), icon: Pencil, disabled: busy, onClick: () => openBackupSchedule(item) },
                       { label: t('Delete schedule'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteBackupSchedule(item.id) },
@@ -11011,15 +11109,25 @@ function App() {
             <div className="backup-list">
               {sftpTargets.map(target => {
                 const uses = backupSchedules.filter(item => item.target_id === target.id).length;
+                const addon = isAddonKind(target.kind);
+                const signsIn = addon && destinationKind(target.kind)?.auth === 'oauth_device';
+                const canListFiles = addon && (!signsIn || target.connected);
                 return <div className="backup-item" key={target.id}>
                   <span>
-                    <span className="badge">{target.kind === 's3' ? 'S3' : 'SFTP'}</span>{' '}{target.name}
-                    <small>{target.kind === 's3'
+                    <span className="badge">{destinationLabel(target)}</span>{' '}{target.name}
+                    {signsIn && !target.connected && <>{' '}<span className="badge warn">{t('Not connected')}</span></>}
+                    <small>{addon ? target.summary : target.kind === 's3'
                       ? `${target.endpoint}/${target.bucket}${target.prefix ? '/' + target.prefix : ''}`
                       : `${target.username}@${target.host}:${target.remote_path}`}{uses ? ` · ${t('Full backups: {count} schedule(s)', { count: uses })}` : ''}</small>
                   </span>
                   <div className="actions bk-row-actions">
+                    {signsIn && !target.connected && <button className="secondary-light" disabled={busy}
+                      onClick={() => connectDestination(target)}><KeyRound size={14} aria-hidden="true"/> {t('Connect')}</button>}
+                    {canListFiles && <button className="secondary-light" disabled={busy} onClick={() => loadTargetObjects(target.id)}>
+                      <FolderOpen size={14} aria-hidden="true"/> {targetObjects.id === target.id ? t('Hide files') : t('Files')}</button>}
                     <ActionMenu label={t('More actions for {name}', { name: target.name })} items={[
+                      ...(addon ? [{ label: t('Test'), icon: CheckCircle, disabled: busy || (signsIn && !target.connected), onClick: () => testDestination(target) }] : []),
+                      ...(signsIn && target.connected ? [{ label: t('Connect again'), icon: KeyRound, disabled: busy, onClick: () => connectDestination(target) }] : []),
                       { label: t('Edit destination'), icon: Pencil, disabled: busy, onClick: () => openSftpTarget(target) },
                       { label: t('Delete'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteSftpTarget(target.id) },
                     ]}/>
@@ -11027,6 +11135,20 @@ function App() {
                 </div>;
               })}
             </div>
+            {/* The files an addon destination holds (Google Drive), when its Files is open. */}
+            {targetObjects.id && <div className="backup-list target-objects">
+              <small className="bk-objects-where">{targetObjects.location}</small>
+              {targetObjects.items.length === 0
+                ? <EmptyState compact icon={Archive} message={t('Nothing in this destination yet.')} />
+                : targetObjects.items.map(item => <div className="backup-item" key={item.key}>
+                  <span>{item.name}<small>{formatBytes(item.size)}{item.modified ? ` · ${item.modified.slice(0, 19).replace('T', ' ')}` : ''}</small></span>
+                  <div className="actions bk-row-actions">
+                    <ActionMenu label={t('More actions for {name}', { name: item.name })} items={[
+                      { label: t('Delete from the destination'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteTargetObject(targetObjects.id, item.key, item.name) },
+                    ]}/>
+                  </div>
+                </div>)}
+            </div>}
           </div>
         </div>}
 
@@ -11087,7 +11209,11 @@ function App() {
       </Drawer>
 
       <Drawer open={destinationSheet} onClose={() => setDestinationSheet(false)} title={editingTarget ? t('Edit destination') : t('Add destination')}
-        subtitle={newSftpTarget.kind === 's3'
+        subtitle={addonKind
+          ? (addonKind.auth === 'oauth_device'
+            ? t('Saved first, then connected: the panel shows a code to enter at the address it gives, on any device.')
+            : addonKind.label)
+          : newSftpTarget.kind === 's3'
           ? t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')
           : t('An SFTP server the backups are copied to.')}
         footer={<>
@@ -11101,10 +11227,21 @@ function App() {
               <select value={newSftpTarget.kind} disabled={editingTarget} onChange={setTarget('kind')}>
                 <option value="sftp">SFTP</option>
                 <option value="s3">{t('S3 compatible')}</option>
+                {/* Each kind an installed addon brings (Google Drive). */}
+                {destinationKinds.filter(kind => !kind.builtin).map(kind => <option key={kind.kind} value={kind.kind}>{kind.label}</option>)}
               </select>
             </Field>
           </div>
-          {newSftpTarget.kind === 'sftp' ? <div className="sn-drawer-grid">
+          {addonKind ? <div className="sn-drawer-grid">
+            {(addonKind.fields || []).map(field => <Field key={field.name} className="is-wide" label={t(field.label || field.name)}
+              required={!!field.required && !field.secret} hint={field.hint ? t(field.hint) : undefined}>
+              {field.type === 'password'
+                ? <PasswordField value={(newSftpTarget.options || {})[field.name] || ''} autoComplete="off"
+                  onChange={value => setNewSftpTarget(prev => ({ ...prev, options: { ...(prev.options || {}), [field.name]: value } }))} />
+                : <input value={(newSftpTarget.options || {})[field.name] ?? field.default ?? ''} onChange={setOption(field.name)}
+                  inputMode={field.type === 'number' ? 'numeric' : undefined} autoComplete="off" spellCheck={false} />}
+            </Field>)}
+          </div> : newSftpTarget.kind === 'sftp' ? <div className="sn-drawer-grid">
             <Field label={t('Host')} required><input value={newSftpTarget.host} onChange={setTarget('host')} autoComplete="off" spellCheck={false} /></Field>
             <Field label={t('Port')}><input value={newSftpTarget.port} onChange={setTarget('port')} placeholder="22" inputMode="numeric" /></Field>
             <Field label={t('Username')} required><input value={newSftpTarget.username} onChange={setTarget('username')} autoComplete="off" spellCheck={false} /></Field>
@@ -11128,6 +11265,29 @@ function App() {
             <Checkbox className="is-wide" checked={!!newSftpTarget.secure} label={t('Use HTTPS')} onChange={on => setNewSftpTarget(prev => ({ ...prev, secure: on }))}/>
           </div>}
         </form>
+      </Drawer>
+
+      {/* Signing an addon destination in (Google Drive): the code, where to
+          enter it, and how it stands - asked again every few seconds. */}
+      <Drawer open={!!destinationConnect} onClose={() => { connectFlow.current = null; setDestinationConnect(null); }}
+        title={destinationConnect ? t('Connect {name}', { name: destinationConnect.target.name }) : ''}
+        subtitle={destinationConnect ? destinationLabel(destinationConnect.target) : ''}
+        footer={<button type="button" className="secondary-light" onClick={() => { connectFlow.current = null; setDestinationConnect(null); }}>
+          {destinationConnect?.state === 'pending' ? t('Cancel') : t('Close')}</button>}>
+        {destinationConnect && <div className="bk-connect">
+          <p>{t('1. Open this address, on this computer or on your phone:')}</p>
+          <p><a href={destinationConnect.verification_url} target="_blank" rel="noopener noreferrer">{destinationConnect.verification_url}</a></p>
+          <p>{t('2. Sign in with the Google account the backups should go to, and enter this code:')}</p>
+          <p className="bk-connect-code"><code>{destinationConnect.user_code}</code>{' '}
+            <button type="button" className="secondary-light" onClick={() => navigator.clipboard?.writeText(destinationConnect.user_code)}>
+              <Copy size={14} aria-hidden="true"/> {t('Copy')}</button></p>
+          <p className={`bk-connect-state ${destinationConnect.state}`}>{{
+            pending: t('Waiting for the code to be entered...'),
+            done: t('Connected.'),
+            denied: t('Access was refused on the Google page. Connect again to retry.'),
+            expired: t('The code expired before it was entered. Connect again for a new one.'),
+          }[destinationConnect.state] || destinationConnect.state}</p>
+        </div>}
       </Drawer>
     </>;
   }

@@ -112,4 +112,4 @@ def test_the_page_shows_it_and_follows_the_run_to_its_end():
     assert "t('Done ({n}): {names}'" in APP
     poll = APP.split("function pollBackupSchedule(")[1].split("\n  }\n")[0]
     assert "attempts" not in poll, "it stopped looking after five minutes"
-    assert "data.filter(row => row.last_status === 'running').forEach(row => pollBackupSchedule(row.id))" in APP
+    assert "data.filter(row => row.running).forEach(row => pollBackupSchedule(row.id))" in APP

@@ -149,6 +149,17 @@ def perform_install(slug: str, db: Session, actor_id: int | None) -> dict:
             panel_settings.set_malware_scan(True)
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
+    if addons.is_external(slug):
+        # Its code is on disk (bpanelctl fetched it as root): it must be
+        # root's alone and fit this panel before it is called installed.
+        from app.services import external_addons
+
+        try:
+            info = external_addons.verify(slug)
+        except external_addons.AddonError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        entry = {**entry, "version": str(info.get("version") or "")}
+        addons.CATALOGUE[slug]["version"] = entry["version"]
     record = addons.install(slug)
     if slug == addons.DNS:
         # Every domain already on the server gets its zone now.
@@ -201,7 +212,9 @@ def perform_install(slug: str, db: Session, actor_id: int | None) -> dict:
                                     "This server is registering with the collector; its status is on the Firewall page."
                                     if slug == addons.SHARED_BLOCKLIST else (
                                         "Each package gives 64 MB unless you change it on the package. Customers turn their Redis on on the Redis page."
-                                        if slug == addons.REDIS_ACCOUNTS else ""
+                                        if slug == addons.REDIS_ACCOUNTS else (
+                                            "The panel restarts to load it. Then add the destination under Backups > Destinations."
+                                            if addons.is_external(slug) else "")
                                     )
                                 )
                             )
@@ -236,6 +249,20 @@ def perform_uninstall(slug: str, db: Session, actor_id: int | None, purge: bool 
     entry = addons.known(slug)
     stopped: list[str] = []
     failed: list[str] = []
+    if addons.is_external(slug):
+        # A destination of its kind would be left that nothing can reach:
+        # schedules sending to it would fail every night.
+        from app.models.entities import SftpBackupTarget
+        from app.services import destinations, external_addons
+
+        # The shell's `bpanel addon remove` has not loaded it: its manifest
+        # says which kinds are its.
+        kinds = sorted({*(external_addons.manifest(slug).get("kinds") or []),
+                        *(kind for kind, owner in destinations._addon_of.items() if owner == slug)})
+        left = db.query(SftpBackupTarget).filter(SftpBackupTarget.kind.in_(kinds)).all() if kinds else []
+        if left:
+            raise HTTPException(status_code=409, detail=(
+                f"Delete the {entry['name']} destinations first: {', '.join(target.name for target in left)}"))
     if slug == addons.APPLICATION:
         for app in db.query(SiteApp).all():
             try:

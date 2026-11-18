@@ -199,7 +199,8 @@ def test_the_scheduler_names_the_upload_before_sending_it():
     body = source[source.index("def _upload_if_configured"):]
     body = body[:body.index("\ndef _decode_user_ids")]
     assert "backup_s3.stored_name" in body
-    assert body.index("stored_name") < body.index("backup_s3.upload"), (
+    # S3 and an addon's destination go through send_to_target (2026-11-16).
+    assert body.index("stored_name") < body.index("send_to_target(db, target, archive, remote_name"), (
         "the name has to be decided before the upload, not after"
     )
     assert "remote_name=remote_name" in body, "and the SFTP path takes it too"
@@ -290,7 +291,7 @@ def test_the_button_is_not_offered_while_a_run_is_in_flight():
     # the one that also has an onClick.
     line = next(l for l in page.splitlines()
                 if "runBackupScheduleNow(item)" in l and "onClick" in l)
-    assert "item.last_status === 'running'" in line
+    assert "item.running}" in line
 
 
 def test_the_handler_only_calls_helpers_it_can_actually_see():
@@ -321,7 +322,7 @@ def test_the_row_is_polled_until_the_run_stops():
     # (2026-11-13: also one started before the page was opened).
     assert "await loadBackupSchedules();" in handler.split("function pollBackupSchedule")[0]
     assert "forEach(row => pollBackupSchedule(row.id))" in page
-    assert "last_status === 'running'" in handler, "it has to know when to stop"
+    assert "row?.running" in handler, "it has to know when to stop"
 
 
 def test_run_now_and_delete_share_one_row():

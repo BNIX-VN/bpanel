@@ -51,9 +51,11 @@ def main(argv: list[str]) -> int:
         return 2
     name = addons.CATALOGUE[slug]["name"]
     installed = addons.is_installed(slug)
-    if action == "install" and installed:
+    if action == "install" and installed and not addons.is_external(slug):
         print(f"Not done: {name} is already installed")
         return 1
+    # An addon from its own repository installed again is brought to its
+    # latest release: bpanelctl has just fetched it.
     if action == "remove" and not installed:
         print(f"Not done: {name} is not installed")
         return 1

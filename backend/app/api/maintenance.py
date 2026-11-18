@@ -49,6 +49,7 @@ from app.services import (
     backup,
     backup_s3,
     cron,
+    destinations,
     file_manager,
     php,
     restore_sources,
@@ -475,6 +476,15 @@ def upload_archive_to_target(db: Session, target_id: int, archive: str) -> tuple
     target = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == target_id).first()
     if not target or not target.is_active:
         raise HTTPException(status_code=404, detail="SFTP target not found")
+    if destinations.is_external(target.kind) or target.kind == "s3":
+        # An addon's destination (Google Drive), or S3 - which this used to
+        # hand to SFTP: the archive goes under its own name.
+        from app.services import backup_scheduler
+
+        try:
+            return target.name, backup_scheduler.send_to_target(db, target, archive, Path(archive).name)
+        except (destinations.DestinationError, backup_s3.S3Error) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     try:
         result = backup.upload_to_sftp(
             archive,
@@ -1005,10 +1015,34 @@ def delete_backup_schedule(schedule_id: int, request: Request, db: Session = Dep
     return {"ok": True}
 
 
+def _target_out(target: SftpBackupTarget) -> SftpBackupTargetOut:
+    """A destination as the page sees it; an addon kind with its label, one
+    line about it and whether it is signed in, never a secret."""
+    out = SftpBackupTargetOut.model_validate(target)
+    for key, value in destinations.public_view(target).items():
+        setattr(out, key, value)
+    return out
+
+
+def _addon_driver(kind: str):
+    try:
+        return destinations.driver_for(kind)
+    except destinations.DestinationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/destination-kinds")
+def list_destination_kinds(current_user: User = Depends(get_current_user)):
+    """What the destination form offers: SFTP, S3, and each kind an installed
+    addon brings, with the fields its form asks for."""
+    ensure_role(current_user.role, Role.admin)
+    return {"kinds": destinations.kinds()}
+
+
 @router.get("/sftp-targets", response_model=list[SftpBackupTargetOut])
 def list_sftp_targets(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    return db.query(SftpBackupTarget).order_by(SftpBackupTarget.id.desc()).all()
+    return [_target_out(target) for target in db.query(SftpBackupTarget).order_by(SftpBackupTarget.id.desc()).all()]
 
 
 @router.post("/sftp-targets", response_model=SftpBackupTargetOut)
@@ -1051,12 +1085,21 @@ def create_sftp_target(
             backup_s3.check(target)
         except backup_s3.S3Error as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif destinations.is_external(payload.kind):
+        # An addon's kind (Google Drive): its driver reads the form; one that
+        # signs in with a code is connected from the list afterwards.
+        driver = _addon_driver(payload.kind)
+        target.remote_path = ""
+        try:
+            destinations.write_config(target, driver.validate(dict(payload.options), {}))
+        except destinations.DestinationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     db.add(target)
     db.commit()
     db.refresh(target)
     log_action(db, current_user.id, "create_backup_target", f"{target.kind}:{target.name}", request=request)
-    return target
+    return _target_out(target)
 
 
 @router.put("/sftp-targets/{target_id}", response_model=SftpBackupTargetOut)
@@ -1084,7 +1127,15 @@ def update_sftp_target(
     if payload.name != target.name and db.query(SftpBackupTarget).filter(SftpBackupTarget.name == payload.name).first():
         raise HTTPException(status_code=409, detail="A target with that name already exists")
     target.name = payload.name
-    if target.kind == "s3":
+    if destinations.is_external(target.kind):
+        driver = _addon_driver(target.kind)
+        try:
+            config = destinations.read_config(target)
+            destinations.write_config(target, driver.validate(dict(payload.options), config))
+        except destinations.DestinationError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif target.kind == "s3":
         target.endpoint = payload.endpoint
         target.region = payload.region
         target.bucket = payload.bucket
@@ -1116,7 +1167,96 @@ def update_sftp_target(
     db.commit()
     db.refresh(target)
     log_action(db, current_user.id, "update_backup_target", f"{target.kind}:{target.name}", request=request)
+    return _target_out(target)
+
+
+def _addon_target(db: Session, target_id: int) -> SftpBackupTarget:
+    target = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Destination not found")
+    if not destinations.is_external(target.kind):
+        raise HTTPException(status_code=400, detail="Only a destination an addon brings signs in this way")
     return target
+
+
+@router.post("/sftp-targets/{target_id}/connect")
+def connect_destination(target_id: int, request: Request, db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_user)):
+    """Start signing an addon destination in (Google Drive): the code the
+    administrator enters at the address shown, on any device."""
+    ensure_role(current_user.role, Role.admin)
+    target = _addon_target(db, target_id)
+    try:
+        with destinations.opened(target, db) as (driver, config):
+            prompt = driver.connect_start(config)
+    except destinations.DestinationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "connect_backup_target", f"{target.kind}:{target.name}", request=request)
+    return {"verification_url": prompt.get("verification_url", ""), "user_code": prompt.get("user_code", ""),
+            "expires_in": int(prompt.get("expires_in") or 0), "interval": int(prompt.get("interval") or 5)}
+
+
+@router.post("/sftp-targets/{target_id}/connect/poll")
+def poll_destination_connect(target_id: int, db: Session = Depends(get_db),
+                             current_user: User = Depends(get_current_user)):
+    """Whether the code has been entered: "pending", "slow_down", "done",
+    "denied" or "expired"."""
+    ensure_role(current_user.role, Role.admin)
+    target = _addon_target(db, target_id)
+    try:
+        with destinations.opened(target, db) as (driver, config):
+            state = driver.connect_poll(config)
+    except destinations.DestinationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"state": state, "destination": _target_out(target)}
+
+
+@router.post("/sftp-targets/{target_id}/test")
+def test_destination(target_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """An addon destination writes and removes a small file, to prove a
+    schedule can depend on it."""
+    ensure_role(current_user.role, Role.admin)
+    target = _addon_target(db, target_id)
+    try:
+        with destinations.opened(target, db) as (driver, config):
+            message = driver.test(config)
+    except destinations.DestinationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "message": message}
+
+
+@router.get("/sftp-targets/{target_id}/objects")
+def list_destination_objects(target_id: int, db: Session = Depends(get_db),
+                             current_user: User = Depends(get_current_user)):
+    """What an addon destination is holding (Google Drive's Files button), so
+    the backups there can be seen and removed by hand."""
+    ensure_role(current_user.role, Role.admin)
+    target = _addon_target(db, target_id)
+    try:
+        with destinations.opened(target, db) as (driver, config):
+            rows, where = driver.listing(config), driver.summary(config)
+    except destinations.DestinationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"location": f"{destinations.label(target.kind)}: {where}",
+            "items": [{"key": row["key"], "name": row["name"], "size": row.get("size") or 0,
+                       "modified": row.get("modified") or ""} for row in rows]}
+
+
+@router.delete("/sftp-targets/{target_id}/objects")
+def delete_destination_object(target_id: int, key: str, request: Request, db: Session = Depends(get_db),
+                              current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    target = _addon_target(db, target_id)
+    try:
+        with destinations.opened(target, db) as (driver, config):
+            names = {row["key"]: row["name"] for row in driver.listing(config)}
+            if key not in names:
+                raise HTTPException(status_code=404, detail="That file is not in this destination")
+            driver.delete(config, key)
+    except destinations.DestinationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    log_action(db, current_user.id, "delete_destination_backup", target.name, names[key], request=request)
+    return {"deleted": key}
 
 
 # Where an archive of each kind is restored from, for an upload on the wrong

@@ -110,6 +110,22 @@ def _release_interrupted_backup_runs() -> None:
 
 _release_interrupted_backup_runs()
 
+
+def _load_external_addons() -> None:
+    """Addons from their own repositories (Google Drive backup): loaded now,
+    so one that will not load says so in the log at start, not at 2 a.m."""
+    try:
+        from app.services import addons, external_addons
+
+        loaded = external_addons.load_installed(addons.is_installed)
+        if loaded:
+            logger.info("External addons loaded: %s", ", ".join(loaded))
+    except Exception:  # noqa: BLE001 - never let this stop the panel booting
+        logger.warning("Could not load the external addons", exc_info=True)
+
+
+_load_external_addons()
+
 # Secure default umask: files get 644 (-rw-r--r--), dirs get 755 (rwxr-xr-x)
 os.umask(0o022)
 

@@ -1277,7 +1277,10 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
                   "fastpanel": "page: 'importFastpanel', roles: ['admin'], addon: 'fastpanel'",
                   # Each account's use: Server > Account resources, and the
                   # customer's own Resource usage.
-                  "limits": "page: 'account-resources', roles: ['admin'], when: (c) => c.limitsOn"}.get(slug)
+                  "limits": "page: 'account-resources', roles: ['admin'], when: (c) => c.limitsOn",
+                  # An addon from its own repository (2026-11-16): a kind of
+                  # destination under Backups > Destinations.
+                  "gdrive": "backups: { label: msg('Backups'), icon: 'backups', page: 'backups' },"}.get(slug)
         assert way_in, f"addon {slug} has no way in named in this test"
         assert way_in in features + navigation, f"addon {slug} is installable but has no way in"
 

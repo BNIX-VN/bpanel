@@ -92,6 +92,12 @@ CATALOGUE: dict[str, dict] = {
     LIMITS: {
         "name": "Resource limits",
         "cli_only": True,
+        # The operator installs it from the shell for the accounts that need
+        # it; the panel admin never sees a tile for it on the Addons page (its
+        # limits still show on packages and accounts once it is on). The list
+        # still carries it so those forms know it is installed; the page skips
+        # anything "operator_only" when it draws the tiles.
+        "operator_only": True,
         "version": "1.0.0",
         "summary": "CPU, memory, processes and disk I/O limits for each hosting account.",
         "details": [
@@ -327,6 +333,17 @@ CATALOGUE: dict[str, dict] = {
     },
 }
 
+# Addons whose code lives in a repository of their own (Google Drive backup,
+# 2026-11-16): named here all the same, shell-only, their version the one
+# on disk (services/external_addons.py).
+from app.services import external_addons as _external  # noqa: E402
+
+CATALOGUE.update(_external.catalogue_entries())
+
+
+def is_external(slug: str) -> bool:
+    return bool(CATALOGUE.get(slug, {}).get("external"))
+
 
 # Addons the panel no longer offers (operator, 2026-11-02: "Muốn cài sẽ dùng
 # lệnh để cài vào"). They are left out of the Addons page until installed,
@@ -396,8 +413,14 @@ def state() -> list[dict]:
 
 
 def listed() -> list[dict]:
-    """What the Addons page shows: a shell-only addon only once it is installed."""
-    return [entry for entry in state() if not entry["cli_only"] or entry["installed"]]
+    """What the Addons page shows: a shell-only addon only once it is installed;
+    an addon from a repository of its own (external, e.g. Google Drive) never -
+    it is installed, managed and removed only from the server's shell, not
+    offered to every customer, so the page stays silent about it on or off. It
+    still works once installed (it adds its backup destination); it just has no
+    tile here."""
+    return [entry for entry in state()
+            if not entry.get("external") and (not entry["cli_only"] or entry["installed"])]
 
 
 def install(slug: str) -> dict:
