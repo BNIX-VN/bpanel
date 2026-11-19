@@ -937,10 +937,16 @@ def _fetch_over_ssh(source: dict, account: str, kind: str, on_status=None, size:
             yield session
 
     link = migrate_ssh.Link(connect=connect)
+    # Packed by the panel the old server runs, not by the kind of archive it
+    # becomes here: an OPanel/BPanel account is kind "bpanel" on this side
+    # whichever panel made it, and packing it with that name looked only for
+    # bpanelctl - so an account on an OPanel server never came across
+    # (NO_BPANEL_CLI). "bnix" tries both CLIs.
+    panel = source.get("panel") or kind
     try:
         link.open()
         return migrate_ssh.pack_and_fetch(
-            link, kind, account,
+            link, panel, account,
             stage=lambda name, pull: _stage_foreign(pull, name, kind),
             ensure_room=lambda need: _room_for(need, folder),
             on_status=on_status, size_hint=size or 0)
