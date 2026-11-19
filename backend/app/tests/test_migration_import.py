@@ -772,7 +772,8 @@ def test_the_wizard_runs_in_each_pages_mode():
     assert "{restoreSource === 'ssh' && <form" in tab and "listRestoreSource('ssh')" in tab
     assert "{t('Used for this import only; nothing here is saved.')}" in tab
     page = APP.split("  function renderImportPage(panel) {")[1].split("\n  function ")[0]
-    assert "if (!importAddonsInstalled[panel]) return renderAddonMissing(panel);" in page
+    # The OPanel/BPanel Import page is core (no addon): only the others wait for theirs.
+    assert "if (panel !== 'panel' && !importAddonsInstalled[panel]) return renderAddonMissing(panel);" in page
     assert "if (IMPORT_PAGES[page]) return renderImportPage(IMPORT_PAGES[page]);" in APP
     # The root login is in the page's memory only: no storage, no URL.
     block = APP.split("  const [restoreSsh, setRestoreSsh] = useState(")[1].split("\n")[0]
@@ -785,7 +786,7 @@ def test_the_migration_hub_has_a_tab_per_installed_addon_and_the_dashboard_tiles
                        ("importFastpanel", "fastpanelImport")):
         assert f"page: '{page}'" in hub and f"when: (c) => c.{fact}" in hub
         assert f"{fact}: importAddonsInstalled." in APP
-    assert "['migration', msg('Migration'), ['da-import', 'cpanel-import', 'fastpanel-import']]" in FEATURES
+    assert "['migration', msg('Migration'), ['panel-import', 'da-import', 'cpanel-import', 'fastpanel-import']]" in FEATURES
     for route in ("migration: '/migration'", "importDirectadmin: '/migration/directadmin'",
                   "importCpanel: '/migration/cpanel'", "importFastpanel: '/migration/fastpanel'"):
         assert route in APP

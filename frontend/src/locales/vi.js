@@ -32,7 +32,6 @@ export const vi = {
   "cPanel Import": "Nhập từ cPanel",
   "FastPanel Import": "Nhập từ FastPanel",
   "OPanel/BPanel Import": "Nhập từ OPanel/BPanel",
-  "Source panel": "Panel nguồn",
   "Sign in as root over SSH: the OPanel or BPanel server backs up each account you pick and the panel brings it over.": "Đăng nhập root qua SSH: server OPanel hoặc BPanel backup từng tài khoản bạn chọn và panel mang về.",
   "Accounts from another OPanel or BPanel server, straight off it over SSH as root: its own panel backs up each account you pick and this one restores it directly - an OPanel account into BPanel and the other way round.": "Tài khoản từ một server OPanel hoặc BPanel khác, lấy thẳng qua SSH bằng root: panel bên đó backup từng tài khoản bạn chọn và panel này khôi phục trực tiếp - tài khoản OPanel sang BPanel và ngược lại.",
   "Accounts from a DirectAdmin server: straight off it over SSH, or from its user backups.": "Tài khoản từ server DirectAdmin: lấy thẳng qua SSH, hoặc từ các bản backup user của nó.",
