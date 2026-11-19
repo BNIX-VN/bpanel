@@ -117,6 +117,27 @@ def test_a_directadmin_pull_keeps_overwriting_its_own_account(monkeypatch):
     assert job["results"][0]["status"] == "done"
 
 
+@pytest.mark.parametrize("kind, kept", [("ssh", False), ("local", True)])
+def test_a_failed_restore_drops_what_was_pulled_from_another_server(monkeypatch, tmp_path, kind, kept):
+    pulled = tmp_path / "user-alice-20261119000000.tar.gz"
+    pulled.write_bytes(b"archive")
+    source = OTHER_SERVER if kind == "ssh" else {"kind": "local"}
+
+    def restore(path, db, operator_is_admin=False, refuse_existing_user=False):
+        raise ValueError("Database import failed")
+
+    monkeypatch.setattr(restore_sources, "fetch", lambda src, key, size, db, on_status=None: (str(pulled), True))
+    monkeypatch.setattr(restore_sources, "key_kind", lambda src, key: restore_sources.KIND_PANEL)
+    monkeypatch.setattr(maintenance.backup, "restore_user_backup", restore)
+    monkeypatch.setattr(maintenance, "SessionLocal", lambda: _db(None))
+    monkeypatch.setattr(maintenance, "log_action", lambda *a, **k: None)
+    job = maintenance._queue_backup_job(SimpleNamespace(id=7, role="admin"), "user_restore", "Restore queued",
+                                        results=[{"name": "alice", "username": "alice", "kind": "bpanel",
+                                                  "status": "queued", "detail": ""}])
+    maintenance._run_restore_job(job["job_id"], 7, source, [{"key": "alice", "size": 0, "username": "alice"}], True)
+    assert pulled.exists() is kept, "the other server still has the account; a failed copy here is only disk"
+
+
 def test_the_page_marks_them_and_offers_to_restore_over_them():
     assert "t('Already here')" in APP
     assert "Restore over accounts already on this server ({names})" in APP

@@ -928,8 +928,22 @@ def _fetch_over_ssh(source: dict, account: str, kind: str, on_status=None, size:
     """
     if not source.get("host_key"):
         raise RestoreSourceError("List the server first, so its key can be checked")
-    _ensure_foreign_dir(kind)
-    folder = foreign_dir(kind)
+    if kind in KIND_ADDONS:
+        _ensure_foreign_dir(kind)
+        folder = foreign_dir(kind)
+
+        def stage(name: str, pull) -> str:
+            return _stage_foreign(pull, name, kind)
+    else:
+        # An OPanel/BPanel account is a panel archive: it goes where one from
+        # any other source goes, the restore folder. It used to fall through
+        # to the DirectAdmin import's folder, outside the backup root, where
+        # the restore refused it ("Backup not found").
+        folder = users_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+
+        def stage(name: str, pull) -> str:
+            return _stage_panel(pull, name)
 
     @contextmanager
     def connect():
@@ -947,7 +961,7 @@ def _fetch_over_ssh(source: dict, account: str, kind: str, on_status=None, size:
         link.open()
         return migrate_ssh.pack_and_fetch(
             link, panel, account,
-            stage=lambda name, pull: _stage_foreign(pull, name, kind),
+            stage=stage,
             ensure_room=lambda need: _room_for(need, folder),
             on_status=on_status, size_hint=size or 0)
     except migrate_ssh.MigrateError as exc:

@@ -1504,6 +1504,11 @@ def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: lis
                     db.rollback()
                     logger.warning("restore %s failed: %s", item.get("key"), exc)
                     _set_restore_result(job_id, index, status="failed", detail=str(exc)[:500])
+                    if staged and source["kind"] == "ssh":
+                        # Pulled from another server only to be restored: that
+                        # server still has the account, so a copy here that
+                        # failed is just hundreds of MB nobody asked for.
+                        Path(staged).unlink(missing_ok=True)
             total = len(items)
             if restored == total:
                 _set_backup_job(job_id, status="done", message=f"Restored {restored} of {total}",
