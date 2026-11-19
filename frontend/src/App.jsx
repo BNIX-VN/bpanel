@@ -969,8 +969,7 @@ function App() {
   const [restoreRemote, setRestoreRemote] = useState({ protocol: 'sftp', host: '', port: '', username: '', password: '', path: '/' });
   // The old server of a migration, signed in to over SSH: held here for this
   // import only, never saved anywhere.
-  // source_panel (OPanel/BPanel import only): which panel the old server runs.
-  const [restoreSsh, setRestoreSsh] = useState({ host: '', port: '22', username: 'root', password: '', use_key: false, private_key: '', source_panel: 'opanel' });
+  const [restoreSsh, setRestoreSsh] = useState({ host: '', port: '22', username: 'root', password: '', use_key: false, private_key: '' });
   const [restoreListing, setRestoreListing] = useState(null);
   const [restoreChoice, setRestoreChoice] = useState({});
   const [restorePicks, setRestorePicks] = useState([]);
@@ -4848,8 +4847,8 @@ function App() {
     if (source === 'ssh') {
       const ssh = restoreSsh;
       // A migration page's mode is the source panel (directadmin/cpanel/...);
-      // the OPanel/BPanel page carries either, picked in the form.
-      const panel = mode === 'panel' ? (ssh.source_panel || 'opanel') : mode;
+      // the OPanel/BPanel page sends "bnix" -- the backend detects which it is.
+      const panel = mode === 'panel' ? 'bnix' : mode;
       return {
         kind: 'ssh', panel, host: ssh.host, port: ssh.port ? Number(ssh.port) : null,
         username: ssh.username.trim() || 'root', password: ssh.password,
@@ -10724,11 +10723,6 @@ function App() {
           <p className="hint restore-remote-wide">{restoreMode === 'fastpanel'
             ? t('The panel signs in to the FastPanel server as root and packs each account you pick: its sites, the databases they use and their certificates. It is packed in a private folder there, which is removed once it has been downloaded.')
             : t('The panel signs in to the {panel} server as root and has it back up each account you pick, the way {panel} itself does. The backup is made in a private folder there, which is removed once it has been downloaded.', panelOf)}</p>
-          {restoreMode === 'panel' && <label className="field restore-remote-wide"><span className="field-label">{t('Source panel')}</span>
-            <select value={ssh.source_panel} disabled={jobActive} onChange={e => editRestoreSsh({ source_panel: e.target.value })}>
-              <option value="opanel">OPanel</option>
-              <option value="bpanel">BPanel</option>
-            </select></label>}
           <label className="field"><span className="field-label">{t('Host')}</span><input value={ssh.host} placeholder="203.0.113.10" spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ host: e.target.value })} /></label>
           <label className="field"><span className="field-label">{t('SSH port')}</span><input value={ssh.port} inputMode="numeric" placeholder="22" disabled={jobActive} onChange={e => editRestoreSsh({ port: e.target.value.replace(/[^0-9]/g, '') })} /></label>
           <label className="field"><span className="field-label">{t('Username')}</span><input value={ssh.username} placeholder="root" spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ username: e.target.value })} /></label>

@@ -59,7 +59,7 @@ def _stage(tmp_path):
     return stage
 
 
-@pytest.mark.parametrize("panel", ["opanel", "bpanel"])
+@pytest.mark.parametrize("panel", ["opanel", "bpanel", "bnix"])
 def test_opanel_bpanel_account_list_is_read(panel):
     rows = migrate_ssh.parse_panel_accounts("bob\tbob.com\t1048576\t2\nsue\tsue.net\t0\t1\n", panel)
     assert [row["key"] for row in rows] == ["bob", "sue"]
@@ -70,7 +70,7 @@ def test_opanel_bpanel_account_list_is_read(panel):
         migrate_ssh.parse_panel_accounts(migrate_ssh.PANEL_MISSING[panel] + "\n", panel)
 
 
-@pytest.mark.parametrize("panel", ["opanel", "bpanel"])
+@pytest.mark.parametrize("panel", ["opanel", "bpanel", "bnix"])
 def test_list_accounts_dispatches_to_the_native_cli(panel, monkeypatch):
     server = _NativeServer(panel, list_out="bob\tbob.com\t10\t1\n")
     monkeypatch.setattr(migrate_ssh, "_exec", lambda c, cmd, t: server.run(c, cmd, t))
@@ -79,7 +79,7 @@ def test_list_accounts_dispatches_to_the_native_cli(panel, monkeypatch):
     assert any("list-accounts" in c for c in server.commands)
 
 
-@pytest.mark.parametrize("panel", ["opanel", "bpanel"])
+@pytest.mark.parametrize("panel", ["opanel", "bpanel", "bnix"])
 def test_native_account_is_packed_downloaded_and_removed(tmp_path, monkeypatch, panel):
     path = "/home/bob/backups/bob-manual-tuesday.tar.gz"
     server = _NativeServer(panel, pack_out=path + "\n")
@@ -105,3 +105,12 @@ def test_key_kind_treats_a_native_source_as_this_panels_kind():
         assert restore_sources.key_kind({"kind": "ssh", "panel": panel}, "bob") == restore_sources.KIND_PANEL
     # A foreign source keeps its own kind.
     assert restore_sources.key_kind({"kind": "ssh", "panel": "cpanel"}, "bob") == "cpanel"
+
+
+def test_bnix_source_probes_both_panel_clis():
+    # The auto-detecting "bnix" source tries both OPanel's and BPanel's CLI names,
+    # so whichever the old server runs answers -- the operator need not know.
+    cmd = migrate_ssh._panelctl_cmd("bnix", "list-accounts")
+    for name in ("opanelctl", "bpanelctl", "opanel", "bpanel"):
+        assert name in cmd
+    assert "bnix" in migrate_ssh.NATIVE_PANELS
