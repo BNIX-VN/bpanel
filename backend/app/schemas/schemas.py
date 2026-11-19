@@ -1375,7 +1375,7 @@ class RestoreSource(BaseModel):
     # kind "ssh": the panel the old server runs, which packs the accounts, and
     # a private key to sign in with instead of a password (the password is
     # then its passphrase, if it has one).
-    panel: str = Field(default="", pattern=r"^(|directadmin|cpanel|fastpanel)$")
+    panel: str = Field(default="", pattern=r"^(|directadmin|cpanel|fastpanel|opanel|bpanel)$")
     private_key: str = Field(default="", max_length=16384)
 
     @model_validator(mode="after")

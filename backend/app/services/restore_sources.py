@@ -794,7 +794,10 @@ def check_key(source: dict, key: str) -> str:
 def key_kind(source: dict, key: str) -> str:
     """Which restore an archive this source listed goes through."""
     if source["kind"] == "ssh":
-        return source.get("panel") or KIND_DA
+        panel = source.get("panel") or KIND_DA
+        # An OPanel/BPanel source packs a native archive, restored here by
+        # restore_user_backup like any panel backup, whichever panel it came from.
+        return KIND_PANEL if panel in migrate_ssh.NATIVE_PANELS else panel
     if source["kind"] == "local":
         return local_archive(key)[1]
     return archive_kind(posixpath.basename(key)) or KIND_PANEL

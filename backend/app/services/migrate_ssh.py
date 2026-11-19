@@ -27,7 +27,25 @@ import time
 from pathlib import PurePosixPath
 from typing import Callable, Optional
 
-PANELS = {"directadmin": "DirectAdmin", "cpanel": "cPanel", "fastpanel": "FastPanel"}
+PANELS = {"directadmin": "DirectAdmin", "cpanel": "cPanel", "fastpanel": "FastPanel",
+          "opanel": "OPanel", "bpanel": "BPanel"}
+# An OPanel or BPanel server signed in to as root: same panel code (the
+# list-accounts / backup-account CLI), and the archive it packs is a native
+# backup this panel restores directly (backup.restore_user_backup). A pulled
+# account is listed and restored as this panel's own kind -- an OPanel account
+# imports into BPanel and the other way round.
+NATIVE_PANELS = ("opanel", "bpanel")
+# This panel's restorable backup kind (restore_sources.KIND_PANEL). OPanel's
+# copy of this file sets it to "opanel"; both restore each other's archives.
+NATIVE_KIND = "bpanel"
+PANEL_CTL = {
+    "opanel": ("opanelctl", "/usr/local/sbin/opanelctl", "opanel", "/usr/local/sbin/opanel"),
+    "bpanel": ("bpanelctl", "/usr/local/sbin/bpanelctl", "bpanel", "/usr/local/sbin/bpanel"),
+}
+PANEL_MISSING = {"opanel": "NO_OPANEL_CLI", "bpanel": "NO_BPANEL_CLI"}
+# An absolute path to a .tar.gz: what backup-account prints, and the only kind
+# of path ever downloaded or removed on the other server.
+NATIVE_ARCHIVE_RE = re.compile(r"^/[^\x00]*/[^/\x00]+\.tar\.gz$")
 ACCOUNT_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 # What mktemp makes on the other server, and the only folder ever removed there.
@@ -186,6 +204,37 @@ def parse_directadmin_accounts(text: str) -> list[dict]:
     return rows
 
 
+def _panelctl_cmd(panel: str, subcommand: str) -> str:
+    """Run the source panel's own CLI, whichever name it installed under, with
+    the given subcommand. Prints the missing-CLI token when none is found."""
+    candidates = " ".join(shlex.quote(name) for name in PANEL_CTL[panel])
+    missing = PANEL_MISSING[panel]
+    return (f"for c in {candidates}; do "
+            f"command -v \"$c\" >/dev/null 2>&1 && exec \"$c\" {subcommand}; done; "
+            f"echo {missing}")
+
+
+def parse_panel_accounts(text: str, panel: str) -> list[dict]:
+    """The rows of ``<panel>ctl list-accounts``: username, main domain, bytes,
+    site count. Listed as this panel's native kind -- the archive restores here
+    directly, whichever panel it came from."""
+    head = text.strip()[:64]
+    if PANEL_MISSING[panel] in head or "NO_OPANEL_CLI" in head or "NO_BPANEL_CLI" in head:
+        raise MigrateError(
+            f"That server has no {PANELS[panel]} CLI with list-accounts. Sign in to an "
+            f"{PANELS[panel]} server that is up to date.")
+    rows = []
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4 or not ACCOUNT_RE.fullmatch(parts[0]):
+            continue
+        user, domain, size, sites = parts[:4]
+        note = f"{sites} sites" if sites.isdigit() and int(sites) != 1 else ""
+        rows.append(_row(NATIVE_KIND, user, domain.strip().lower(),
+                         int(size) if size.isdigit() else 0, note))
+    return rows
+
+
 def list_accounts(client, panel: str) -> list[dict]:
     if panel == "cpanel":
         return parse_cpanel_accounts(_must(client, _CPANEL_LIST, LIST_TIMEOUT, "Listing the accounts"))
@@ -193,6 +242,9 @@ def list_accounts(client, panel: str) -> list[dict]:
         return parse_directadmin_accounts(_must(client, _DA_LIST, LIST_TIMEOUT, "Listing the accounts"))
     if panel == "fastpanel":
         return parse_fastpanel_accounts(_must(client, _FASTPANEL_LIST, LIST_TIMEOUT, "Listing the accounts"))
+    if panel in NATIVE_PANELS:
+        return parse_panel_accounts(
+            _must(client, _panelctl_cmd(panel, "list-accounts"), LIST_TIMEOUT, "Listing the accounts"), panel)
     raise ValueError(f"Unknown panel: {panel}")
 
 
@@ -811,6 +863,47 @@ def _pack_fastpanel(client, account: str, folder: str) -> str:
     return name
 
 
+def _remove_native_archive(link: Link, path: str) -> None:
+    """Delete the archive backup-account just made, so the migration leaves no
+    fresh copy behind. Only ever an absolute .tar.gz path; best effort."""
+    if NATIVE_ARCHIVE_RE.fullmatch(path or ""):
+        try:
+            link.run(f"rm -f -- {shlex.quote(path)}", LIST_TIMEOUT)
+        except Exception:  # noqa: BLE001 - the source still holds it; not fatal
+            pass
+
+
+def _pull_native(link: Link, panel: str, account: str, stage, ensure_room,
+                 on_status: StatusFn, on_progress: ProgressFn) -> str:
+    """An OPanel/BPanel account: its own panel packs it into a native archive
+    (backup-account prints the path), which comes down and is restored here."""
+    if on_status:
+        on_status(f"Backing up {account} on the other server")
+    out = link.must(_panelctl_cmd(panel, f"backup-account {shlex.quote(account)}"),
+                    PACK_TIMEOUT, f"Backing up {account}")
+    path = (out.strip().splitlines() or [""])[-1].strip()
+    if PANEL_MISSING[panel] in path or not NATIVE_ARCHIVE_RE.fullmatch(path):
+        raise MigrateError(
+            f"Backing up {account} on the other server left no archive"
+            f"{f' ({path[:200]})' if path else ''}")
+    name = posixpath.basename(path)
+    sftp = link.client.open_sftp()
+    try:
+        total = sftp.stat(path).st_size or 0
+        ensure_room(total)
+        if on_status:
+            on_status(f"Downloading {name}")
+
+        def pull(destination: str) -> None:
+            sftp.get(path, destination, callback=on_progress)
+
+        result = stage(name, pull)
+    finally:
+        sftp.close()
+    _remove_native_archive(link, path)
+    return result
+
+
 def pack_and_fetch(client, panel: str, account: str,
                    stage: Callable[[str, Callable[[str], None]], str],
                    ensure_room: Callable[[int], None],
@@ -826,6 +919,8 @@ def pack_and_fetch(client, panel: str, account: str,
     """
     check_account(account)
     link = client if isinstance(client, Link) else Link(client=client)
+    if panel in NATIVE_PANELS:
+        return _pull_native(link, panel, account, stage, ensure_room, on_status, on_progress)
     if panel == "cpanel":
         return _pull_cpanel(link, account, stage, ensure_room, on_status, on_progress, size_hint)
     client = link.client
