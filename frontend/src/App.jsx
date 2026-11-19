@@ -10852,7 +10852,7 @@ function App() {
               <span>
                 {row.username || row.name}
                 {kindBadge(row.kind)}
-                {(row.status === 'failed' || row.kind !== 'bpanel') && row.detail && <small>{t(row.detail)}</small>}
+                {(row.status === 'failed' || row.status === 'done' || row.kind !== 'bpanel') && row.detail && <small>{t(row.detail)}</small>}
                 {(row.credentials || []).length > 0 && <details className="da-creds-details">
                   <summary>{t('Generated passwords - copy them now, they are not shown again after a restart')}</summary>
                   <pre className="da-credentials">{row.credentials.join('\n')}</pre>
