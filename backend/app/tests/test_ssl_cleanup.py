@@ -188,3 +188,56 @@ def test_helper_exposes_the_verb_and_guards_the_panel_certificate():
     # Removing the lineage must also drop the copy the panel serves on :2222.
     body = helper.split("delete_ssl_cert()")[1].split("\n}\n")[0]
     assert "sync_panel_sni_certificates" in body
+
+
+# --- an uploaded certificate (manual mode; what an imported site gets) ----------
+
+def _uploaded(db, website_id=1, domain="doomed.test"):
+    site = db.get(Website, website_id)
+    site.ssl_enabled, site.ssl_mode = True, "manual"
+    site.ssl_cert_path = f"/etc/nginx/bpanel/ssl/sites/{domain}/cert.crt"
+    db.commit()
+    return site
+
+
+def test_a_deleted_sites_uploaded_certificate_goes_with_it(monkeypatch):
+    db = _seed(_db_session())
+    _uploaded(db)
+    _no_panel_url(monkeypatch)
+    monkeypatch.setattr(ssl, "cert_info", lambda name: {"sans": ["doomed.test"]})
+    calls = _capture(monkeypatch)
+
+    ssl.release_site_certificates(db, "doomed.test", exclude_website_id=1)
+
+    assert ("manual-ssl-remove", ["doomed.test"]) in calls, "its key and certificate do not stay behind"
+
+
+def test_an_uploaded_certificate_another_site_borrows_is_kept(monkeypatch):
+    db = _seed(_db_session())
+    _uploaded(db)
+    keeper = db.get(Website, 2)
+    keeper.ssl_mode, keeper.ssl_source_domain = "shared", "doomed.test"
+    db.commit()
+    _no_panel_url(monkeypatch)
+    monkeypatch.setattr(ssl, "cert_info", lambda name: {"sans": ["doomed.test"]})
+    calls = _capture(monkeypatch)
+
+    note = ssl.release_site_certificates(db, "doomed.test", exclude_website_id=1)
+
+    assert not any(command == "manual-ssl-remove" for command, _ in calls)
+    assert "keeper.test" in note
+
+
+def test_a_renamed_site_keeps_the_uploaded_certificate_it_still_serves(monkeypatch):
+    db = _seed(_db_session())
+    site = _uploaded(db)
+    site.domain = "renamed.test"  # POST /rename has already moved the row
+    db.commit()
+    _no_panel_url(monkeypatch)
+    monkeypatch.setattr(ssl, "cert_info", lambda name: {"sans": ["doomed.test"]})
+    calls = _capture(monkeypatch)
+
+    ssl.release_site_certificates(db, "doomed.test", exclude_website_id=1)
+
+    assert not any(command == "manual-ssl-remove" for command, _ in calls), \
+        "the renamed site's vhost still points at it until the operator re-points it"

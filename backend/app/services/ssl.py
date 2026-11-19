@@ -178,7 +178,50 @@ def delete_ssl(domain: str) -> CommandResult:
 
 
 def release_site_certificates(db, domain: str, *, exclude_website_id: int | None = None) -> str:
-    """Drop the certificates a deleted site leaves behind.
+    """Drop the certificates a deleted site leaves behind: an uploaded one it
+    used, and its Let's Encrypt lineage. Never raises."""
+    notes = [
+        _release_uploaded_certificate(db, domain, exclude_website_id),
+        _release_issued_certificate(db, domain, exclude_website_id=exclude_website_id),
+    ]
+    return "; ".join(note for note in notes if note)
+
+
+def _release_uploaded_certificate(db, domain: str, exclude_website_id: int | None) -> str:
+    """The uploaded certificate the deleted site used, unless another site borrows it.
+
+    An account backup restores every site's certificate as an uploaded one
+    (2026-11-19), so a deleted imported site used to leave its key and
+    certificate behind in /etc/nginx/bpanel/ssl/sites and in the panel's own
+    store. A site in shared or cloudflare mode may point at it
+    (ssl_source_domain), and then it stays. Never raises.
+    """
+    from app.models.entities import Website
+
+    try:
+        safe_domain = _safe_domain(domain)
+        site = db.get(Website, exclude_website_id) if exclude_website_id is not None else None
+        uploaded_base = f"/etc/nginx/bpanel/ssl/sites/{safe_domain}/"
+        # Only a site that still has this name is going away. A renamed site
+        # (POST /rename) has its new name by now and keeps serving with the
+        # uploaded certificate under the old one until the operator re-points
+        # it, so that one must stay.
+        if site is None or (site.domain or "").strip().lower() != safe_domain:
+            return ""
+        if not ((site.ssl_mode or "") == "manual" or str(site.ssl_cert_path or "").startswith(uploaded_base)):
+            return ""
+        borrowers = sorted(name for (name,) in db.query(Website.domain).filter(
+            Website.ssl_source_domain == safe_domain, Website.id != site.id).all())
+        if borrowers:
+            return f"kept the uploaded certificate for {safe_domain}: {', '.join(borrowers)} use it"
+        remove_manual_ssl(safe_domain)
+    except Exception as exc:  # noqa: BLE001 - a website must still be deletable
+        return f"could not remove the uploaded certificate for {domain}: {exc}"
+    return ""
+
+
+def _release_issued_certificate(db, domain: str, *, exclude_website_id: int | None = None) -> str:
+    """Drop the Let's Encrypt lineage a deleted site leaves behind.
 
     One certificate often covers more than the site it was issued for - an
     alias, a subdomain added later, the hostname the panel itself answers on.
