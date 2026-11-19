@@ -742,7 +742,21 @@ def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -
         return target
 
 
-def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False) -> dict:
+def existing_account_message(username: str) -> str:
+    return (f"An account named {username} is already on this server. It is a different account "
+            "from the one on the other server, so it is left alone: tick \"Restore over accounts "
+            "already on this server\" to replace it, or remove it first.")
+
+
+def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
+                        refuse_existing_user: bool = False) -> dict:
+    # refuse_existing_user is for an account pulled from ANOTHER server (the
+    # OPanel/BPanel Import): a username already here is then someone else's
+    # account, not this archive's own, and restoring into it would add the
+    # archive's sites to that account and import its databases of the same
+    # name over the ones there. Only an operator who ticked "Restore over
+    # accounts already on this server" gets that.
+    #
     # Some manifest values set site settings whose REST write path is admin-only
     # (custom nginx, custom ModSecurity rules, an http-flood profile, a proxy
     # upstream to any address, and the account's quotas). The archive is
@@ -760,6 +774,8 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False) -
         raise ValueError("Invalid user in backup")
 
     user = db.query(User).filter(User.username == username).first()
+    if refuse_existing_user and user is not None:
+        raise ValueError(existing_account_message(username))
     created_user = False
     generated_password = ""
     if user is None:

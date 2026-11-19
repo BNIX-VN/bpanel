@@ -973,6 +973,8 @@ function App() {
   const [restoreListing, setRestoreListing] = useState(null);
   const [restoreChoice, setRestoreChoice] = useState({});
   const [restorePicks, setRestorePicks] = useState([]);
+  // OPanel/BPanel Import: restore over a same-named account already here.
+  const [restoreOverwrite, setRestoreOverwrite] = useState(false);
   const [restoreFilter, setRestoreFilter] = useState('');
   const [restoreJob, setRestoreJob] = useState(null);
   const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || fileManagerTarget.websiteId);
@@ -4871,6 +4873,7 @@ function App() {
   async function listRestoreSource(source, mode = restoreMode) {
     setRestoreListing(null);
     setRestorePicks([]);
+    setRestoreOverwrite(false);
     setRestoreChoice({});
     const data = await request('/maintenance/restore/list', {
       method: 'POST', body: JSON.stringify({ source: restoreSourceBody(source, mode), kinds: RESTORE_MODES[mode].kinds }),
@@ -5018,7 +5021,18 @@ function App() {
     const picked = restoreGroupsOf(restoreListing).filter(group => restorePicks.includes(group.id) && !chosenRestoreBackup(group).error);
     if (picked.length === 0) return;
     const names = picked.map(group => group.username || chosenRestoreBackup(group).name).join(', ');
-    const question = restoreListing.source === 'ssh'
+    // From another OPanel/BPanel server a username already here is a
+    // different account: skipped unless the box is ticked.
+    const crossNative = restoreMode === 'panel' && restoreListing.source === 'ssh';
+    const existingHere = new Set(restoreListing.existing || []);
+    const clashing = crossNative ? picked.filter(group => existingHere.has(group.username)).map(group => group.username) : [];
+    const question = crossNative
+      ? [t('Bring {n} account(s) over from the other server? It backs each one up, the panel downloads it and restores it here.', { n: picked.length }),
+        clashing.length ? (restoreOverwrite
+          ? t('Already on this server: {names}. Their sites and databases are replaced by the ones from the other server.', { names: clashing.join(', ') })
+          : t('Already on this server, so skipped: {names}. Tick "Restore over accounts already on this server" to replace them.', { names: clashing.join(', ') }))
+          : ''].filter(Boolean).join('\n\n')
+      : restoreListing.source === 'ssh'
       ? t('Bring {n} account(s) over from {panel}? The old server backs each one up, the panel downloads it and imports it; an account that already exists here is overwritten with its own websites.', { n: picked.length, panel: RESTORE_KIND_LABELS[restoreMode] })
       : t('Restore {n} user(s)? An account that already exists on this server is overwritten with what is in its backup.', { n: picked.length });
     if (!(await confirmDialog(`${question}\n\n${names}`))) return;
@@ -5030,6 +5044,7 @@ function App() {
           const item = chosenRestoreBackup(group);
           return { key: item.key, size: item.size, username: group.username };
         }),
+        overwrite: crossNative && restoreOverwrite,
       }),
     }, t('Starting the restore...'));
     if (data?.job_id) {
@@ -10611,6 +10626,11 @@ function App() {
     // The panel a migration page imports from; '' on Backups > Restore.
     const foreign = restoreMode !== 'bpanel' ? RESTORE_KIND_LABELS[restoreMode] : '';
     const panelOf = { panel: foreign };
+    // From another OPanel/BPanel server a username already here is a
+    // different account: marked, and restored over only when ticked.
+    const crossNative = restoreMode === 'panel' && restoreListing?.source === 'ssh';
+    const existingHere = new Set(restoreListing?.existing || []);
+    const pickedExisting = crossNative ? pickedGroups.filter(group => existingHere.has(group.username)) : [];
     // FastPanel has no backup to upload: the panel packs the account itself.
     const packedHere = restoreMode === 'fastpanel';
     const sourceCards = {
@@ -10799,7 +10819,9 @@ function App() {
                   <small>{detail}</small>
                 </span>
                 {group.username
-                  ? <span className={exists ? 'badge warn' : 'badge ok'} title={exists ? t('Exists on this server - will be overwritten') : t('New on this server')}>{exists ? t('Overwrite') : t('New')}</span>
+                  ? (crossNative
+                    ? <span className={exists ? 'badge warn' : 'badge ok'} title={exists ? t('An account with this name is already on this server') : t('New on this server')}>{exists ? t('Already here') : t('New')}</span>
+                    : <span className={exists ? 'badge warn' : 'badge ok'} title={exists ? t('Exists on this server - will be overwritten') : t('New on this server')}>{exists ? t('Overwrite') : t('New')}</span>)
                   : <span />}
                 {group.backups.length > 1
                   ? <select className="restore-version" value={chosen.key} disabled={!!loading || jobActive} aria-label={t('Backup to restore')}
@@ -10824,6 +10846,9 @@ function App() {
 
       <section className="restore-step">
         <h4><span className="restore-step-no">4</span>{t('Restore')}</h4>
+        {pickedExisting.length > 0 && <Checkbox className="is-wide" checked={restoreOverwrite}
+          label={t('Restore over accounts already on this server ({names})', { names: pickedExisting.map(group => group.username).join(', ') })}
+          onChange={on => setRestoreOverwrite(on)}/>}
         <div className="actions">
           <button disabled={!!loading || jobActive || pickedGroups.length === 0} onClick={runRestore}>
             <RotateCcw size={14}/> {pickedGroups.length

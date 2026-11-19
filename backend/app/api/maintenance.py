@@ -1444,7 +1444,7 @@ def _da_import_busy() -> bool:
 
 
 def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: list[dict],
-                     operator_is_admin: bool = False) -> None:
+                     operator_is_admin: bool = False, overwrite: bool = False) -> None:
     with _restore_run_lock:
         _set_backup_job(job_id, status="running", started_at=_now_iso(), message="Restoring")
         db = SessionLocal()
@@ -1458,6 +1458,15 @@ def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: lis
                     else:
                         _set_restore_result(job_id, index, status="fetching" if source["kind"] != "local" else "restoring")
                     kind = restore_sources.key_kind(source, item["key"])
+                    # An OPanel/BPanel account pulled from another server whose
+                    # username is already here is someone else's: refused before
+                    # the other server even packs it, unless the operator ticked
+                    # "Restore over accounts already on this server".
+                    refuse_existing = (source["kind"] == "ssh" and kind == restore_sources.KIND_PANEL
+                                       and not overwrite)
+                    account = item.get("username") or item["key"]
+                    if refuse_existing and db.query(User).filter(User.username == account).first() is not None:
+                        raise ValueError(backup.existing_account_message(account))
 
                     def heard(text: str, _index: int = index) -> None:
                         # What the old server is doing: packing, waiting for
@@ -1481,7 +1490,8 @@ def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: lis
                         log_action(db, request_user_id, f"{kind}_import", Path(path).name,
                                    restore_sources.describe(source, db))
                     else:
-                        outcome = backup.restore_user_backup(path, db, operator_is_admin=operator_is_admin)
+                        outcome = backup.restore_user_backup(path, db, operator_is_admin=operator_is_admin,
+                                                             refuse_existing_user=refuse_existing)
                     username = outcome.get("username", "") if isinstance(outcome, dict) else ""
                     _set_restore_result(job_id, index, status="done", username=username or item.get("username", ""),
                                         detail=outcome.get("message", "") if isinstance(outcome, dict) else "",
@@ -1538,9 +1548,9 @@ def restore_run(payload: RestoreRunRequest, request: Request, db: Session = Depe
     # can read, nor written anywhere.
     _backup_job_executor.submit(_run_restore_job, job["job_id"], current_user.id, source,
                                 [item.model_dump() for item in payload.items],
-                                is_admin_role(current_user.role))
+                                is_admin_role(current_user.role), payload.overwrite)
     log_action(db, current_user.id, "queue_restore_users", restore_sources.describe(source, db),
-               f"{len(results)} backup(s)", request=request)
+               f"{len(results)} backup(s)" + (" overwrite" if payload.overwrite else ""), request=request)
     return job
 
 

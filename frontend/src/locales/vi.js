@@ -2936,6 +2936,12 @@ export const vi = {
   "Removing the addon takes the list off the firewall and forgets this server's key.": "Gỡ addon sẽ bỏ danh sách khỏi tường lửa và xoá khoá của server này.",
   "This server is registering with the collector; its status is on the Firewall page.": "Server này đang đăng ký với collector; trạng thái xem ở trang Tường lửa.",
   "Folders": "Thư mục",
+  "An account with this name is already on this server": "Trên server này đã có một tài khoản trùng tên",
+  "Already here": "Đã có ở đây",
+  "Restore over accounts already on this server ({names})": "Khôi phục đè lên các tài khoản đã có trên server này ({names})",
+  "Bring {n} account(s) over from the other server? It backs each one up, the panel downloads it and restores it here.": "Chuyển {n} tài khoản từ server kia sang? Server kia sao lưu từng tài khoản, panel tải về và khôi phục tại đây.",
+  "Already on this server: {names}. Their sites and databases are replaced by the ones from the other server.": "Đã có trên server này: {names}. Website và database của các tài khoản này sẽ bị thay bằng bản từ server kia.",
+  "Already on this server, so skipped: {names}. Tick \"Restore over accounts already on this server\" to replace them.": "Đã có trên server này nên sẽ bỏ qua: {names}. Đánh dấu \"Khôi phục đè lên các tài khoản đã có trên server này\" để thay thế.",
 };
 
 /* Said in English by the people who run these servers. Translating them

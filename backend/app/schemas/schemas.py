@@ -1421,6 +1421,10 @@ class RestoreRunRequest(BaseModel):
     source: RestoreSource
     # Bounded so one request cannot queue an afternoon of restores.
     items: list[RestoreItem] = Field(min_length=1, max_length=50)
+    # OPanel/BPanel Import only: restore an account pulled from another server
+    # over a same-named one already here (otherwise it is refused - the same
+    # username there is a different account).
+    overwrite: bool = False
 
 
 class SftpBackupTargetCreate(BaseModel):
