@@ -161,13 +161,14 @@ const PAGE_ROUTES = {
   traffic: '/traffic',
   // The migration addons' pages (the Migration hub, lib/navigation.jsx).
   migration: '/migration',
+  importPanel: '/migration/panel',
   importDirectadmin: '/migration/directadmin',
   importCpanel: '/migration/cpanel',
   importFastpanel: '/migration/fastpanel',
 };
 
 // Restore: what each kind of archive is called (services/restore_sources.py).
-const RESTORE_KIND_LABELS = { bpanel: 'BPanel', directadmin: 'DirectAdmin', cpanel: 'cPanel', fastpanel: 'FastPanel' };
+const RESTORE_KIND_LABELS = { bpanel: 'BPanel', panel: 'OPanel/BPanel', directadmin: 'DirectAdmin', cpanel: 'cPanel', fastpanel: 'FastPanel' };
 // One wizard, several pages (operator, 2026-10-27: "bpanel không có các addon
 // import cpanel, import DirectAdmin, import FastPanel" - as OPanel has them):
 // what each restores and where from. Backups > Restore is the panel's own
@@ -181,10 +182,14 @@ const RESTORE_MODES = {
   // This server for an account brought over that did not import, to try
   // again or delete.
   fastpanel: { kinds: ['fastpanel'], sources: ['ssh', 'local'] },
+  // Another OPanel/BPanel server over root SSH: its own panel packs each account
+  // into a native archive restored directly here (kind bpanel). Core, no addon;
+  // the source panel (OPanel or BPanel) is picked in the connection form.
+  panel: { kinds: ['bpanel'], sources: ['ssh'] },
 };
 // The migration addons' pages, and the mode each runs the wizard in (the
-// addon's slug is the mode's name).
-const IMPORT_PAGES = { importDirectadmin: 'directadmin', importCpanel: 'cpanel', importFastpanel: 'fastpanel' };
+// addon's slug is the mode's name). importPanel is core, not an addon.
+const IMPORT_PAGES = { importDirectadmin: 'directadmin', importCpanel: 'cpanel', importFastpanel: 'fastpanel', importPanel: 'panel' };
 
 /* ---------------------------------------------------------------
    Theme (light / dark)
@@ -964,7 +969,8 @@ function App() {
   const [restoreRemote, setRestoreRemote] = useState({ protocol: 'sftp', host: '', port: '', username: '', password: '', path: '/' });
   // The old server of a migration, signed in to over SSH: held here for this
   // import only, never saved anywhere.
-  const [restoreSsh, setRestoreSsh] = useState({ host: '', port: '22', username: 'root', password: '', use_key: false, private_key: '' });
+  // source_panel (OPanel/BPanel import only): which panel the old server runs.
+  const [restoreSsh, setRestoreSsh] = useState({ host: '', port: '22', username: 'root', password: '', use_key: false, private_key: '', source_panel: 'opanel' });
   const [restoreListing, setRestoreListing] = useState(null);
   const [restoreChoice, setRestoreChoice] = useState({});
   const [restorePicks, setRestorePicks] = useState([]);
@@ -4841,8 +4847,11 @@ function App() {
     if (source.startsWith('target:')) return { kind: 'target', target_id: Number(source.slice(7)) };
     if (source === 'ssh') {
       const ssh = restoreSsh;
+      // A migration page's mode is the source panel (directadmin/cpanel/...);
+      // the OPanel/BPanel page carries either, picked in the form.
+      const panel = mode === 'panel' ? (ssh.source_panel || 'opanel') : mode;
       return {
-        kind: 'ssh', panel: mode, host: ssh.host, port: ssh.port ? Number(ssh.port) : null,
+        kind: 'ssh', panel, host: ssh.host, port: ssh.port ? Number(ssh.port) : null,
         username: ssh.username.trim() || 'root', password: ssh.password,
         private_key: ssh.use_key ? ssh.private_key : '',
         // As for another server: the root login only ever goes back to the
@@ -10611,6 +10620,7 @@ function App() {
         directadmin: 'Sign in as root over SSH: the server backs up each account you pick and the panel brings it over.',
         cpanel: 'Sign in as root over SSH: pkgacct packs each account you pick and the panel brings it over.',
         fastpanel: 'Sign in as root over SSH: the panel packs each account you pick - its sites, databases and certificates - and brings it over.',
+        panel: 'Sign in as root over SSH: the OPanel or BPanel server backs up each account you pick and the panel brings it over.',
       }[restoreMode] || ''],
     };
     const sources = RESTORE_MODES[restoreMode].sources.map(id => [id, ...sourceCards[id]]);
@@ -10711,6 +10721,11 @@ function App() {
           <p className="hint restore-remote-wide">{restoreMode === 'fastpanel'
             ? t('The panel signs in to the FastPanel server as root and packs each account you pick: its sites, the databases they use and their certificates. It is packed in a private folder there, which is removed once it has been downloaded.')
             : t('The panel signs in to the {panel} server as root and has it back up each account you pick, the way {panel} itself does. The backup is made in a private folder there, which is removed once it has been downloaded.', panelOf)}</p>
+          {restoreMode === 'panel' && <label className="field restore-remote-wide"><span className="field-label">{t('Source panel')}</span>
+            <select value={ssh.source_panel} disabled={jobActive} onChange={e => editRestoreSsh({ source_panel: e.target.value })}>
+              <option value="opanel">OPanel</option>
+              <option value="bpanel">BPanel</option>
+            </select></label>}
           <label className="field"><span className="field-label">{t('Host')}</span><input value={ssh.host} placeholder="203.0.113.10" spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ host: e.target.value })} /></label>
           <label className="field"><span className="field-label">{t('SSH port')}</span><input value={ssh.port} inputMode="numeric" placeholder="22" disabled={jobActive} onChange={e => editRestoreSsh({ port: e.target.value.replace(/[^0-9]/g, '') })} /></label>
           <label className="field"><span className="field-label">{t('Username')}</span><input value={ssh.username} placeholder="root" spellCheck={false} disabled={jobActive} onChange={e => editRestoreSsh({ username: e.target.value })} /></label>
@@ -10864,9 +10879,11 @@ function App() {
       directadmin: 'Accounts from a DirectAdmin server: straight off it over SSH, or from its user backups.',
       cpanel: 'Accounts from a cPanel server: straight off it over SSH (pkgacct), or from its cpmove backups.',
       fastpanel: 'Accounts from a FastPanel server, straight off it over SSH: FastPanel keeps files and databases in separate backups, so the panel packs each account itself.',
+      panel: 'Accounts from another OPanel or BPanel server, straight off it over SSH as root: its own panel backs up each account you pick and this one restores it directly - an OPanel account into BPanel and the other way round.',
     };
     if (!isAdmin) return renderAdminOnly();
-    if (!importAddonsInstalled[panel]) return renderAddonMissing(panel);
+    // OPanel/BPanel import is core (native restore); the others need their addon.
+    if (panel !== 'panel' && !importAddonsInstalled[panel]) return renderAddonMissing(panel);
     const refresh = restoreSource === 'local' ? () => listRestoreSource('local') : undefined;
     return <>
       <PageHeader subtitle={t(subtitles[panel])} onRefresh={refresh} refreshDisabled={!!loading}/>

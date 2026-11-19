@@ -58,6 +58,7 @@ export const PAGE_TITLES = {
   'disk-usage': msg('Disk usage'),
   traffic: msg('Traffic'),
   'account-resources': msg('Account resources'),
+  importPanel: msg('OPanel/BPanel Import'),
   importDirectadmin: msg('DirectAdmin Import'),
   importCpanel: msg('cPanel Import'),
   importFastpanel: msg('FastPanel Import'),
@@ -99,6 +100,8 @@ export const HUBS = [
   // has it): a tab per migration addon that is installed, reached from the
   // Dashboard's Migration tiles and the Addons page - not the sidebar.
   { key: 'migration', title: msg('Migration'), roles: ['admin'], tabs: [
+    // OPanel/BPanel import is core (native restore): always on, no addon.
+    { page: 'importPanel', label: 'OPanel/BPanel' },
     { page: 'importDirectadmin', label: 'DirectAdmin', when: (c) => c.directadminImport },
     { page: 'importCpanel', label: 'cPanel', when: (c) => c.cpanelImport },
     { page: 'importFastpanel', label: 'FastPanel', when: (c) => c.fastpanelImport },
