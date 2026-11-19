@@ -138,7 +138,10 @@ def test_a_failed_restore_drops_what_was_pulled_from_another_server(monkeypatch,
     assert pulled.exists() is kept, "the other server still has the account; a failed copy here is only disk"
 
 
-def test_the_page_marks_them_and_offers_to_restore_over_them():
+def test_the_page_marks_them_and_restores_over_them_by_default():
+    # Operator, 2026-11-19: "Import mặc định sẽ tự ghi đè kể cả trùng tên" - the
+    # box is ticked when the other server's accounts are listed, and can be unticked.
+    assert "setRestoreOverwrite(mode === 'panel' && source === 'ssh');" in APP
     assert "t('Already here')" in APP
     assert "Restore over accounts already on this server ({names})" in APP
     assert "overwrite: crossNative && restoreOverwrite" in APP

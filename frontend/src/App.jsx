@@ -4873,7 +4873,9 @@ function App() {
   async function listRestoreSource(source, mode = restoreMode) {
     setRestoreListing(null);
     setRestorePicks([]);
-    setRestoreOverwrite(false);
+    // OPanel/BPanel Import restores over a same-named account by default
+    // (operator, 2026-11-19); the box stays, ticked, so it can be turned off.
+    setRestoreOverwrite(mode === 'panel' && source === 'ssh');
     setRestoreChoice({});
     const data = await request('/maintenance/restore/list', {
       method: 'POST', body: JSON.stringify({ source: restoreSourceBody(source, mode), kinds: RESTORE_MODES[mode].kinds }),
