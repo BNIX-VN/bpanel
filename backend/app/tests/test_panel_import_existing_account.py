@@ -102,6 +102,8 @@ def test_a_new_account_from_the_other_server_still_restores_and_stays_guarded(mo
 
 
 def test_this_servers_own_backup_still_restores_over_its_own_account(monkeypatch):
+    # A local key names a file in the backup folder; none exists in this test.
+    monkeypatch.setattr(restore_sources, "key_kind", lambda source, key: restore_sources.KIND_PANEL)
     calls, job = _run(monkeypatch, existing="alice", overwrite=False, source={"kind": "local"},
                       key="alice/user-alice-20261119000000.tar.gz")
     assert calls.restored and calls.restored[0][1] is False
