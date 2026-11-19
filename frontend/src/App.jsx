@@ -10234,19 +10234,24 @@ function App() {
     </div>;
   }
 
-  // Named starting points for a cron command, as [key, label, command]. Only
-  // what BPanel's cron accepts: the WP-CLI maintenance commands, and a PHP
-  // script inside the website with its output discarded or kept in a log.
+  // Named starting points for a cron command, as [key, label, command]. What
+  // BPanel's cron accepts: WP-CLI maintenance commands, a PHP script inside the
+  // website, and wget/curl fetching one http(s) URL (for the real-cron wp-cron
+  // setup and webhooks).
   function cronCommandTemplates(site) {
     const wordpress = !site || (site.app_type || 'wordpress') === 'wordpress';
+    const domain = site?.domain || 'example.com';
     return [
       ...(wordpress ? [['wp-due', 'WP-CLI: run due cron events', 'wp cron event run --due-now']] : []),
+      ...(wordpress ? [['wp-wget', 'wget: call wp-cron.php (set DISABLE_WP_CRON in wp-config first)',
+                        `wget -q -O - https://${domain}/wp-cron.php?doing_wp_cron`]] : []),
       ...(wordpress ? [['wp-plugins', 'WP-CLI: update all plugins', 'wp plugin update --all']] : []),
       ...(wordpress ? [['wp-themes', 'WP-CLI: update all themes', 'wp theme update --all']] : []),
       ...(wordpress ? [['wp-core', 'WP-CLI: update WordPress core', 'wp core update']] : []),
       ['php', 'Run a PHP script', 'php -q cron.php'],
       ['php-quiet', 'Run a PHP script, discard its output', 'php cron.php >/dev/null 2>&1'],
       ['php-log', 'Run a PHP script, keep its output in a log', 'php cron.php >> ../logs/cron.log 2>&1'],
+      ['curl', 'curl: fetch a URL (webhook)', `curl -s https://${domain}/`],
     ];
   }
 

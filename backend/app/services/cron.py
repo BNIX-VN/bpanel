@@ -1,6 +1,7 @@
 import re
 import shlex
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from app.models.entities import Website
 from app.services import site_users
@@ -23,6 +24,22 @@ REDIRECT_DUP_RE = re.compile(r"^\d?>&\d$")
 # Anything else that opens with a shell operator (`&>`, `&&`, `|`, `;`, `<`)
 # would otherwise be quoted into a literal argument and silently do nothing.
 SHELL_OPERATOR_RE = re.compile(r"^[;&|<>]")
+# wget/curl are allowed so a site can hit a URL on a schedule -- the common
+# "disable WP-cron, call wp-cron.php from real cron" pattern, and webhooks.
+# Only an allow-list of read-only options plus a single http(s) URL is accepted;
+# this mirrors OPanel's validator, so -K (options from a file), --upload-file,
+# file://, two URLs and writing outside public_html are all refused.
+FETCH_COMMANDS = ("wget", "curl")
+FETCH_BOOL_FLAGS = {
+    "wget": {"-q", "--quiet", "-nv", "--no-verbose", "--spider", "--no-check-certificate", "--no-cache"},
+    "curl": {"-s", "--silent", "-S", "--show-error", "-L", "--location", "-k", "--insecure", "-f", "--fail", "-I", "--head"},
+}
+FETCH_VALUE_FLAGS = {
+    "wget": {"-t", "--tries", "-T", "--timeout", "--connect-timeout", "--read-timeout", "-U", "--user-agent", "--header", "--post-data"},
+    "curl": {"-m", "--max-time", "--connect-timeout", "-A", "--user-agent", "-H", "--header", "-d", "--data", "-X", "--request", "--retry"},
+}
+FETCH_OUTPUT_FLAGS = {"wget": {"-O", "--output-document"}, "curl": {"-o", "--output"}}
+SAFE_OUTPUT_TARGETS = {"-", "/dev/null"}
 ALLOWED_COMMAND_PREFIXES = (
     ("wp", "cron", "event", "run", "--due-now"),
     ("wp", "core", "update"),
@@ -221,6 +238,55 @@ def _validate_wp_command(args: list[str], php_bin: str, cron_user: str) -> str:
     return " ".join(shlex.quote(arg) for arg in resolved)
 
 
+def _validate_fetch_command(args: list[str], document_root: str | Path) -> str:
+    """wget/curl fetching one http(s) URL -- for scheduled wp-cron and webhooks.
+
+    DirectAdmin and cPanel let a cron run any command; BPanel keeps it to an
+    allow-list of read-only options plus a single http(s) URL. Any other option
+    (-K options-from-file, --upload-file, ...) is refused, an -O/-o download may
+    only write to -, /dev/null or inside the website, and only one URL is
+    allowed. The command still runs as the confined site user.
+    """
+    program = args[0]
+    bool_flags = FETCH_BOOL_FLAGS[program]
+    value_flags = FETCH_VALUE_FLAGS[program]
+    output_flags = FETCH_OUTPUT_FLAGS[program]
+    safe_root = Path(document_root).resolve(strict=False)
+
+    urls: list[str] = []
+    index = 1
+    while index < len(args):
+        arg = args[index]
+        if arg in bool_flags:
+            index += 1
+            continue
+        if arg in value_flags or arg in output_flags:
+            if index + 1 >= len(args):
+                raise ValueError(f"{arg} needs a value (separate the option and its value with a space)")
+            value = args[index + 1]
+            if arg in output_flags and value not in SAFE_OUTPUT_TARGETS:
+                candidate = (Path(value) if Path(value).is_absolute() else safe_root / value).resolve(strict=False)
+                try:
+                    candidate.relative_to(safe_root)
+                except ValueError as exc:
+                    raise ValueError(
+                        "Cron downloads may only write to -, /dev/null, or a path inside this website's public_html"
+                    ) from exc
+            index += 2
+            continue
+        if arg.startswith("-"):
+            raise ValueError(f"Option {arg} is not allowed in cron commands")
+        urls.append(arg)
+        index += 1
+
+    if len(urls) != 1:
+        raise ValueError("A wget or curl cron command must fetch exactly one http:// or https:// URL")
+    parsed = urlsplit(urls[0])
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Cron URLs must start with http:// or https://")
+    return " ".join(shlex.quote(arg) for arg in args)
+
+
 def _validate_command(
     command: str,
     document_root: str | Path,
@@ -244,6 +310,8 @@ def _validate_command(
             body = _validate_wp_command(["wp", *args[2:]], php_bin, cron_user)
         else:
             body = _validate_php_command(args, document_root, php_bin, cron_user)
+    elif args[0] in FETCH_COMMANDS:
+        body = _validate_fetch_command(args, document_root)
     else:
         body = _validate_wp_command(args, php_bin, cron_user)
     suffix = _validate_redirection(redirection, document_root, site_root)

