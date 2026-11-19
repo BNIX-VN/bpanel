@@ -47,6 +47,7 @@ def test_the_auto_detecting_source_tries_both_panels_clis():
 
 def _pull_with(monkeypatch, tmp_path, panel, archive_name):
     """Run fetch() over SSH with a packer that hands back ``archive_name``."""
+    monkeypatch.setattr(restore_sources.addons, "is_installed", lambda slug: True)  # DirectAdmin Import on
     monkeypatch.setattr(restore_sources.settings, "backup_root", str(tmp_path / "backups"))
     monkeypatch.setattr(restore_sources.backup, "_ensure_user_dir",
                         lambda path: (path.mkdir(parents=True, exist_ok=True), path)[1])
