@@ -5930,7 +5930,10 @@ function App() {
     if (!isAdmin) return;
     if (page === 'backups' && backupTab === 'restore') enterRestoreMode('bpanel');
     const mode = IMPORT_PAGES[page];
-    if (mode && importAddonsInstalled[mode]) enterRestoreMode(mode);
+    // 'panel' (OPanel/BPanel import) is core, always on; the others wait for
+    // their addon. Without this the wizard never enters panel mode and the
+    // connection form does not show.
+    if (mode && (mode === 'panel' || importAddonsInstalled[mode])) enterRestoreMode(mode);
   }, [backupTab, page, isAdmin, importAddonsInstalled.directadmin, importAddonsInstalled.cpanel, importAddonsInstalled.fastpanel]);
   useEffect(() => {
     if (!restoreJob?.job_id || !['queued', 'running'].includes(restoreJob.status)) return undefined;
