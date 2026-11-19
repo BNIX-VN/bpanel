@@ -70,6 +70,8 @@ export const TILES = {
   'da-import': { label: msg('DirectAdmin Import'), icon: 'directadmin-import', page: 'importDirectadmin', roles: ['admin'], addon: 'directadmin' },
   'cpanel-import': { label: msg('cPanel Import'), icon: 'cpanel-import', page: 'importCpanel', roles: ['admin'], addon: 'cpanel' },
   'fastpanel-import': { label: msg('FastPanel Import'), icon: 'migration', page: 'importFastpanel', roles: ['admin'], addon: 'fastpanel' },
+  // Core, no addon: an OPanel/BPanel archive restores natively, so it is always on.
+  'panel-import': { label: msg('OPanel/BPanel Import'), icon: 'migration', page: 'importPanel', roles: ['admin'] },
 };
 
 // The Dashboard's sections, in order, for each role - SNPanel's own
@@ -86,7 +88,7 @@ const ADMIN = [
   ['server', msg('Server'), ['php', 'services', 'processes', 'ram', 'disk', 'traffic', 'account-resources', 'updates']],
   // Shown only once a migration addon is installed: a section with no tile
   // is left out.
-  ['migration', msg('Migration'), ['da-import', 'cpanel-import', 'fastpanel-import']],
+  ['migration', msg('Migration'), ['panel-import', 'da-import', 'cpanel-import', 'fastpanel-import']],
   // Addons with the rest of Advanced, not a section of one tile of their own
   // (operator, 2026-10-25).
   ['advanced', msg('Advanced'), ['cron', 'redis', 'mcp', 'api-tokens', 'notifications', 'panel-settings', 'addons']],
