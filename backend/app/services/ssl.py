@@ -252,6 +252,176 @@ def manual_ssl_paths(domain: str) -> dict[str, str | None]:
     }
 
 
+# --- certificates carried by an account backup --------------------------------
+
+# Every certificate on this machine, copied by the helper where the panel can
+# read it (root:bpanel 0640; sync_panel_sni_certificates in bpanel-helper.sh):
+# the Let's Encrypt lineages out of root-only /etc/letsencrypt/live, and the
+# uploaded certificates. The panel answers its own :2222 handshake from here
+# (core/panel_sni.py), and an account backup reads its certificates from here
+# too. It is what /etc/opanel/certs is to OPanel.
+PANEL_CERT_STORE = Path("/etc/bpanel/sni")
+
+
+def refresh_cert_store() -> None:
+    """Have the helper copy every certificate on the machine into the store.
+
+    A certificate issued before the store existed, on a box no update has
+    re-synced since, is not in it yet. Best effort, and cheap: the helper only
+    copies what is already on disk.
+    """
+    try:
+        shell.privileged("panel-sni-sync", check=False, fallback=["true"])
+    except Exception:  # noqa: BLE001 - a backup must not fail over a refresh
+        pass
+
+
+def _read_cert_bytes(path: Path | None) -> bytes | None:
+    if path is None:
+        return None
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_SSL_PART_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > MAX_SSL_PART_BYTES or not raw.strip():
+        return None
+    return raw
+
+
+def _manual_ssl_file(value: str | None) -> Path | None:
+    """A website row's certificate path, only when it is inside the uploaded
+    certificate root: the row is all the backup has to go on, and whatever it
+    names is packed into an archive that leaves the box."""
+    if not value:
+        return None
+    text = str(value).replace("\\", "/")
+    root = str(MANUAL_SSL_ROOT).replace("\\", "/").rstrip("/") + "/"
+    if "\x00" in text or ".." in text or not text.startswith(root):
+        return None
+    return Path(text)
+
+
+def _uploaded_candidate(name: str) -> tuple[Path, Path, Path | None]:
+    base = MANUAL_SSL_ROOT / name
+    return base / "cert.crt", base / "privkey.key", base / "ca.crt"
+
+
+def _store_candidate(name: str) -> tuple[Path, Path, Path | None]:
+    base = PANEL_CERT_STORE / name
+    return base / "fullchain.pem", base / "privkey.pem", None
+
+
+def read_site_certificate(domain: str, mode: str = "", cert_path: str | None = None,
+                          key_path: str | None = None, ca_path: str | None = None,
+                          source_domain: str | None = None) -> dict | None:
+    """The certificate a site is being served with, as bytes.
+
+    Read so a backup can carry it: a restored site has to answer HTTPS the
+    moment it comes up, and on a new box there is no certbot account, no
+    renewal config and usually no DNS pointing there yet, so re-issuing is not
+    something the restore can fall back on.
+
+    /etc/letsencrypt/live is root-only, so a Let's Encrypt certificate is taken
+    from the store the panel can read. A site in cloudflare or shared mode is
+    served its source's certificate, looked up the way the vhost is pointed at
+    it (api/websites._borrowed_ssl_paths: the source's uploaded certificate
+    when it has one, else its lineage). Returns None when nothing readable is
+    on disk; an absent certificate is not an error here.
+    """
+    safe = _safe_domain(domain)
+    mode = mode or ""
+    candidates: list[tuple[Path, Path, Path | None]] = []
+
+    if mode == "manual":
+        cert_file, key_file = _manual_ssl_file(cert_path), _manual_ssl_file(key_path)
+        if cert_file and key_file:
+            candidates.append((cert_file, key_file, _manual_ssl_file(ca_path)))
+    if mode in {"cloudflare", "shared"} and source_domain:
+        try:
+            source = _safe_domain(source_domain)
+        except ValueError:
+            source = ""
+        if source:
+            candidates.append(_uploaded_candidate(source))
+            candidates.append(_store_candidate(source))
+    # The site's own name last. When a domain has both, the store holds the
+    # uploaded certificate (it is copied in after Let's Encrypt), so read the
+    # one this mode actually serves first.
+    if mode == "manual":
+        candidates.extend([_uploaded_candidate(safe), _store_candidate(safe)])
+    else:
+        candidates.extend([_store_candidate(safe), _uploaded_candidate(safe)])
+
+    for cert_file, key_file, ca_file in candidates:
+        certificate = _read_cert_bytes(cert_file)
+        private_key = _read_cert_bytes(key_file)
+        if not certificate or not private_key:
+            continue
+        return {
+            "certificate": certificate,
+            "private_key": private_key,
+            "ca_bundle": _read_cert_bytes(ca_file) or b"",
+        }
+    return None
+
+
+def install_site_certificate(domain: str, certificate: bytes, private_key: bytes,
+                             ca_bundle: bytes = b"") -> dict[str, str | None]:
+    """Put a certificate carried by a backup back on disk, as an uploaded one.
+
+    Uploaded whatever it was issued as: the box being restored onto has no
+    renewal config for it, so a vhost pointed into /etc/letsencrypt/live would
+    point at nothing. The site serves HTTPS straight away, and Let's Encrypt
+    can take over once DNS moves.
+
+    Lighter than install_manual_ssl, as OPanel's is: an expired certificate
+    still describes what the site was serving, and refusing it would leave the
+    site on plain HTTP. Two checks stay. The key has to match, or nginx cannot
+    serve the pair at all. And it has to be a certificate for this domain: the
+    archive is third-party data, and every uploaded certificate is also copied
+    into the store the panel answers :2222 from by the names inside it.
+    """
+    safe = _safe_domain(domain)
+    certificate = _normalize_pem(certificate, "certificate", required=True)
+    private_key = _normalize_pem(private_key, "private_key", required=True)
+    ca_bundle = _normalize_pem(ca_bundle or b"", "ca_bundle", required=False)
+    cert = _load_certificate(certificate, "certificate")
+    key = _load_private_key(private_key)
+    if ca_bundle:
+        try:
+            _load_ca_bundle(ca_bundle)
+        except ValueError:
+            ca_bundle = b""
+    _validate_certificate_domain(cert, safe)
+    _validate_key_matches_certificate(key, cert)
+    return _write_manual_ssl_files(safe, certificate, private_key, ca_bundle)
+
+
+def certificate_names(certificate: bytes) -> list[str]:
+    """The names a PEM certificate is valid for (its SANs, else its CN)."""
+    try:
+        cert = x509.load_pem_x509_certificate(certificate)
+    except ValueError:
+        return []
+    names: set[str] = set()
+    try:
+        san = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
+        names.update(name.lower() for name in san.get_values_for_type(x509.DNSName))
+    except x509.ExtensionNotFound:
+        pass
+    if not names:
+        names.update(str(attr.value).lower() for attr in cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME))
+    return sorted(names)
+
+
+def certificate_expiry(certificate: bytes) -> datetime | None:
+    try:
+        return x509.load_pem_x509_certificate(certificate).not_valid_after_utc
+    except Exception:  # noqa: BLE001 - unreadable just means unknown
+        return None
+
+
 def read_ssl_part(value, *, label: str, required: bool = True) -> bytes:
     if value is None:
         if required:

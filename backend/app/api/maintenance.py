@@ -1433,6 +1433,23 @@ def _restore_directadmin(path: str, kind: str = restore_sources.KIND_DA) -> dict
             "credentials": result.get("credentials") or []}
 
 
+def _panel_restore_note(outcome: dict) -> str:
+    """What a BPanel or OPanel archive brought back, for its row on the page.
+
+    Worded as OPanel words it, so an account moved either way reads the same;
+    a site whose certificate did not come back is named with the reason, as
+    that site is now on plain HTTP until someone issues one.
+    """
+    note = f"{len(outcome.get('websites') or [])} site(s)"
+    certificates = outcome.get("certificates") or []
+    if certificates:
+        note += f", {len(certificates)} cert(s)"
+    warnings = outcome.get("ssl_warnings") or []
+    if warnings:
+        note += f", SSL not restored for {len(warnings)}: " + "; ".join(str(item) for item in warnings)
+    return note[:500]
+
+
 def _da_import_busy() -> bool:
     """An import from the old DA Import endpoints is running."""
     from app.services import da_import
@@ -1492,6 +1509,8 @@ def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: lis
                     else:
                         outcome = backup.restore_user_backup(path, db, operator_is_admin=operator_is_admin,
                                                              refuse_existing_user=refuse_existing)
+                        if isinstance(outcome, dict) and not outcome.get("message"):
+                            outcome = {**outcome, "message": _panel_restore_note(outcome)}
                     username = outcome.get("username", "") if isinstance(outcome, dict) else ""
                     _set_restore_result(job_id, index, status="done", username=username or item.get("username", ""),
                                         detail=outcome.get("message", "") if isinstance(outcome, dict) else "",

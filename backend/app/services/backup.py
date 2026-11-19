@@ -1,6 +1,6 @@
 from contextlib import contextmanager
-from datetime import datetime
-from io import StringIO
+from datetime import datetime, timezone
+from io import BytesIO, StringIO
 import hashlib
 import json
 import logging
@@ -13,6 +13,7 @@ import shutil
 import stat
 import tarfile
 import tempfile
+import time
 from typing import List, Optional
 
 import paramiko
@@ -25,12 +26,17 @@ from app.core.security import hash_password
 from app.core.permissions import Role
 from app.models.entities import DatabaseAccount, MailAccount, SiteApp, User, Website, WebsiteAlias
 from app.services import mariadb, nginx, site_users, waf, wordpress
+from app.services import ssl as ssl_service
 from app.services.shell import shell
 
 
 logger = logging.getLogger("bpanel.backup")
 
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+# One certificate, key or CA chain inside an account archive, and all of an
+# archive's together; real ones are a few kilobytes.
+MAX_SSL_MEMBER_BYTES = 256 * 1024
+MAX_SSL_MEMBERS_TOTAL_BYTES = 32 * 1024 * 1024
 BACKUP_MANIFEST = "manifest.json"
 # What a user backup could not read: one member at the end of the archive.
 BACKUP_SKIPPED = "skipped.json"
@@ -251,6 +257,8 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None, on_progre
 
         sql_files: dict[str, Path] = {}
         linked: dict[int, dict] = {}
+        ssl_files: dict[str, dict] = {}
+        store_refreshed = [False]
         for website in websites:
             site_entry = {
                 "domain": website.domain,
@@ -272,7 +280,40 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None, on_progre
                 # None is the default list (services/php_functions.py).
                 "disable_functions": getattr(website, "disable_functions", None),
                 "database": None,
+                # OPanel's format, key for key, so either panel restores the
+                # other's archive with the site still on HTTPS.
+                "ssl": None,
             }
+            # Carry the certificate, not just the fact that there was one. A
+            # restored site has to answer HTTPS as soon as it comes up: the new
+            # box has no certbot account or renewal config for the domain, and
+            # DNS usually still points at the old server, so re-issuing is not
+            # something the restore can fall back on. A site with no TLS
+            # carries no section at all.
+            if getattr(website, "ssl_enabled", False):
+                try:
+                    material = _site_certificate(website, store_refreshed)
+                except Exception as exc:  # noqa: BLE001 - one site's certificate must not cost the backup
+                    material = None
+                    skipped.append({"path": f"ssl:{website.domain}", "reason": str(exc)[-500:]})
+                else:
+                    if material is None:
+                        skipped.append({"path": f"ssl:{website.domain}",
+                                        "reason": "No readable certificate on disk"})
+                if material:
+                    mode = getattr(website, "ssl_mode", "") or ""
+                    base = f"ssl/{website.domain}"
+                    ssl_files[website.domain] = material
+                    site_entry["ssl"] = {
+                        "issued_as": _ISSUED_AS.get(mode, "letsencrypt"),
+                        "wildcard": mode == "cloudflare" or (
+                            mode == "shared"
+                            and any(name.startswith("*.")
+                                    for name in ssl_service.certificate_names(material["certificate"]))),
+                        "member_cert": f"{base}/fullchain.pem",
+                        "member_key": f"{base}/privkey.pem",
+                        "member_ca": f"{base}/ca.pem" if material["ca_bundle"] else "",
+                    }
             db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
             if db_item:
                 sql_name = f"{website.domain}.sql"
@@ -358,6 +399,19 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None, on_progre
             for key, sql_path in sql_files.items():
                 if key.startswith("db:") and sql_path.exists():
                     tar.add(sql_path, arcname=f"databases/db-{key[3:]}.sql")
+            # Straight from memory: a private key is never written to the
+            # staging folder on its way in, and it is stored 0600.
+            for site_entry in manifest["websites"]:
+                material = ssl_files.get(site_entry["domain"])
+                if not material or not site_entry.get("ssl"):
+                    continue
+                for member, part in (
+                    (site_entry["ssl"]["member_cert"], material["certificate"]),
+                    (site_entry["ssl"]["member_key"], material["private_key"]),
+                    (site_entry["ssl"]["member_ca"], material["ca_bundle"]),
+                ):
+                    if member and part:
+                        _add_bytes(tar, member, part, mode=0o600)
             for name, payload in app_payloads.items():
                 if payload.exists():
                     tar.add(payload, arcname=f"applications/{name}.tar")
@@ -375,6 +429,52 @@ def create_user_backup(user: User, db, skipped: Optional[list] = None, on_progre
         logger.warning("Backup of user %s skipped %d unreadable path(s): %s",
                        user.username, len(skipped), describe_skipped(skipped))
     return str(archive)
+
+
+# What a site's certificate was, in OPanel's words, so an archive reads the same
+# on either panel. OPanel has letsencrypt (with "wildcard" for a DNS-01 one),
+# manual and reuse; BPanel's cloudflare is a DNS-01 wildcard and shared is a
+# reuse. ssl_enabled with no mode is a Let's Encrypt lineage found on disk.
+_ISSUED_AS = {"letsencrypt": "letsencrypt", "cloudflare": "letsencrypt", "shared": "reuse", "manual": "manual"}
+
+
+def _site_certificate(website: Website, store_refreshed: list) -> Optional[dict]:
+    """The certificate ``website`` is served with, or None when none is readable.
+
+    Read as the panel, never through a helper that hands key material out: the
+    helper already keeps a panel-readable copy of every certificate on the box
+    (ssl.PANEL_CERT_STORE). A box whose copies predate a certificate gets them
+    refreshed once per backup, and only when a site came up empty.
+    """
+    def read() -> Optional[dict]:
+        return ssl_service.read_site_certificate(
+            website.domain,
+            mode=getattr(website, "ssl_mode", "") or "",
+            cert_path=getattr(website, "ssl_cert_path", None),
+            key_path=getattr(website, "ssl_key_path", None),
+            ca_path=getattr(website, "ssl_ca_path", None),
+            source_domain=getattr(website, "ssl_source_domain", None),
+        )
+
+    material = read()
+    if material is None and not store_refreshed[0]:
+        store_refreshed[0] = True
+        ssl_service.refresh_cert_store()
+        material = read()
+    return material
+
+
+def _add_bytes(tar: tarfile.TarFile, arcname: str, payload: bytes, mode: int = 0o600) -> None:
+    """Store bytes the caller already holds, without a file on disk.
+
+    A private key must not be written to a temp directory on the way into the
+    archive; it goes straight from memory into the stream.
+    """
+    info = tarfile.TarInfo(arcname)
+    info.size = len(payload)
+    info.mode = mode
+    info.mtime = int(time.time())
+    tar.addfile(info, BytesIO(payload))
 
 
 def _add_tree(tar: tarfile.TarFile, source, arcname: str, skipped: list, on_bytes=None) -> None:
@@ -742,6 +842,145 @@ def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -
         return target
 
 
+# The file name inside ssl/<domain>/: fullchain.pem, privkey.pem, ca.pem as
+# both panels write them, but any plain name is accepted.
+SSL_MEMBER_LEAF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _certificate_member_name(domain: str, value) -> str:
+    """``value`` when it names a file in the site's own ssl/<domain>/ folder.
+
+    The archive is third-party data, and its manifest says where each site's
+    certificate is. A site entry pointing into another site's folder, or
+    anywhere else in the archive, would install material this restore is not
+    bringing back for this site.
+    """
+    if not value:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("Invalid certificate member")
+    folder, _, leaf = value.rpartition("/")
+    if folder.lower() != f"ssl/{domain}" or not SSL_MEMBER_LEAF_RE.fullmatch(leaf):
+        raise ValueError(f"Invalid certificate member: {value[:200]}")
+    return value
+
+
+def _wanted_certificate_members(manifest: dict) -> set[str]:
+    wanted: set[str] = set()
+    for site_info in manifest.get("websites") or []:
+        if not isinstance(site_info, dict) or not isinstance(site_info.get("ssl"), dict):
+            continue
+        domain = str(site_info.get("domain") or "").strip().lower()
+        for key in ("member_cert", "member_key", "member_ca"):
+            try:
+                name = _certificate_member_name(domain, site_info["ssl"].get(key))
+            except ValueError:
+                continue  # the site's own step says so, as a warning
+            if name:
+                wanted.add(name)
+    return wanted
+
+
+def _read_certificate_members(archive: Path, wanted: set[str]) -> dict[str, Optional[bytes]]:
+    """Every certificate member the restore needs, in one pass over the archive.
+
+    A .tar.gz is read front to back and these sit at its end, so reading them
+    one by one decompressed the whole archive once per file - three times per
+    site. Into memory, never a temp file, so a private key is not left in a
+    folder when the restore fails partway. None marks a member that is not a
+    small regular file.
+    """
+    found: dict[str, Optional[bytes]] = {}
+    if not wanted:
+        return found
+    # Held in memory for the whole restore, so bounded as a whole too: a real
+    # account's certificates are a few kilobytes a site.
+    budget = MAX_SSL_MEMBERS_TOTAL_BYTES
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar:
+            if member.name not in wanted:
+                continue
+            if not member.isfile() or member.size > min(MAX_SSL_MEMBER_BYTES, budget):
+                found[member.name] = None
+                continue
+            source = tar.extractfile(member)
+            found[member.name] = source.read() if source else b""
+            budget -= len(found[member.name])
+    return found
+
+
+def _panel_hostnames() -> set[str]:
+    """The names the panel itself answers on.
+
+    Every uploaded certificate is also copied into the store the panel answers
+    its :2222 handshake from, so a certificate an archive brings for one of
+    these names would be served for the panel's own login page.
+    """
+    from urllib.parse import urlparse
+
+    candidates = [settings.panel_domain, urlparse(settings.panel_url or "").hostname]
+    try:
+        from app.services import panel_settings
+
+        candidates.append(panel_settings.parse_panel_url(panel_settings.configured_panel_url())[1])
+    except Exception:  # noqa: BLE001 - an unset panel URL is normal
+        pass
+    hosts: set[str] = set()
+    for raw in candidates:
+        host = (raw or "").strip().lower()
+        if host:
+            hosts.update({host, f"www.{host}"})
+    return hosts
+
+
+def _restore_site_certificate(db, website: Website, ssl_info, members: dict) -> tuple[dict, bytes]:
+    """Install the certificate a site entry carries, for that site and no other.
+
+    Returns the paths it now has on disk and the certificate itself. Raises on
+    anything wrong with it; the caller turns that into a warning, because a
+    site on plain HTTP is recoverable and a failed restore is not.
+    """
+    domain = website.domain
+    if not isinstance(ssl_info, dict):
+        raise ValueError("invalid certificate entry")
+    if domain in _panel_hostnames():
+        raise ValueError("the panel itself answers on this name; issue its certificate on this server")
+    # A site of another account in shared or cloudflare mode is pointed at the
+    # uploaded certificate under this name whenever there is one
+    # (api/websites._borrowed_ssl_paths), so installing one here would change
+    # what that site serves.
+    borrower = db.query(Website).filter(
+        Website.ssl_source_domain == domain,
+        Website.ssl_mode.in_(("shared", "cloudflare")),
+        Website.owner_id != website.owner_id,
+    ).first()
+    if borrower is not None:
+        raise ValueError(f"{borrower.domain}, on another account, is served the certificate under this name")
+
+    def part(key: str) -> bytes:
+        name = _certificate_member_name(domain, ssl_info.get(key))
+        if not name:
+            return b""
+        if name in members and members[name] is None:
+            raise ValueError(f"Invalid certificate member: {name}")
+        return members.get(name) or b""
+
+    certificate, private_key, ca_bundle = part("member_cert"), part("member_key"), part("member_ca")
+    if not certificate or not private_key:
+        raise ValueError("certificate material missing from the archive")
+    paths = ssl_service.install_site_certificate(domain, certificate, private_key, ca_bundle)
+    return paths, certificate
+
+
+def _forget_site_certificate(website: Website) -> None:
+    website.ssl_enabled = False
+    website.ssl_mode = "none"
+    website.ssl_cert_path = None
+    website.ssl_key_path = None
+    website.ssl_ca_path = None
+    website.ssl_source_domain = None
+
+
 def existing_account_message(username: str) -> str:
     return (f"An account named {username} is already on this server. It is a different account "
             "from the one on the other server, so it is left alone: tick \"Restore over accounts "
@@ -835,6 +1074,16 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
         prefix="bpanel-user-restore-", dir=str(site_users.IMPORT_STAGE_BASE)
     ) as tmp:
         tmp_dir = Path(tmp)
+        # The certificates the archive carries (OPanel's archives always did,
+        # BPanel's since 2026-11-19), all read in one pass; each is installed
+        # just before its site's vhost is written, below.
+        restored_certificates: list = []
+        ssl_warnings: list = []
+        try:
+            certificate_members = _read_certificate_members(archive, _wanted_certificate_members(manifest))
+        except (OSError, EOFError, tarfile.TarError) as exc:
+            logger.warning("Could not read the certificates in %s: %s", archive.name, exc)
+            certificate_members = {}
         for site_info in manifest.get("websites") or []:
             domain = (site_info.get("domain") or "").strip().lower()
             if not site_users.DOMAIN_RE.fullmatch(domain):
@@ -1007,6 +1256,49 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
                     db_account.db_user = db_user
                     db_account.db_password = encrypt(db_password)
 
+            # Put the certificate back before the vhost is written, so the site
+            # comes up on HTTPS in the same pass rather than waiting for someone
+            # to notice and re-issue. A site that already has one on this
+            # server keeps it: restoring last night's backup over a live site
+            # would otherwise swap a renewing Let's Encrypt lineage for a copy
+            # that is never renewed.
+            ssl_kwargs: dict = {}
+            restored_certificate = None
+            ssl_info = site_info.get("ssl") or None
+            keeps_own_certificate = not created_site and bool(website.ssl_enabled)
+            if ssl_info and not keeps_own_certificate:
+                try:
+                    paths, certificate = _restore_site_certificate(db, website, ssl_info, certificate_members)
+                    website.ssl_enabled = True
+                    # Uploaded whatever it was issued as: this box has no
+                    # renewal config for it, so a vhost pointing into
+                    # /etc/letsencrypt/live would point at nothing. Let's
+                    # Encrypt can take over once DNS moves; until then the site
+                    # is served, not broken.
+                    website.ssl_mode = "manual"
+                    website.ssl_cert_path = paths.get("cert")
+                    website.ssl_key_path = paths.get("key")
+                    website.ssl_ca_path = paths.get("ca")
+                    website.ssl_source_domain = None
+                    website.ssl_updated_at = datetime.utcnow()
+                    ssl_kwargs = {
+                        "ssl_cert_path": paths.get("cert"),
+                        "ssl_key_path": paths.get("key"),
+                        "ssl_ca_path": paths.get("ca"),
+                    }
+                    expiry = ssl_service.certificate_expiry(certificate)
+                    restored_certificate = {
+                        "domain": domain,
+                        "issued_as": str(ssl_info.get("issued_as") or "")[:32],
+                        "expires": expiry.isoformat() if expiry else "",
+                        "expired": bool(expiry and expiry < datetime.now(timezone.utc)),
+                    }
+                except Exception as exc:  # noqa: BLE001 - a certificate never fails the restore
+                    # A site on plain HTTP is recoverable; a failed restore is
+                    # not. Say which domain and why, and carry on.
+                    _forget_site_certificate(website)
+                    ssl_warnings.append(f"{domain}: {str(exc)[:300]}")
+
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 raise RuntimeError((result.stderr or result.stdout or "Could not write WAF rules").strip())
@@ -1014,9 +1306,7 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
                 result = nginx.sync_http_flood_zones(db.query(Website).all())
                 if result.returncode != 0:
                     raise RuntimeError((result.stderr or result.stdout or "Could not write HTTP flood zones").strip())
-            nginx.rewrite_vhost(
-                domain,
-                root_path,
+            vhost_kwargs = dict(
                 app_type=app_type,
                 php_version=php_version,
                 custom_directives=website.nginx_custom or "",
@@ -1030,6 +1320,25 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
                 proxy_url=proxy_url,
                 proxy_preserve_host=site_info.get("proxy_preserve_host", True) is not False,
             )
+            try:
+                nginx.rewrite_vhost(domain, root_path, **vhost_kwargs, **ssl_kwargs)
+            except (RuntimeError, ValueError) as exc:
+                if not ssl_kwargs:
+                    raise
+                # nginx -t would not take the restored certificate. It passed
+                # the panel's own checks, so this is rare, and it is the same
+                # case as one that never installed: a warning, plain HTTP, and
+                # the files gone again so nothing else picks them up.
+                ssl_warnings.append(f"{domain}: nginx would not load the certificate: {str(exc)[:300]}")
+                restored_certificate = None
+                _forget_site_certificate(website)
+                try:
+                    ssl_service.remove_manual_ssl(domain)
+                except (RuntimeError, ValueError, OSError):
+                    pass
+                nginx.rewrite_vhost(domain, root_path, **vhost_kwargs)
+            if restored_certificate:
+                restored_certificates.append(restored_certificate)
             if not website.http_flood_enabled:
                 result = nginx.sync_http_flood_zones(db.query(Website).all())
                 if result.returncode != 0:
@@ -1076,6 +1385,10 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
         "databases": restored_databases,
         "applications": restored_apps,
         "mailboxes": restored_mail,
+        # Same keys as OPanel's restore: what came back on HTTPS, and which
+        # sites did not, with why.
+        "certificates": restored_certificates,
+        "ssl_warnings": ssl_warnings,
     }
 
 
