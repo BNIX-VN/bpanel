@@ -1,9 +1,12 @@
+import contextlib
 from datetime import datetime
+import os
 from pathlib import Path
 import re
 import secrets
 import string
 import subprocess
+import tempfile
 from typing import Dict
 
 from app.core.config import settings
@@ -202,6 +205,82 @@ def import_database(db_name: str, input_file: str):
     args = _mysql_args([safe_name])
     with sql_path.open("rb") as source:
         completed = subprocess.run(args, stdin=source, capture_output=True, check=False)
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Database import failed: {stderr.strip()}")
+    return completed
+
+
+# --- Importing a dump that came out of an archive ------------------------------------
+# import_database() runs as the panel's own account, which may do anything on
+# the server, and `mysql <db>` only picks the default schema: a dump body can
+# still GRANT, CREATE USER or touch another tenant's tables. A website backup
+# can be one its owner uploaded, so its dump is loaded through an account that
+# MariaDB itself confines to the one schema.
+RESTORE_USER_PREFIX = "bprst_"
+
+
+@contextlib.contextmanager
+def _client_defaults_file(db_user: str, db_password: str):
+    """A 0600 [client] defaults-file for one account. The password stays out of
+    argv: /proc/<pid>/cmdline is readable by every local user, every other
+    tenant's PHP included."""
+    safe_user = _validate_identifier(db_user)
+    if any(ch in db_password for ch in "\r\n\x00"):
+        raise ValueError("Invalid database password")
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix="bpanel-mysql-", suffix=".cnf", delete=False)
+    try:
+        os.chmod(handle.name, 0o600)
+        handle.write(f"[client]\nuser={safe_user}\npassword={db_password}\nhost=localhost\n")
+        handle.close()
+        yield handle.name
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(handle.name)
+
+
+def _import_as(db_user: str, db_password: str, db_name: str, sql_path: Path) -> subprocess.CompletedProcess:
+    with _client_defaults_file(db_user, db_password) as defaults, sql_path.open("rb") as source:
+        return subprocess.run(["mysql", f"--defaults-file={defaults}", db_name], stdin=source,
+                              capture_output=True, check=False)
+
+
+def _login_refused(completed: subprocess.CompletedProcess) -> bool:
+    # ERROR 1045 (28000): Access denied - at connect, before any statement ran.
+    return completed.returncode != 0 and b"ERROR 1045" in (completed.stderr or b"")
+
+
+def import_database_scoped(db_name: str, input_file: str, *, db_user: str | None = None,
+                           db_password: str | None = None) -> subprocess.CompletedProcess:
+    """Load a SQL dump from an archive into ``db_name``, as an account limited
+    to that schema.
+
+    With the schema's own login (``db_user`` and its stored password), triggers
+    and views that name that user as DEFINER come back as they were. A database
+    imported from DirectAdmin has no password the panel knows, and a stored one
+    can be stale: then a temporary login is made with rights on this schema
+    only, and dropped afterwards.
+    """
+    safe_name = _validate_identifier(db_name)
+    sql_path = Path(input_file).resolve()
+    if not sql_path.exists() or not sql_path.is_file():
+        raise FileNotFoundError("SQL file not found")
+    if settings.command_dry_run:
+        return shell.run(["mysql", safe_name], sensitive=True)
+    completed = None
+    if db_user and db_password:
+        completed = _import_as(db_user, db_password, safe_name, sql_path)
+    if completed is None or _login_refused(completed):
+        user = RESTORE_USER_PREFIX + secrets.token_hex(5)
+        password = random_password(32)
+        _run_sql(
+            f"CREATE USER {_quote_sql_string(user)}@'localhost' IDENTIFIED BY {_quote_sql_string(password)};\n"
+            f"GRANT ALL PRIVILEGES ON {_grant_target(safe_name)} TO {_quote_sql_string(user)}@'localhost';\n"
+        )
+        try:
+            completed = _import_as(user, password, safe_name, sql_path)
+        finally:
+            _run_sql(f"DROP USER IF EXISTS {_quote_sql_string(user)}@'localhost';\n", check=False)
     if completed.returncode != 0:
         stderr = completed.stderr.decode("utf-8", errors="replace")
         raise RuntimeError(f"Database import failed: {stderr.strip()}")

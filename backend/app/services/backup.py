@@ -1622,6 +1622,42 @@ def restore_backup(website: Website, backup_file: str) -> str:
     return str(destination)
 
 
+def _database_member(tar: tarfile.TarFile) -> Optional[tarfile.TarInfo]:
+    """The SQL dump create_backup() puts at database/<domain>-<stamp>.sql."""
+    for member in tar.getmembers():
+        if member.isfile() and member.name.startswith("database/") and member.name.endswith(".sql"):
+            return member
+    return None
+
+
+def archive_has_database(website: Website, backup_file: str) -> bool:
+    with tarfile.open(backup_path(website.domain, backup_file), "r:gz") as tar:
+        return _database_member(tar) is not None
+
+
+def restore_backup_database(website: Website, backup_file: str, db_name: str, *,
+                            db_user: Optional[str] = None, db_password: Optional[str] = None) -> bool:
+    """Import the SQL dump a website backup holds into the site's database.
+
+    restore_backup() puts the files back and skips database/, so the dump
+    create_backup() had taken could not be restored at all (2026-11-20). The
+    archive may be one the owner uploaded, so the import runs as an account
+    limited to this one schema. False when the archive holds no dump.
+    """
+    archive = backup_path(website.domain, backup_file)
+    with tempfile.TemporaryDirectory(prefix="bpanel-db-restore-") as tmp_dir:
+        sql_path = Path(tmp_dir) / "restore.sql"
+        with tarfile.open(archive, "r:gz") as tar:
+            member = _database_member(tar)
+            extracted = tar.extractfile(member) if member is not None else None
+            if extracted is None:
+                return False
+            with extracted, open(sql_path, "wb") as handle:
+                shutil.copyfileobj(extracted, handle)
+        mariadb.import_database_scoped(db_name, str(sql_path), db_user=db_user, db_password=db_password)
+    return True
+
+
 def backup_path(domain: str, backup_file: str) -> Path:
     backup_root = (Path(settings.backup_root).resolve() / domain).resolve()
     path = Path(backup_file).resolve()

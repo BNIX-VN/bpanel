@@ -707,8 +707,35 @@ def restore_backup(payload: RestoreBackup, db: Session = Depends(get_db), curren
         runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
         site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
     wordpress.fix_permissions(website.root_path, website.linux_user)
-    log_action(db, current_user.id, "restore", website.domain, payload.backup_file)
-    return {"restored_to": path}
+    database_restored = False
+    note = ""
+    if payload.restore_database:
+        account = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
+        if account is None:
+            note = "No database is linked to this website, so only the files were restored."
+        else:
+            try:
+                stored_password = decrypt(account.db_password) if account.db_password else None
+            except RuntimeError:
+                stored_password = None  # unreadable: a temporary login does the import
+            try:
+                database_restored = backup.restore_backup_database(
+                    website,
+                    payload.backup_file,
+                    account.db_name,
+                    db_user=account.db_user,
+                    db_password=stored_password,
+                )
+            except (FileNotFoundError, RuntimeError, ValueError, tarfile.TarError) as exc:
+                log_action(db, current_user.id, "restore", website.domain, f"{payload.backup_file} (files only: {exc})")
+                raise HTTPException(
+                    status_code=400, detail=f"The files were restored, but the database import failed: {exc}"
+                ) from exc
+            if not database_restored:
+                note = "This backup holds no database dump, so only the files were restored."
+    log_action(db, current_user.id, "restore", website.domain,
+               f"{payload.backup_file} (files and database)" if database_restored else payload.backup_file)
+    return {"restored_to": path, "database_restored": database_restored, "note": note}
 
 
 @router.get("/backups/{website_id}")
