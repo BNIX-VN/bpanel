@@ -20,7 +20,7 @@ import copy
 import logging
 import os
 import socket
-from pathlib import Path
+import ssl
 
 import uvicorn
 import uvicorn.config
@@ -94,12 +94,55 @@ def _port() -> int:
         return 2222
 
 
-def _certificate_pair() -> tuple[str, str] | None:
+# What `bpanel-helper panel-ssl-selfsigned` writes: the certificate to fall
+# back on when the configured one cannot be used.
+SELF_SIGNED_PAIR = ("/etc/bpanel/panel-selfsigned-fullchain.pem", "/etc/bpanel/panel-selfsigned-privkey.pem")
+
+
+def _configured_pair() -> tuple[str, str] | None:
+    """The certificate .env names, or None when it names none - an http://
+    panel URL, which `panel-url-set http` leaves with both values empty."""
     cert = (os.environ.get("PANEL_SSL_CERT") or "").strip()
     key = (os.environ.get("PANEL_SSL_KEY") or "").strip()
-    if cert and key and Path(cert).is_file() and Path(key).is_file():
-        return cert, key
-    return None
+    return (cert, key) if cert or key else None
+
+
+def _loads(pair: tuple[str, str]) -> bool:
+    """Whether the pair makes a working server context - present, readable,
+    and a key that belongs to the certificate."""
+    cert, key = pair
+    if not cert or not key:
+        return False
+    try:
+        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key)
+    except (OSError, ssl.SSLError, ValueError) as exc:
+        logger.error("The panel certificate %s / %s cannot be used: %s", cert, key, exc)
+        return False
+    return True
+
+
+def choose_tls() -> tuple[str, tuple[str, str] | None]:
+    """("https", pair), ("http", None), or ("degraded", None).
+
+    A certificate that is configured but cannot be used no longer means plain
+    HTTP (1.20.3): that sent the login form and the session cookie in clear
+    text with nothing to say so. The self-signed certificate is tried next;
+    with neither, the port serves only the recovery page (core/tls_degraded).
+    An http:// panel URL is the administrator's own setting and is kept.
+    """
+    configured = _configured_pair()
+    if configured is None:
+        logger.warning("No panel certificate is configured: serving over plain HTTP, as the panel URL says")
+        return "http", None
+    if _loads(configured):
+        return "https", configured
+    if configured != SELF_SIGNED_PAIR and _loads(SELF_SIGNED_PAIR):
+        logger.warning("Serving the self-signed certificate %s instead; browsers will warn until the "
+                       "panel certificate is fixed", SELF_SIGNED_PAIR[0])
+        return "https", SELF_SIGNED_PAIR
+    logger.error("No usable panel certificate: the port serves the recovery page only, and sign-in stays "
+                 "off until a certificate loads (bpanel install-panel-ssl)")
+    return "degraded", None
 
 
 def _log_config() -> dict:
@@ -123,7 +166,7 @@ def _log_config() -> dict:
 
 
 def build_config() -> uvicorn.Config:
-    pair = _certificate_pair()
+    mode, pair = choose_tls()
     options: dict = {
         "host": "0.0.0.0",
         "port": _port(),
@@ -131,6 +174,11 @@ def build_config() -> uvicorn.Config:
         "forwarded_allow_ips": TRUSTED_FORWARDERS,
         "log_config": _log_config(),
     }
+    if mode == "degraded":
+        # Plain HTTP, but no application behind it: nothing to sign in to.
+        config = uvicorn.Config("app.core.tls_degraded:app", **options)
+        config.load()
+        return config
     if pair:
         options["ssl_certfile"], options["ssl_keyfile"] = pair
     config = uvicorn.Config("app.main:app", **options)

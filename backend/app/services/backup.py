@@ -1622,7 +1622,7 @@ def restore_backup(website: Website, backup_file: str) -> str:
     return str(destination)
 
 
-def _database_member(tar: tarfile.TarFile) -> Optional[tarfile.TarInfo]:
+def _database_member(tar: tarfile.TarFile) -> tarfile.TarInfo | None:
     """The SQL dump create_backup() puts at database/<domain>-<stamp>.sql."""
     for member in tar.getmembers():
         if member.isfile() and member.name.startswith("database/") and member.name.endswith(".sql"):
@@ -1636,7 +1636,7 @@ def archive_has_database(website: Website, backup_file: str) -> bool:
 
 
 def restore_backup_database(website: Website, backup_file: str, db_name: str, *,
-                            db_user: Optional[str] = None, db_password: Optional[str] = None) -> bool:
+                            db_user: str | None = None, db_password: str | None = None) -> bool:
     """Import the SQL dump a website backup holds into the site's database.
 
     restore_backup() puts the files back and skips database/, so the dump
