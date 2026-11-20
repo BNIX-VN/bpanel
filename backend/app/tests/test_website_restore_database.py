@@ -7,6 +7,7 @@ restore now imports it on request, through an account MariaDB confines to the
 site's one schema: the archive may be one the owner uploaded.
 """
 import io
+import re
 import subprocess
 import tarfile
 from pathlib import Path
@@ -175,7 +176,7 @@ def test_the_import_runs_as_the_sites_login_never_the_panels(mysql):
     mariadb.import_database_scoped("shop_db", dump, db_user="shop_user", db_password="site-password")
     (call,) = calls
     assert call["args"][0] == "mysql" and call["args"][-1] == "shop_db"
-    assert "user=shop_user\n" in call["defaults"] and "password=site-password\n" in call["defaults"]
+    assert "user=shop_user\n" in call["defaults"] and 'password="site-password"\n' in call["defaults"]
     # The password is in the 0600 file, never in argv; and the file is gone.
     assert not any("site-password" in arg for arg in call["args"])
     assert not Path(call["args"][1].split("=", 1)[1]).exists()
@@ -196,6 +197,31 @@ def test_without_a_password_a_temporary_login_does_it_and_is_dropped(mysql):
     assert f"GRANT ALL PRIVILEGES ON `shop\\_db`.* TO '{user}'@'localhost'" in create
     assert "WITH GRANT OPTION" not in create and "*.*" not in create
     assert drop == f"DROP USER IF EXISTS '{user}'@'localhost';\n"
+    # Hex: nothing in it an option file would read as a comment or an escape.
+    password = call["defaults"].split("password=")[1].split("\n")[0]
+    assert re.fullmatch(r'"[0-9a-f]{48}"', password)
+
+
+# On .88, 2026-11-20: an unquoted `password=` line is cut at the first `#`,
+# and random_password() puts a `#` in about one password in three - the
+# temporary login was refused with ERROR 1045 on the second live run.
+@pytest.mark.parametrize("password, line", [
+    ("abc#def", 'password="abc#def"'),
+    ("a;b c", 'password="a;b c"'),
+    ("back\\slash", 'password="back\\\\slash"'),
+    ('say "hi"', "password='say \"hi\"'"),
+])
+def test_the_password_reads_back_from_the_option_file_as_it_is(mysql, password, line):
+    calls, _sql, _outcomes, dump = mysql
+    mariadb.import_database_scoped("shop_db", dump, db_user="shop_user", db_password=password)
+    assert line + "\n" in calls[0]["defaults"]
+
+
+def test_a_password_no_option_file_can_hold_goes_to_a_temporary_login(mysql):
+    calls, sql, _outcomes, dump = mysql
+    mariadb.import_database_scoped("shop_db", dump, db_user="shop_user", db_password="it's \"both\"")
+    (call,) = calls
+    assert mariadb.RESTORE_USER_PREFIX in call["defaults"] and len(sql) == 2
 
 
 def test_a_refused_stored_password_falls_back_to_a_temporary_login(mysql):

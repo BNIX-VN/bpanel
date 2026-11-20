@@ -220,18 +220,32 @@ def import_database(db_name: str, input_file: str):
 RESTORE_USER_PREFIX = "bprst_"
 
 
+def _option_value(value: str) -> str:
+    """A value as a MariaDB option file reads it back unchanged. Unquoted, a
+    `#` starts a comment and cuts the rest off - and random_password() puts a
+    `#` in about one password in three - so it is always quoted; the file
+    unescapes backslashes in any value, so those are doubled."""
+    if any(ch in value for ch in "\r\n\x00"):
+        raise ValueError("Invalid database password")
+    escaped = value.replace("\\", "\\\\")
+    if '"' not in value:
+        return f'"{escaped}"'
+    if "'" not in value:
+        return f"'{escaped}'"
+    raise ValueError("A password with both kinds of quote cannot go in an option file")
+
+
 @contextlib.contextmanager
 def _client_defaults_file(db_user: str, db_password: str):
     """A 0600 [client] defaults-file for one account. The password stays out of
     argv: /proc/<pid>/cmdline is readable by every local user, every other
     tenant's PHP included."""
     safe_user = _validate_identifier(db_user)
-    if any(ch in db_password for ch in "\r\n\x00"):
-        raise ValueError("Invalid database password")
+    password = _option_value(db_password)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix="bpanel-mysql-", suffix=".cnf", delete=False)
     try:
         os.chmod(handle.name, 0o600)
-        handle.write(f"[client]\nuser={safe_user}\npassword={db_password}\nhost=localhost\n")
+        handle.write(f"[client]\nuser={safe_user}\npassword={password}\nhost=localhost\n")
         handle.close()
         yield handle.name
     finally:
@@ -269,10 +283,14 @@ def import_database_scoped(db_name: str, input_file: str, *, db_user: str | None
         return shell.run(["mysql", safe_name], sensitive=True)
     completed = None
     if db_user and db_password:
-        completed = _import_as(db_user, db_password, safe_name, sql_path)
+        try:
+            completed = _import_as(db_user, db_password, safe_name, sql_path)
+        except ValueError:
+            completed = None  # a name or password an option file cannot hold
     if completed is None or _login_refused(completed):
         user = RESTORE_USER_PREFIX + secrets.token_hex(5)
-        password = random_password(32)
+        # Hex only: nothing in it for the option file or SQL to read specially.
+        password = secrets.token_hex(24)
         _run_sql(
             f"CREATE USER {_quote_sql_string(user)}@'localhost' IDENTIFIED BY {_quote_sql_string(password)};\n"
             f"GRANT ALL PRIVILEGES ON {_grant_target(safe_name)} TO {_quote_sql_string(user)}@'localhost';\n"
