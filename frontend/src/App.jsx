@@ -5080,8 +5080,20 @@ function App() {
   }
 
   async function restoreBackup(file) {
-    if (!(await confirmDialog(`Restore this backup to the current website?\n${file}`))) return;
-    await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file }) }, t('Restoring backup...'));
+    // A website backup carries the site's database dump next to its files;
+    // restoring only the files put old code over a newer database (1.20.3).
+    const choice = await confirmDialog({
+      title: t('Restore this backup?'),
+      subject: file,
+      message: t('The website files are replaced with the ones in the backup.'),
+      options: [{ name: 'database', label: t('Restore the database too'), hint: t("Replaces the website's database with the dump inside the backup, if it has one."), checked: true }],
+      confirmLabel: t('Restore'),
+      danger: true,
+    });
+    if (!choice) return;
+    const data = await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file, restore_database: Boolean(choice.database) }) }, t('Restoring backup...'));
+    if (!data) return;
+    setNotice(data.note ? t(data.note) : (data.database_restored ? t('Backup restored: files and database.') : t('Backup restored: files.')));
   }
 
   async function downloadBackup(file) {

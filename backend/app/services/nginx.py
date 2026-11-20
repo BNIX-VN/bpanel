@@ -1168,6 +1168,35 @@ def _merge_certbot_ssl_config(new_content: str, existing_content: str) -> str:
     return redirect_block + "\n".join(https_lines) + "\n"
 
 
+_LISTEN_V4 = re.compile(r"^(\s*)listen\s+((?:\d{1,3}\.){3}\d{1,3}:)?(\d+)([^;]*);\s*(#.*)?$")
+_LISTEN_V6 = re.compile(r"^\s*listen\s+\[::\]:")
+
+
+def _ipv6_listen_twins(content: str) -> str:
+    """Every IPv4 listen line with its IPv6 twin when IPv6 is on, none when off.
+
+    The templates write `listen [::]:80;` beside `listen 80;`, but the SSL
+    step turns only `listen 80;` into 443: on an IPv6 box the HTTPS server kept
+    `listen [::]:80;` - the site went out over plain HTTP to IPv6 visitors,
+    with no redirect and no IPv6 HTTPS at all - and the redirect servers had no
+    IPv6 line (1.20.3). Done once, on the finished vhost, by the same rule as
+    the helper's nginx_ipv6_rewrite, so its next pass changes nothing.
+    """
+    enabled = panel_ipv6.is_enabled()
+    out: list[str] = []
+    for line in content.splitlines():
+        if _LISTEN_V6.match(line):
+            continue
+        out.append(line)
+        match = _LISTEN_V4.match(line) if enabled else None
+        if match:
+            indent, address, port, rest, _comment = match.groups()
+            if address and not address.startswith("0.0.0.0"):
+                continue  # pinned to one IPv4 address: no twin to guess
+            out.append(f"{indent}listen [::]:{port}{rest};")
+    return "\n".join(out) + ("\n" if content.endswith("\n") else "")
+
+
 def apply_manual_ssl_config(new_content: str, cert_path: str, key_path: str, ca_path: str | None = None) -> str:
     cert, key, ca = _manual_ssl_paths(cert_path, key_path, ca_path)
     fullchain = cert.rsplit("/", 1)[0] + "/fullchain.crt"
@@ -1613,7 +1642,9 @@ def render_vhost(
         rendered = _without_fastcgi_cache(rendered)
     if ssl_cert_path or ssl_key_path:
         rendered = apply_manual_ssl_config(rendered, ssl_cert_path or "", ssl_key_path or "", ssl_ca_path)
-    return _append_redirect_vhosts(rendered, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
+    return _ipv6_listen_twins(
+        _append_redirect_vhosts(rendered, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
+    )
 
 
 # Back-compat shim for older imports.
@@ -1737,7 +1768,9 @@ def rewrite_vhost(
         proxy_preserve_host=proxy_preserve_host,
     )
     if settings.command_dry_run:
-        return _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
+        return _ipv6_listen_twins(
+            _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
+        )
     custom_snapshot = _custom_include_snapshot(domain)
     _write_custom_include(domain, custom_directives)
     if target.exists():
@@ -1749,6 +1782,8 @@ def rewrite_vhost(
         content = _append_certbot_redirect_vhosts(content, domain, redirects)
     else:
         content = _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
+    # Again on the finished file: certbot's lines were merged in after render.
+    content = _ipv6_listen_twins(content)
     old_content = target.read_text(encoding="utf-8") if target.exists() else None
     target.write_text(content, encoding="utf-8")
     _test_and_reload(target, old_content, domain, custom_snapshot)

@@ -28,7 +28,15 @@
 
 export const vi = {
   "Accounts brought over earlier that were not imported, to try again or delete.": "Các tài khoản đã mang về trước đó mà chưa nhập được, để thử lại hoặc xoá.",
+  "Backup restored: files and database.": "Đã khôi phục backup: file và database.",
+  "Backup restored: files.": "Đã khôi phục backup: file.",
   "Migration": "Chuyển dữ liệu",
+  "No database is linked to this website, so only the files were restored.": "Website này không gắn database nào, nên chỉ file được khôi phục.",
+  "Replaces the website's database with the dump inside the backup, if it has one.": "Thay database của website bằng bản dump trong backup, nếu bản backup có.",
+  "Restore the database too": "Khôi phục cả database",
+  "Restore this backup?": "Khôi phục bản backup này?",
+  "The website files are replaced with the ones in the backup.": "File của website sẽ được thay bằng file trong bản backup.",
+  "This backup holds no database dump, so only the files were restored.": "Bản backup này không có bản dump database, nên chỉ file được khôi phục.",
   "cPanel Import": "Nhập từ cPanel",
   "FastPanel Import": "Nhập từ FastPanel",
   "OPanel/BPanel Import": "Nhập từ OPanel/BPanel",

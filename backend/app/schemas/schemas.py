@@ -1588,6 +1588,10 @@ class SftpBackupRun(BaseModel):
 class RestoreBackup(BaseModel):
     website_id: int
     backup_file: str
+    # Also import the database dump the backup holds. Off unless asked for, so
+    # an API client written before 1.20.3 keeps getting a files-only restore;
+    # the panel's restore dialog asks, with the box ticked.
+    restore_database: bool = False
 
 
 class PhpConfigUpdate(BaseModel):
