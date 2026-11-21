@@ -784,6 +784,28 @@ for root in roots:
 PY
 }
 
+# Each SFTP sub-account's chroot was root:root 0755, so any local user - every
+# other tenant's PHP included - could walk into /var/lib/bpanel-sftp/<sub>/<site>
+# and read the bound website past the owner's 0750 home (found 2026-11-21). The
+# helper now makes it root:<owner group> 0750; this fixes the ones made before.
+# A session already inside its chroot keeps working.
+migrate_sftp_chroot_modes() {
+  local root_dir="${BPANEL_SFTP_CHROOT_ROOT:-/var/lib/bpanel-sftp}" dir sub gid
+  [[ -d "$root_dir" ]] || return 0
+  for dir in "$root_dir"/sftp_*; do
+    [[ -d "$dir" && ! -L "$dir" ]] || continue
+    sub="${dir##*/}"
+    if gid="$(id -g "$sub" 2>/dev/null)"; then
+      chown root:"$gid" "$dir" 2>/dev/null || true
+      chmod 0750 "$dir" 2>/dev/null || true
+    else
+      # No such account any more: nobody needs to get in.
+      chown root:root "$dir" 2>/dev/null || true
+      chmod 0700 "$dir" 2>/dev/null || true
+    fi
+  done
+}
+
 migrate_user_backup_dir_owner() {
   # The users/ directory under the backup root has never been created by the
   # installer, so on every panel out there it belongs to whichever process
@@ -2225,6 +2247,7 @@ migrate_protect_php_from_autoremove
 migrate_service_update_origins
 migrate_user_backup_dir_owner
 migrate_site_cron_php_binary
+migrate_sftp_chroot_modes
 # The panel's own vhosts were each tested as they were written. A file nginx
 # still refuses here is one the panel did not write (box .167, 2026-10-26: a
 # hand-made staging server whose folder was deleted): the update is done, and

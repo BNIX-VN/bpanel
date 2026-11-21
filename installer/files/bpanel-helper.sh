@@ -7718,7 +7718,11 @@ ensure_sftp_account() {
 
   # Root owns the chroot and everything above it, and nothing else may write
   # it. sshd refuses to chroot otherwise, and the refusal is the point.
-  install -d -o root -g root -m 0755 "$chroot"
+  # Group: the owner's, 0750 - only this account (which shares the owner's
+  # gid) may walk into it. At 0755 any local user, every other tenant's PHP
+  # included, could read the bound website here, past the owner's 0750 home
+  # (found 2026-11-21).
+  install -d -o root -g "$owner_gid" -m 0750 "$chroot"
   install -d -o root -g root -m 0755 "$where"
 
   unit=$(sftp_account_mount_unit "$where")
