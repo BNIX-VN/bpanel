@@ -964,6 +964,91 @@ ensure_terminal_tools() {
   fi
 }
 
+# --- Operating system before the panel --------------------------------------
+# The panel is updated only on a sound system with current packages. A dpkg
+# run cut short -- a provisioning script rebooted the VM while cloud-init's
+# first-boot dist-upgrade was unpacking (OPanel 163.61.73.54, 2026-11-20) --
+# left nodejs "reinst-required" with npm already deleted and ~30 packages
+# unpacked but never configured. The panel update that followed died at
+# `npm: command not found` and the panel served no UI. So before anything of
+# the panel changes: wait out any other package run, finish what dpkg left half
+# done, reinstall what it left broken, then upgrade the OS packages. Detail
+# goes to OS_UPDATE_LOG; the screen gets the step and any error.
+OS_UPDATE_LOG="${OS_UPDATE_LOG:-/var/log/bpanel-os-update.log}"
+DPKG_LOCK_WAIT="${DPKG_LOCK_WAIT:-900}"
+
+# unattended-upgrades, cloud-init's first-boot upgrade or the Service versions
+# page may be mid-run. apt waits for the lock by itself (DPkg::Lock::Timeout
+# above); a bare dpkg fails at once.
+wait_for_dpkg_lock() {
+  local waited=0
+  command -v fuser >/dev/null 2>&1 || return 0
+  while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1; do
+    (( waited < DPKG_LOCK_WAIT )) || return 1
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
+# Packages dpkg marks "reinstall required" (the R of `iHR`): a run died while
+# it was replacing their files, so some of them are simply missing.
+dpkg_broken_packages() {
+  dpkg-query -W -f='${db:Status-Abbrev}|${binary:Package}\n' 2>/dev/null | awk -F'|' 'substr($1, 3, 1) == "R" { print $2 }'
+}
+
+# `dpkg --audit` lists every package left unpacked, half-configured,
+# half-installed, awaiting triggers or reinstall-required; silent means sound.
+dpkg_is_sound() {
+  [[ -z "$(dpkg --audit 2>/dev/null)" && -z "$(dpkg_broken_packages)" ]]
+}
+
+repair_dpkg() {
+  local broken
+  dpkg_is_sound && return 0
+  echo "--- repairing dpkg"
+  UCF_FORCE_CONFFOLD=1 dpkg --force-confdef --force-confold --configure -a || true
+  apt-get -y -f install || true
+  broken="$(dpkg_broken_packages)"
+  if [[ -n "$broken" ]]; then
+    # shellcheck disable=SC2086 # one package name per word
+    apt-get -y install --reinstall $broken || true
+  fi
+  dpkg_is_sound
+}
+
+# 0: packages sound and current. 1: dpkg is still broken; the panel must not be
+# touched. 2: dpkg is sound but the upgrade did not finish (a mirror down, a
+# package that failed); the panel update goes on, so a flaky mirror cannot
+# hold back a panel fix. A daemon the sites need that ran before the upgrade
+# and does not after is started again at once.
+update_operating_system() {
+  local unit status=0 running
+  install -m 0640 /dev/null "$OS_UPDATE_LOG"
+  {
+    echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    wait_for_dpkg_lock || echo "--- another package run still holds the dpkg lock"
+    running="$(systemctl list-units --type=service --state=active --no-legend --plain \
+      nginx.service mariadb.service redis-server.service 'php*-fpm.service' 2>/dev/null | awk '{ print $1 }')" || true
+    apt-get update --allow-releaseinfo-change || echo "--- package lists not fully refreshed"
+    if ! repair_dpkg; then
+      status=1
+    elif ! apt-get -y --with-new-pkgs upgrade; then
+      status=2
+    fi
+    # A package whose postinst failed during the upgrade is left half done too.
+    if (( status != 1 )) && ! repair_dpkg; then
+      status=1
+    fi
+    for unit in $running; do
+      systemctl is-active --quiet "$unit" 2>/dev/null && continue
+      echo "--- starting $unit again"
+      systemctl start "$unit" || true
+    done
+    echo "=== exit $status"
+  } >>"$OS_UPDATE_LOG" 2>&1
+  return "$status"
+}
+
 harden_existing_panel_users() {
   local user home_dir site_dir secret
   getent group bpanel-sftp >/dev/null || return 0
@@ -1611,6 +1696,20 @@ if [[ -z "${BPANEL_UPDATE_STAGE2:-}" && -f "$SOURCE_DIR/installer/update.sh" ]] 
     exec /bin/bash "$stage2_copy"
 fi
 
+# --- Operating system first -------------------------------------------------
+# Here, after the handover and before the first change to the panel, it runs
+# exactly once per update; a stop here leaves the installed panel as it was.
+log "Updating the operating system"
+update_progress 22 "system" "Updating the operating system"
+os_status=0
+update_operating_system || os_status=$?
+if (( os_status == 1 )); then
+  tail -n 15 "$OS_UPDATE_LOG" >&2 || true
+  fail "Operating system packages are broken and could not be repaired; the panel was not updated. Details: $OS_UPDATE_LOG"
+elif (( os_status != 0 )); then
+  echo "ERROR: some operating system packages could not be updated (details: $OS_UPDATE_LOG)" >&2
+fi
+
 # --- Sync code into APP_DIR -------------------------------------------------
 log "Syncing source to $APP_DIR"
 mkdir -p "$APP_DIR"
@@ -2178,10 +2277,17 @@ if [[ -f dist/index.html ]] && ! step_inputs_changed frontend "${FRONTEND_INPUTS
 else
   FRONTEND_REBUILT=1
   log "Building frontend"
-  if ! command -v node >/dev/null 2>&1; then
-    log "WARNING: Node.js not found, installing..."
-    DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
+  # node without npm is a NodeSource nodejs whose replacement was cut short:
+  # that package carries npm itself, and Ubuntu's npm package conflicts with
+  # it, so the cure is reinstalling nodejs.
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    log "Installing Node.js"
+    DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change >/dev/null || true
+    if [[ "$(dpkg-query -W -f='${Version}' nodejs 2>/dev/null)" == *nodesource* ]]; then
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall nodejs >/dev/null
+    else
+      DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm >/dev/null
+    fi
   fi
   echo "Node version: $(node --version)"
   echo "npm version: $(npm --version)"
