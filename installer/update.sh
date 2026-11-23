@@ -806,6 +806,36 @@ migrate_sftp_chroot_modes() {
   done
 }
 
+# A sub-account opened on its chroot root, which is root's and takes no
+# uploads: customers dropped files next to the site folder and got "Permission
+# denied" (2026-11-23). sshd now starts it in its home (internal-sftp -d %d),
+# and the helper gives new accounts the home "/<site>"; this gives it to the
+# accounts made before. usermod -d refuses (the uid is the site owner's and
+# always in use), so the account is made again exactly as the helper's
+# sftp_account_set_home does: same uid, group, SFTP group and password hash.
+migrate_sftp_start_dirs() {
+  local root_dir="${BPANEL_SFTP_CHROOT_ROOT:-/var/lib/bpanel-sftp}" dir sub site entry uid gid hash
+  [[ -d "$root_dir" ]] || return 0
+  for dir in "$root_dir"/sftp_*; do
+    [[ -d "$dir" && ! -L "$dir" ]] || continue
+    sub="${dir##*/}"
+    entry="$(getent passwd "$sub")" || continue
+    # The chroot holds exactly one site folder; anything else is left alone.
+    site="$(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null)" || continue
+    [[ -n "$site" && "$site" != *$'\n'* ]] || continue
+    [[ "$(cut -d: -f6 <<<"$entry")" == "/$site" ]] && continue
+    uid="$(cut -d: -f3 <<<"$entry")"
+    gid="$(cut -d: -f4 <<<"$entry")"
+    hash="$(getent shadow "$sub" | cut -d: -f2)" || hash=""
+    if userdel -f "$sub" 2>/dev/null \
+      && useradd -o -u "$uid" -g "$gid" -G bpanel-sftp-site -M -d "/$site" -s /usr/sbin/nologin "$sub" \
+      && { [[ -z "$hash" ]] || printf '%s:%s\n' "$sub" "$hash" | chpasswd -e; }; then
+      continue
+    fi
+    echo "WARNING: could not make the SFTP sub-account $sub open in its site folder"
+  done
+}
+
 migrate_user_backup_dir_owner() {
   # The users/ directory under the backup root has never been created by the
   # installer, so on every panel out there it belongs to whichever process
@@ -1215,10 +1245,11 @@ Match Group bpanel-sftp
 # This block must stay AFTER the one above. sshd applies every matching block
 # in order and lets later ones win; a sub-account is not a member of
 # bpanel-sftp, so in practice only one of the two ever applies.
+# The login starts in its site folder: its home, "/<site>" inside the chroot.
 Match Group bpanel-sftp-site
     PasswordAuthentication yes
     ChrootDirectory /var/lib/bpanel-sftp/%u
-    ForceCommand internal-sftp -d /
+    ForceCommand internal-sftp -d %d
     PermitTTY no
     X11Forwarding no
     AllowTcpForwarding no
@@ -2354,6 +2385,7 @@ migrate_service_update_origins
 migrate_user_backup_dir_owner
 migrate_site_cron_php_binary
 migrate_sftp_chroot_modes
+migrate_sftp_start_dirs
 # The panel's own vhosts were each tested as they were written. A file nginx
 # still refuses here is one the panel did not write (box .167, 2026-10-26: a
 # hand-made staging server whose folder was deleted): the update is done, and

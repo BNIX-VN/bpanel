@@ -7674,6 +7674,30 @@ sftp_account_mount_unit() {
   systemd-escape -p --suffix=mount "$1"
 }
 
+# Where a sub-account starts: inside its site folder, not at the chroot root.
+# The chroot root must be root's (sshd's rule for ChrootDirectory), so nothing
+# can be uploaded there, and a client that opened on it -- WinSCP does -- had
+# customers dropping files next to the site folder and getting "Permission
+# denied" (2026-11-23). sshd runs internal-sftp -d %d, so the start is the
+# passwd home: "/<site>", a path inside the chroot.
+#
+# usermod refuses to change the home or uid of an account that shares the
+# owner's uid -- the owner's PHP keeps that uid "in use" -- so an account whose
+# entry differs is made again: same name, the owner's uid and group, the SFTP
+# group, and the same password hash (a locked account stays locked).
+sftp_account_set_home() {
+  local sub="$1" uid="$2" gid="$3" home="$4" entry hash
+  entry="$(getent passwd "$sub")" || deny "SFTP sub-account does not exist: $sub"
+  [[ "$entry" == "$sub:x:$uid:$gid:"*":$home:/usr/sbin/nologin" ]] && return 0
+  hash="$(getent shadow "$sub" | cut -d: -f2)" || hash=""
+  userdel -f "$sub" 2>/dev/null || deny "could not update the SFTP sub-account $sub"
+  useradd -o -u "$uid" -g "$gid" -G "$BPANEL_SFTP_SITE_GROUP" -M -d "$home" -s /usr/sbin/nologin "$sub" \
+    || deny "could not re-create the SFTP sub-account $sub"
+  if [[ -n "$hash" ]]; then
+    printf '%s:%s\n' "$sub" "$hash" | chpasswd -e || deny "could not restore the password of $sub"
+  fi
+}
+
 # Bind the one website this account may reach into a root-owned chroot.
 #
 # The account shares the site owner's uid on purpose: files it uploads then
@@ -7707,12 +7731,13 @@ ensure_sftp_account() {
   owner_uid=$(id -u "$owner")
   owner_gid=$(id -g "$owner")
   if ! id -u "$sub" >/dev/null 2>&1; then
-    # -o: share the owner's uid. -M: no home of its own. -d /: the home inside
-    # the chroot is the chroot root. Created locked; a password arrives on the
-    # next verb.
-    useradd -o -u "$owner_uid" -g "$owner_gid" -M -d / -s /usr/sbin/nologin "$sub"
+    # -o: share the owner's uid. -M: no home of its own. -d /<site>: the home
+    # is the site folder inside the chroot, where the login starts (see
+    # sftp_account_set_home). Created locked; a password arrives on the next
+    # verb.
+    useradd -o -u "$owner_uid" -g "$owner_gid" -G "$BPANEL_SFTP_SITE_GROUP" -M -d "/$domain" -s /usr/sbin/nologin "$sub"
   else
-    usermod -o -u "$owner_uid" -g "$owner_gid" -d / -s /usr/sbin/nologin "$sub" 2>/dev/null || true
+    sftp_account_set_home "$sub" "$owner_uid" "$owner_gid" "/$domain"
   fi
   usermod -aG "$BPANEL_SFTP_SITE_GROUP" "$sub" 2>/dev/null || true
 
