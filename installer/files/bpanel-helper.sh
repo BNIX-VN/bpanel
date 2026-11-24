@@ -5851,7 +5851,11 @@ firewall_blocklist_status() {
     total="$(sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | wc -l | tr -d '[:space:]')"
     shown=50
     echo "  ${total} network(s), showing first ${shown}:"
-    sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | head -n "$shown" | sed 's/^/  /'
+    # One awk that reads the whole file. `sed | head -n 50` let head exit
+    # while sed was still writing: sed died of SIGPIPE, pipefail made that
+    # exit 141, set -e stopped the helper mid-listing, and the Firewall page
+    # got a cut-off blocklist (1641 networks on .88, 2026-11-24).
+    awk -v n="$shown" 'NF && ++c <= n { print "  " $0 }' "$FIREWALL_BLOCKLIST_WORK"
     if (( total > shown )); then
       echo "  ... $((total - shown)) more"
     fi
