@@ -723,6 +723,10 @@ def test_a_packed_fastpanel_account_comes_over_with_its_aliases(importer, folder
     assert sorted(summary["imported_domains"]) == ["bob.test", "shop.test"]
     assert importer.databases == [("bob_wp", "bob_wp", "fp-pw")]
     assert [c[0] for c in importer.certificates] == ["bob.test"]
+    # Every vhost it writes - the one with the certificate too - runs PHP in
+    # the site's own pool, never the shared www-data one (36.50.27.11).
+    assert importer.vhosts["bob.test"][-1].get("ssl_cert_path")
+    assert {k.get("php_fpm_socket_override") for k in importer.vhosts["bob.test"]} == {"/run/php/bob.sock"}
     with importer.session() as db:
         # www. is served anyway, and shop.test is a website of the same
         # account; only the other name becomes an alias.

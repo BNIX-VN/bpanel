@@ -1422,12 +1422,21 @@ def _import_da_certificate(db, website, root: Path, item_summary: dict) -> bool:
     website.ssl_updated_at = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
     db.commit()
     # Writing the files is not enough: nginx keeps serving whatever the vhost
-    # names, so the vhost has to be rewritten to point at them.
+    # names, so the vhost has to be rewritten to point at them - with the
+    # site's own PHP pool, as the panel's own rewrite does. Without it the
+    # vhost fell back to the shared www-data pool, which cannot write the
+    # site's files (36.50.27.11, 2026-11-25: imported WordPress sites gave 500
+    # on HTTPS - Elementor fell over on the FTP filesystem).
+    app_type = website.app_type or "wordpress"
+    runtime_php = website.php_version if app_type in {"wordpress", "php"} else None
+    linux_user = getattr(website, "linux_user", None)
     try:
         nginx.rewrite_vhost(
             website.domain,
             website.root_path,
-            app_type=website.app_type or "wordpress",
+            app_type=app_type,
+            php_fpm_socket_override=(site_users.site_php_fpm_socket(linux_user, website.root_path, runtime_php)
+                                     if linux_user else None),
             php_version=website.php_version,
             custom_directives=website.nginx_custom or "",
             waf_enabled=bool(website.waf_enabled),
