@@ -63,6 +63,9 @@ REVIEWED_READS = {
     "/api/maintenance/destination-kinds", "/api/maintenance/sftp-targets/{target_id}/objects",
     "/api/maintenance/user-backups/{user_id}", "/api/maintenance/user-restore-backups",
     "/api/malware/jobs", "/api/malware/jobs/latest", "/api/malware/jobs/{job_id}",
+    # The quarantine list: paths and signatures, as a scan's record shows them;
+    # never a file's content (restore and delete are a POST and a DELETE).
+    "/api/malware/quarantine",
     "/api/malware/schedule", "/api/malware/status", "/api/mcp", "/api/mcp/tokens",
     "/api/notifications/log", "/api/notifications/me", "/api/notifications/settings",
     "/api/packages", "/api/panel-settings", "/api/panel-settings/public",

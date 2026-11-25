@@ -825,10 +825,11 @@ Match Group bpanel-sftp
 # This block must stay AFTER the one above. sshd applies every matching block
 # in order and lets later ones win; a sub-account is not a member of
 # bpanel-sftp, so in practice only one of the two ever applies.
+# The login starts in its site folder: its home, "/<site>" inside the chroot.
 Match Group bpanel-sftp-site
     PasswordAuthentication yes
     ChrootDirectory /var/lib/bpanel-sftp/%u
-    ForceCommand internal-sftp -d /
+    ForceCommand internal-sftp -d %d
     PermitTTY no
     X11Forwarding no
     AllowTcpForwarding no

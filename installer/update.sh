@@ -806,6 +806,36 @@ migrate_sftp_chroot_modes() {
   done
 }
 
+# A sub-account opened on its chroot root, which is root's and takes no
+# uploads: customers dropped files next to the site folder and got "Permission
+# denied" (2026-11-23). sshd now starts it in its home (internal-sftp -d %d),
+# and the helper gives new accounts the home "/<site>"; this gives it to the
+# accounts made before. usermod -d refuses (the uid is the site owner's and
+# always in use), so the account is made again exactly as the helper's
+# sftp_account_set_home does: same uid, group, SFTP group and password hash.
+migrate_sftp_start_dirs() {
+  local root_dir="${BPANEL_SFTP_CHROOT_ROOT:-/var/lib/bpanel-sftp}" dir sub site entry uid gid hash
+  [[ -d "$root_dir" ]] || return 0
+  for dir in "$root_dir"/sftp_*; do
+    [[ -d "$dir" && ! -L "$dir" ]] || continue
+    sub="${dir##*/}"
+    entry="$(getent passwd "$sub")" || continue
+    # The chroot holds exactly one site folder; anything else is left alone.
+    site="$(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null)" || continue
+    [[ -n "$site" && "$site" != *$'\n'* ]] || continue
+    [[ "$(cut -d: -f6 <<<"$entry")" == "/$site" ]] && continue
+    uid="$(cut -d: -f3 <<<"$entry")"
+    gid="$(cut -d: -f4 <<<"$entry")"
+    hash="$(getent shadow "$sub" | cut -d: -f2)" || hash=""
+    if userdel -f "$sub" 2>/dev/null \
+      && useradd -o -u "$uid" -g "$gid" -G bpanel-sftp-site -M -d "/$site" -s /usr/sbin/nologin "$sub" \
+      && { [[ -z "$hash" ]] || printf '%s:%s\n' "$sub" "$hash" | chpasswd -e; }; then
+      continue
+    fi
+    echo "WARNING: could not make the SFTP sub-account $sub open in its site folder"
+  done
+}
+
 migrate_user_backup_dir_owner() {
   # The users/ directory under the backup root has never been created by the
   # installer, so on every panel out there it belongs to whichever process
@@ -962,6 +992,91 @@ ensure_terminal_tools() {
     DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
     DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
   fi
+}
+
+# --- Operating system before the panel --------------------------------------
+# The panel is updated only on a sound system with current packages. A dpkg
+# run cut short -- a provisioning script rebooted the VM while cloud-init's
+# first-boot dist-upgrade was unpacking (OPanel 163.61.73.54, 2026-11-20) --
+# left nodejs "reinst-required" with npm already deleted and ~30 packages
+# unpacked but never configured. The panel update that followed died at
+# `npm: command not found` and the panel served no UI. So before anything of
+# the panel changes: wait out any other package run, finish what dpkg left half
+# done, reinstall what it left broken, then upgrade the OS packages. Detail
+# goes to OS_UPDATE_LOG; the screen gets the step and any error.
+OS_UPDATE_LOG="${OS_UPDATE_LOG:-/var/log/bpanel-os-update.log}"
+DPKG_LOCK_WAIT="${DPKG_LOCK_WAIT:-900}"
+
+# unattended-upgrades, cloud-init's first-boot upgrade or the Service versions
+# page may be mid-run. apt waits for the lock by itself (DPkg::Lock::Timeout
+# above); a bare dpkg fails at once.
+wait_for_dpkg_lock() {
+  local waited=0
+  command -v fuser >/dev/null 2>&1 || return 0
+  while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1; do
+    (( waited < DPKG_LOCK_WAIT )) || return 1
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
+# Packages dpkg marks "reinstall required" (the R of `iHR`): a run died while
+# it was replacing their files, so some of them are simply missing.
+dpkg_broken_packages() {
+  dpkg-query -W -f='${db:Status-Abbrev}|${binary:Package}\n' 2>/dev/null | awk -F'|' 'substr($1, 3, 1) == "R" { print $2 }'
+}
+
+# `dpkg --audit` lists every package left unpacked, half-configured,
+# half-installed, awaiting triggers or reinstall-required; silent means sound.
+dpkg_is_sound() {
+  [[ -z "$(dpkg --audit 2>/dev/null)" && -z "$(dpkg_broken_packages)" ]]
+}
+
+repair_dpkg() {
+  local broken
+  dpkg_is_sound && return 0
+  echo "--- repairing dpkg"
+  UCF_FORCE_CONFFOLD=1 dpkg --force-confdef --force-confold --configure -a || true
+  apt-get -y -f install || true
+  broken="$(dpkg_broken_packages)"
+  if [[ -n "$broken" ]]; then
+    # shellcheck disable=SC2086 # one package name per word
+    apt-get -y install --reinstall $broken || true
+  fi
+  dpkg_is_sound
+}
+
+# 0: packages sound and current. 1: dpkg is still broken; the panel must not be
+# touched. 2: dpkg is sound but the upgrade did not finish (a mirror down, a
+# package that failed); the panel update goes on, so a flaky mirror cannot
+# hold back a panel fix. A daemon the sites need that ran before the upgrade
+# and does not after is started again at once.
+update_operating_system() {
+  local unit status=0 running
+  install -m 0640 /dev/null "$OS_UPDATE_LOG"
+  {
+    echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    wait_for_dpkg_lock || echo "--- another package run still holds the dpkg lock"
+    running="$(systemctl list-units --type=service --state=active --no-legend --plain \
+      nginx.service mariadb.service redis-server.service 'php*-fpm.service' 2>/dev/null | awk '{ print $1 }')" || true
+    apt-get update --allow-releaseinfo-change || echo "--- package lists not fully refreshed"
+    if ! repair_dpkg; then
+      status=1
+    elif ! apt-get -y --with-new-pkgs upgrade; then
+      status=2
+    fi
+    # A package whose postinst failed during the upgrade is left half done too.
+    if (( status != 1 )) && ! repair_dpkg; then
+      status=1
+    fi
+    for unit in $running; do
+      systemctl is-active --quiet "$unit" 2>/dev/null && continue
+      echo "--- starting $unit again"
+      systemctl start "$unit" || true
+    done
+    echo "=== exit $status"
+  } >>"$OS_UPDATE_LOG" 2>&1
+  return "$status"
 }
 
 harden_existing_panel_users() {
@@ -1130,10 +1245,11 @@ Match Group bpanel-sftp
 # This block must stay AFTER the one above. sshd applies every matching block
 # in order and lets later ones win; a sub-account is not a member of
 # bpanel-sftp, so in practice only one of the two ever applies.
+# The login starts in its site folder: its home, "/<site>" inside the chroot.
 Match Group bpanel-sftp-site
     PasswordAuthentication yes
     ChrootDirectory /var/lib/bpanel-sftp/%u
-    ForceCommand internal-sftp -d /
+    ForceCommand internal-sftp -d %d
     PermitTTY no
     X11Forwarding no
     AllowTcpForwarding no
@@ -1609,6 +1725,20 @@ if [[ -z "${BPANEL_UPDATE_STAGE2:-}" && -f "$SOURCE_DIR/installer/update.sh" ]] 
   SOURCE_DIR="$SOURCE_DIR" \
   SKIP_PULL=true \
     exec /bin/bash "$stage2_copy"
+fi
+
+# --- Operating system first -------------------------------------------------
+# Here, after the handover and before the first change to the panel, it runs
+# exactly once per update; a stop here leaves the installed panel as it was.
+log "Updating the operating system"
+update_progress 22 "system" "Updating the operating system"
+os_status=0
+update_operating_system || os_status=$?
+if (( os_status == 1 )); then
+  tail -n 15 "$OS_UPDATE_LOG" >&2 || true
+  fail "Operating system packages are broken and could not be repaired; the panel was not updated. Details: $OS_UPDATE_LOG"
+elif (( os_status != 0 )); then
+  echo "ERROR: some operating system packages could not be updated (details: $OS_UPDATE_LOG)" >&2
 fi
 
 # --- Sync code into APP_DIR -------------------------------------------------
@@ -2178,10 +2308,17 @@ if [[ -f dist/index.html ]] && ! step_inputs_changed frontend "${FRONTEND_INPUTS
 else
   FRONTEND_REBUILT=1
   log "Building frontend"
-  if ! command -v node >/dev/null 2>&1; then
-    log "WARNING: Node.js not found, installing..."
-    DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
+  # node without npm is a NodeSource nodejs whose replacement was cut short:
+  # that package carries npm itself, and Ubuntu's npm package conflicts with
+  # it, so the cure is reinstalling nodejs.
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    log "Installing Node.js"
+    DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change >/dev/null || true
+    if [[ "$(dpkg-query -W -f='${Version}' nodejs 2>/dev/null)" == *nodesource* ]]; then
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall nodejs >/dev/null
+    else
+      DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm >/dev/null
+    fi
   fi
   echo "Node version: $(node --version)"
   echo "npm version: $(npm --version)"
@@ -2248,6 +2385,7 @@ migrate_service_update_origins
 migrate_user_backup_dir_owner
 migrate_site_cron_php_binary
 migrate_sftp_chroot_modes
+migrate_sftp_start_dirs
 # The panel's own vhosts were each tested as they were written. A file nginx
 # still refuses here is one the panel did not write (box .167, 2026-10-26: a
 # hand-made staging server whose folder was deleted): the update is done, and

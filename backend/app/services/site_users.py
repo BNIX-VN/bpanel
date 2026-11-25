@@ -316,6 +316,27 @@ def import_site_files(root_path: str, linux_user: str, staged_source: str) -> No
     )
 
 
+def write_site_file(root_path: str, linux_user: str, relative: str, text: str, mode: str = "0640") -> None:
+    """Write one file inside a site, owned by the site's Linux user.
+
+    The site's files are its user's (a config is 0640), so the panel process
+    can read them but not write them; the helper writes in its place and
+    refuses a path outside the site or through a symlink.
+    """
+    username = validate_linux_user(linux_user)
+    result = shell.privileged(
+        "site-file-write",
+        helper_args=[username, str(root_path), relative, mode],
+        input=text,
+        sensitive=True,
+        check=False,
+        fallback=["sh", "-c", 'cat >"$1"', "sh", str(Path(root_path) / relative)],
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()[:300]
+        raise RuntimeError(f"{relative} could not be written{f': {detail}' if detail else ''}")
+
+
 def fix_site_path(path: str, linux_user: Optional[str], check: bool = False) -> None:
     if not linux_user:
         return

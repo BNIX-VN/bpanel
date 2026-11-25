@@ -17,6 +17,8 @@ import hashlib
 import io
 import json
 import re
+import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -509,6 +511,37 @@ def test_the_fastpanel_pack_script_puts_only_checked_names_in_commands():
     assert "bpanel/aliases.tsv" in script and "opanel/" not in script
 
 
+def _bash(script: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", "-c", script, "bash", *args], capture_output=True, text=True, timeout=30)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.parametrize("tar_exit, packed", [(0, True), (1, True), (2, False)])
+def test_a_live_fastpanel_site_still_packs(tar_exit, packed):
+    """A site in use changes under tar ("file changed as we read it", exit 1);
+    the archive is whole and must not fail the import (36.50.27.11,
+    2026-11-25). Exit 2 and up are real failures."""
+    end = migrate_ssh._FASTPANEL_PACK.split("\nrc=0\n", 1)[1]
+    script = ("set -eu\nU=bob W=/w P=/p\ntransforms=(--x); paths=(var/www/bob/data/www/bob.test)\n"
+              f"tar() {{ return {tar_exit}; }}\nrc=0\n" + end)
+    run = _bash(script)
+    assert (run.returncode == 0) is packed
+    assert (run.stdout.strip() == "fastpanel-bob.tar.gz") is packed
+    assert "--warning=no-file-changed" in end and '[ "$rc" -le 1 ] || exit "$rc"' in end
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_the_fastpanel_pack_reads_the_quoted_certificate_paths(tmp_path):
+    """FastPanel quotes them: ssl_certificate "/var/www/httpd-cert/<site>.crt";"""
+    conf = tmp_path / "bob.test.conf"
+    conf.write_bytes(b'server {\n    ssl_certificate "/var/www/httpd-cert/bob.test_1.crt";\n'
+                     b"    ssl_certificate_key '/var/www/httpd-cert/bob.test_1.key';\n}\n")
+    lines = [line for line in migrate_ssh._FASTPANEL_PACK.splitlines() if line.strip().startswith(("crt=", "key="))]
+    assert len(lines) == 2
+    run = _bash('conf="$1"\n' + "\n".join(lines) + '\nprintf "%s|%s" "$crt" "$key"', conf.as_posix())
+    assert run.stdout == "/var/www/httpd-cert/bob.test_1.crt|/var/www/httpd-cert/bob.test_1.key", run.stderr
+
+
 def test_the_root_login_is_never_written_anywhere():
     """It lives in the request and the worker's arguments; nothing that writes
     - the job, the log, the database, a file - is handed it."""
@@ -690,11 +723,84 @@ def test_a_packed_fastpanel_account_comes_over_with_its_aliases(importer, folder
     assert sorted(summary["imported_domains"]) == ["bob.test", "shop.test"]
     assert importer.databases == [("bob_wp", "bob_wp", "fp-pw")]
     assert [c[0] for c in importer.certificates] == ["bob.test"]
+    # Every vhost it writes - the one with the certificate too - runs PHP in
+    # the site's own pool, never the shared www-data one (36.50.27.11).
+    assert importer.vhosts["bob.test"][-1].get("ssl_cert_path")
+    assert {k.get("php_fpm_socket_override") for k in importer.vhosts["bob.test"]} == {"/run/php/bob.sock"}
     with importer.session() as db:
         # www. is served anyway, and shop.test is a website of the same
         # account; only the other name becomes an alias.
         assert [(a.domain, a.website.domain) for a in db.query(WebsiteAlias)] == [("bob.net", "bob.test")]
     assert result["credentials"][0] == "# BPanel FastPanel import credentials"
+
+
+def test_a_database_keeps_its_name_and_a_renamed_one_is_written_into_the_site_by_the_helper(
+        importer, folders, monkeypatch):
+    """36.50.27.11, 2026-11-25: FastPanel's 'pet_velroxa_' was trimmed to
+    'pet_velroxa', so the import rewrote wp-config.php - as the panel, which
+    cannot write a site's files: "[Errno 13] Permission denied". A valid name
+    now stays as it is; a name that has to change is written by the helper."""
+    written = []
+    monkeypatch.setattr(site_users, "import_site_files",
+                        lambda root_path, linux_user, staged: shutil.copytree(staged, root_path, dirs_exist_ok=True))
+    monkeypatch.setattr(site_users, "write_site_file",
+                        lambda root, user, rel, text, mode="0640": written.append((Path(root).name, user, rel, text)))
+    config = ("<?php define('DB_NAME', '{0}'); define('DB_USER', '{0}');"
+              " define('DB_PASSWORD', 'fp-pw'); define('DB_HOST', 'localhost');")
+    _tar(folders.fastpanel / "fastpanel-bob.tar.gz", {
+        "backup/user.conf": "username=bob\nemail=\n",
+        "backup/domains.list": "pet.test\nshop.test\n",
+        "domains/pet.test/public_html/wp-config.php": config.format("pet_velroxa_"),
+        "domains/shop.test/public_html/wp-config.php": config.format("shop-db"),
+        "mysql/pet_velroxa_.sql": "CREATE TABLE t (id int);",
+        "mysql/shop-db.sql": "CREATE TABLE t (id int);",
+    })
+    fastpanel_import.import_fastpanel_backup("fastpanel-bob.tar.gz", replace_own=True)
+    assert ("pet_velroxa_", "pet_velroxa_", "fp-pw") in importer.databases
+    assert [(site, user, rel) for site, user, rel, _ in written] == [("shop.test", "bob", "public_html/wp-config.php")]
+    assert "'shop_db'" in written[0][3] and "'fp-pw'" not in written[0][3]
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_a_dump_reaches_mariadb_byte_for_byte(tmp_path, compressed):
+    """jackcao (36.50.27.11, 2026-11-25): Wordfence keeps IPs in BINARY(16).
+    Read as UTF-8 "with replace", distinct IPs became one key and MariaDB
+    stopped at COMMIT (ERROR 1180). Latin1 text is not UTF-8 either."""
+    import gzip
+
+    row = b"('\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\xff\xff\xb4\x9a4F','VN',1,20772,'manual'),\n"
+    body = (b"USE `other`;\n"
+            b"CREATE DEFINER=`root`@`localhost` TRIGGER t BEFORE INSERT ON x FOR EACH ROW SET @a=1;\n"
+            b"INSERT INTO `wp_wfblockediplog` VALUES\n" + row + b"('caf\xe9',1);\n")
+    dump = tmp_path / ("bob_wp.sql.gz" if compressed else "bob_wp.sql")
+    dump.write_bytes(gzip.compress(body) if compressed else body)
+    out = da_import._temporary_sql_file(dump)
+    data = out.read_bytes()
+    out.unlink()
+    assert b"USE `other`" not in data and b"DEFINER" not in data
+    assert row in data and b"('caf\xe9',1);" in data
+
+
+def test_a_wp_config_value_is_read_and_written_as_php_reads_it(tmp_path):
+    """life.velroxa.com (36.50.27.11, 2026-11-25): its password has a
+    backslash. Taken as written, the database user got another password than
+    the one PHP hands MariaDB: "Access denied"."""
+    config = tmp_path / "wp-config.php"
+    config.write_bytes(b"<?php\ndefine( 'DB_NAME', 'life_velroxa' );\n"
+                       b"define( 'DB_PASSWORD', 'ab\\\\cd\\'e' );\n"
+                       b'define( "DB_USER", "u\\$er" );\n')
+    found = da_import._parse_wp_config(tmp_path)
+    assert (found["DB_NAME"], found["DB_USER"], found["DB_PASSWORD"]) == ("life_velroxa", "u$er", "ab\\cd'e")
+    text = da_import._replace_define(config.read_bytes().decode(), "DB_PASSWORD", "x\\y'z")
+    assert text.count("DB_PASSWORD") == 1
+    config.write_bytes(text.encode())
+    assert da_import._parse_wp_config(tmp_path)["DB_PASSWORD"] == "x\\y'z"
+
+
+def test_only_an_invalid_database_name_is_changed():
+    assert da_import._normalize_db_identifier("pet_velroxa_", "x", set()) == "pet_velroxa_"
+    assert da_import._normalize_db_identifier("Shop-DB", "x", set()) == "shop_db"
+    assert da_import._normalize_db_identifier("pet_velroxa_", "x", {"pet_velroxa_"}) != "pet_velroxa_"
 
 
 def test_the_restore_job_hands_each_kind_to_its_importer(monkeypatch):

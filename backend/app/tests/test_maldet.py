@@ -29,8 +29,10 @@ def test_report_parsing_pulls_family_names_and_total():
     total, threats = maldet.parse_report_text(_REPORT)
     assert total == 16676
     assert threats == [
-        {"path": "/home/nhs/nganhaso.net/public_html/shell.php", "signature": "{HEX}php.base64.v23eb9", "domain": ""},
-        {"path": "/home/other/x.pl", "signature": "perl.mailer.x", "domain": ""},
+        {"path": "/home/nhs/nganhaso.net/public_html/shell.php", "signature": "{HEX}php.base64.v23eb9", "domain": "",
+         "status": "open", "quarantine_path": ""},
+        {"path": "/home/other/x.pl", "signature": "perl.mailer.x", "domain": "",
+         "status": "open", "quarantine_path": ""},
     ]
 
 
@@ -75,7 +77,8 @@ class TestHelper:
         assert "^[0-9]{6}-[0-9]{4}\\.[0-9]+$" in helper
         # ClamAV engine on, resident daemon deliberately not enabled
         assert 'scan_clamscan=1' in helper
-        assert "quarantine_hits=0" in helper
+        # Panel scans never let maldet move a hit (the panel's quarantine does).
+        assert '-co "quarantine_hits=0"' in helper
         # scans run at the lowest priority
         body = helper.split("run_maldet_scan() {", 1)[1].split("\n}", 1)[0]
         assert "nice -n 19" in body and "ionice -c3" in body

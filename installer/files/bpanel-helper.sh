@@ -71,6 +71,16 @@ PANEL_SNI_DIR="/etc/bpanel/sni"
 # the panel runs as 'bpanel'.
 PANEL_IPV6_MARKER="/etc/bpanel/ipv6-enabled"
 MALWARE_JOBS_DIR="/var/lib/bpanel/malware-scan-jobs"
+# The malware quarantine: files a scan or the real-time monitor found, moved out
+# of the website. Root-only and outside BPANEL_DATA_DIR for the reason given at
+# FIREWALL_STATE_DIR below: bpanel owns that directory and could swap a child
+# for a symlink. Nothing here is served or executable (0700 dir, 0600 files).
+MALWARE_QUARANTINE_DIR="/var/lib/bpanel-quarantine"
+# Auto-quarantine is on unless this file exists. It is the single truth: the
+# panel reads it, maldet_write_conf turns it into maldet's quarantine_hits, and
+# an update re-applies whatever it says. In /etc/bpanel (root:bpanel 0750), so
+# the panel can read it and only root can write it.
+MALWARE_AUTO_QUARANTINE_OFF_MARKER="/etc/bpanel/malware-auto-quarantine-off"
 # Left out of a whole-server scan: kernel filesystems that are not files at
 # all, read-only squashfs images, package caches that are re-downloadable, and
 # the signature database itself. Scanning them costs hours and finds nothing.
@@ -4378,13 +4388,30 @@ MALDET_HOME="/usr/local/maldetect"
 MALDET_CONF="${MALDET_HOME}/conf.maldet"
 MALDET_TARBALL_URL="https://www.rfxn.com/downloads/maldetect-current.tar.gz"
 
+malware_auto_quarantine_on() { [[ ! -e "$MALWARE_AUTO_QUARANTINE_OFF_MARKER" ]]; }
+
+maldet_quarantine_hits() {
+  grep -E '^quarantine_hits=' "$MALDET_CONF" 2>/dev/null | tail -n1 | tr -dc '0-9' || true
+}
+
 maldet_write_conf() {
   # Panel-owned settings on top of whatever the rfxn installer shipped. The
-  # panel drives scheduling and never auto-quarantines, so its cron is off.
+  # panel drives scheduling, so maldet's cron is off.
+  #
+  # quarantine_hits follows the panel's auto-quarantine switch (on unless
+  # MALWARE_AUTO_QUARANTINE_OFF_MARKER exists): with it the Level 2 monitor
+  # moves what it finds into ${MALDET_HOME}/quarantine at once, and the panel's
+  # quarantine list adopts it from there (malware-quarantine list). Scans the
+  # panel runs pass -co quarantine_hits=0 and quarantine through the panel's
+  # own store instead, which only ever touches website folders and temp dirs.
+  # This runs on every update (maldet-update-sigs), so it must never reset the
+  # switch: it reads it.
   [[ -f "$MALDET_CONF" ]] || return 0
-  local key val kv
+  local key val kv hits=1 before
+  malware_auto_quarantine_on || hits=0
+  before="$(maldet_quarantine_hits)"
   for kv in \
-    "quarantine_hits=0" "quarantine_clean=0" "quarantine_suspend_user=0" \
+    "quarantine_hits=${hits}" "quarantine_clean=0" "quarantine_suspend_user=0" \
     "scan_clamscan=1" "scan_ignore_root=0" "scan_find_h10k_alert=0" \
     "autoupdate_signatures=1" "autoupdate_version=1" "cron_daily_scan=0" \
     "email_alert=0" "default_monitor_mode=users"
@@ -4399,6 +4426,11 @@ maldet_write_conf() {
   # The panel owns the schedule; disarm the installer's daily cron.
   [[ -f /etc/cron.daily/maldet ]] && chmod a-x /etc/cron.daily/maldet
   maldet_write_ignores
+  # A running monitor reads conf.maldet when it starts and then only hourly;
+  # a changed switch should hold from now, not from the next hour.
+  if [[ "$before" != "$hits" ]] && systemctl is-active --quiet maldet 2>/dev/null; then
+    systemctl restart maldet >/dev/null 2>&1 || true
+  fi
   return 0
 }
 
@@ -4517,13 +4549,19 @@ run_maldet_scan() {
   done
   [[ ${#targets[@]} -gt 0 ]] || deny "no valid scan path"
 
-  local -a co=()
+  # The panel quarantines what its own scans find, through malware-quarantine:
+  # only files in website folders and temp dirs, each recorded so the scan's
+  # report says what became of it. maldet moving hits itself (quarantine_hits
+  # in conf.maldet is on for the real-time monitor) would also move a false
+  # positive out of /usr or /etc on a whole-server scan. maldet takes one -co
+  # per override.
+  local -a co=(-co "quarantine_hits=0")
   # A whole-machine scan skips the kernel/pkg-cache noise; a /home scan does not
-  # need it. maldet takes one -co per override.
+  # need it.
   if [[ " ${targets[*]} " == *" / "* ]]; then
     local ignore
     ignore="$(printf '%s\n' "${MALWARE_SCAN_PRUNE[@]}" | paste -sd, -)"
-    co=(-co "scan_ignore=${ignore}")
+    co+=(-co "scan_ignore=${ignore}")
   fi
 
   # Foreground on purpose: -b daemonises and the helper would return before the
@@ -4541,9 +4579,13 @@ run_maldet_scan() {
     scanid="$(cat "${MALDET_HOME}/sess/session.last" 2>/dev/null)"
   fi
   # The report body is the session file maldet wrote, not `maldet -e` output.
+  # LMD 2.x writes a TSV session (session.tsv.<id>) and, on a server that never
+  # ran 1.x, no plain-text one at all; the panel reads either.
   : >"$rep"
   if [[ -n "$scanid" && -f "${MALDET_HOME}/sess/session.${scanid}" ]]; then
     cat "${MALDET_HOME}/sess/session.${scanid}" >>"$rep"
+  elif [[ -n "$scanid" && -f "${MALDET_HOME}/sess/session.tsv.${scanid}" ]]; then
+    cat "${MALDET_HOME}/sess/session.tsv.${scanid}" >>"$rep"
   fi
   chown bpanel:bpanel "$out" "$rep" 2>/dev/null || true
   chmod 0640 "$out" "$rep" 2>/dev/null || true
@@ -4583,6 +4625,483 @@ maldet_scan_progress() {
     done
   fi
   printf 'stage=%s\ntotal=%s\nscanned=%s\n' "$stage" "${total:-0}" "${scanned:-0}"
+}
+
+# --- Malware quarantine -------------------------------------------------------
+# A file a scan flags is moved out of the website into MALWARE_QUARANTINE_DIR
+# (root-only, never served, 0600), with what it takes to put it back exactly:
+# the path, owner, mode, times and a sha256 of the content. Restore writes it
+# back byte for byte and refuses to overwrite anything that is there now;
+# delete removes it for good.
+#
+# Only files inside a website folder (/home/<user>/<domain>/... or
+# /home/<user>/apps/<name>/...) and in /tmp, /var/tmp and /dev/shm, the temp
+# dirs the real-time monitor watches. Every directory on the way is opened
+# without following a symlink, the file itself must be a regular file, and the
+# original is removed only while it is still the file that was copied.
+#
+# What maldet quarantined itself (the Level 2 monitor, with quarantine_hits=1)
+# sits in ${MALDET_HOME}/quarantine with a .info beside it; `list` adopts it
+# into this store so it shows in the panel with Restore and Delete like the
+# rest. maldet's own --restore follows symlinks and overwrites; this does not.
+malware_quarantine() {
+  # malware_quarantine <list|add PATH [SIGNATURE]|restore ID|drop ID>
+  [[ -L "$MALWARE_QUARANTINE_DIR" ]] && deny "the quarantine store is a symlink: $MALWARE_QUARANTINE_DIR"
+  install -d -o root -g root -m 0700 "$MALWARE_QUARANTINE_DIR"
+  # The third argument is the filesystem root the paths are walked from: "/"
+  # here, a scratch directory in the tests.
+  python3 - "$MALWARE_QUARANTINE_DIR" "$MALDET_HOME" / "$@" <<'PY'
+import errno
+import fcntl
+import grp
+import hashlib
+import json
+import os
+import pwd
+import re
+import secrets
+import stat
+import sys
+import time
+
+STORE, LMD_HOME, FS_ROOT = sys.argv[1], sys.argv[2], sys.argv[3]
+ACTION = sys.argv[4] if len(sys.argv) > 4 else "list"
+ARGS = sys.argv[5:]
+
+MAX_BYTES = 512 * 1024 * 1024
+CHUNK = 1 << 20
+# maldet writes the file first and its .info after; one this young may still
+# be half done, and the next listing picks it up.
+LMD_SETTLE_SECONDS = 30
+ID_RE = re.compile(r"^[0-9a-f]{32}$")
+USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{2,31}$")
+DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+APP_RE = re.compile(r"^[a-z0-9]([a-z0-9_-]{0,30}[a-z0-9])?$")
+# require_linux_user's reserved names: never a panel account's home.
+RESERVED_USERS = {
+    "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp",
+    "proxy", "www-data", "backup", "list", "irc", "_apt", "nobody", "bpanel", "bpanel-sites",
+    "bpanel-sftp", "bpanel-sftp-site", "mysql", "redis", "nginx",
+}
+TEMP_DIRS = (("tmp",), ("var", "tmp"), ("dev", "shm"))
+FIELDS = ("id", "original_path", "signature", "size", "uid", "gid", "owner", "group", "mode",
+          "sha256", "quarantined_at", "source", "lmd_path")
+
+
+class Refused(Exception):
+    pass
+
+
+def die(message):
+    sys.stderr.write("bpanel-helper: " + message + "\n")
+    sys.exit(1)
+
+
+def components(path):
+    """The parts of a path the quarantine may touch, or Refused."""
+    if not isinstance(path, str) or not path.startswith("/") or "\x00" in path or "\n" in path:
+        raise Refused("not an absolute path")
+    parts = path.split("/")[1:]
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise Refused("not a plain absolute path: " + path)
+    if parts[0] == "home":
+        if len(parts) < 4:
+            raise Refused("not inside a website folder: " + path)
+        user = parts[1]
+        if not USER_RE.match(user) or user in RESERVED_USERS or user.startswith("sftp_"):
+            raise Refused("not a panel account's folder: " + path)
+        if parts[2] == "apps":
+            if len(parts) < 5 or not APP_RE.match(parts[3]):
+                raise Refused("not inside an application folder: " + path)
+        elif not DOMAIN_RE.match(parts[2]):
+            raise Refused("not inside a website folder: " + path)
+        return parts
+    for prefix in TEMP_DIRS:
+        if tuple(parts[:len(prefix)]) == prefix and len(parts) > len(prefix):
+            return parts
+    raise Refused("only files in website folders, /tmp, /var/tmp and /dev/shm are quarantined: " + path)
+
+
+def open_parent(parts):
+    """The directory holding the last part, opened from FS_ROOT one level at a
+    time and never through a symlink."""
+    fd = os.open(FS_ROOT, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[:-1]:
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise Refused("a folder on the way is a symlink or not a folder: " + part)
+                if exc.errno == errno.ENOENT:
+                    raise Refused("the folder is no longer there: /" + "/".join(parts[:-1]))
+                raise
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def blob_path(qid):
+    return os.path.join(STORE, qid + ".bin")
+
+
+def meta_path(qid):
+    return os.path.join(STORE, qid + ".json")
+
+
+def now_iso(stamp=None):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp))
+
+
+def clean_text(value, limit=200):
+    return "".join(ch for ch in str(value or "") if ch.isprintable())[:limit]
+
+
+def name_of(uid, gid):
+    try:
+        owner = pwd.getpwuid(uid).pw_name
+    except (KeyError, OverflowError):
+        owner = str(uid)
+    try:
+        group = grp.getgrgid(gid).gr_name
+    except (KeyError, OverflowError):
+        group = str(gid)
+    return owner, group
+
+
+def copy_fd(src, dst):
+    digest = hashlib.sha256()
+    total = 0
+    while True:
+        chunk = os.read(src, CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_BYTES:
+            raise Refused("larger than 512 MB; not quarantined")
+        digest.update(chunk)
+        view = memoryview(chunk)
+        while view:
+            view = view[os.write(dst, view):]
+    os.fsync(dst)
+    return digest.hexdigest(), total
+
+
+def write_meta(meta):
+    target = meta_path(meta["id"])
+    tmp = target + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(meta, handle, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, target)
+
+
+def discard(qid):
+    for path in (blob_path(qid), meta_path(qid)):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
+def load(qid):
+    if not ID_RE.match(qid or ""):
+        raise Refused("bad quarantine id")
+    try:
+        with open(meta_path(qid), encoding="utf-8") as handle:
+            meta = json.load(handle)
+    except (OSError, ValueError):
+        raise Refused("no such quarantined file: " + qid)
+    if not isinstance(meta, dict) or meta.get("id") != qid or not os.path.isfile(blob_path(qid)):
+        raise Refused("no such quarantined file: " + qid)
+    return meta
+
+
+def public(meta):
+    view = {key: meta.get(key) for key in FIELDS}
+    try:
+        components(meta.get("original_path"))
+        view["restorable"] = True
+    except Refused:
+        view["restorable"] = False
+    view["stored_path"] = blob_path(meta["id"])
+    return view
+
+
+def entries():
+    found = []
+    for name in os.listdir(STORE):
+        qid = name[:-5]
+        if not name.endswith(".json") or not ID_RE.match(qid):
+            continue
+        try:
+            with open(meta_path(qid), encoding="utf-8") as handle:
+                meta = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict) or meta.get("id") != qid:
+            continue
+        if not os.path.isfile(blob_path(qid)):
+            discard(qid)
+            continue
+        found.append(meta)
+    found.sort(key=lambda meta: str(meta.get("quarantined_at") or ""), reverse=True)
+    return found
+
+
+def add(path, signature):
+    parts = components(path)
+    name = parts[-1]
+    parent = open_parent(parts)
+    try:
+        try:
+            st = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            raise Refused("the file is no longer there: " + path)
+        if stat.S_ISLNK(st.st_mode):
+            raise Refused("a symlink, not a file; nothing was moved: " + path)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refused("not a regular file: " + path)
+        if st.st_size > MAX_BYTES:
+            raise Refused("larger than 512 MB; not quarantined: " + path)
+        src = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            fst = os.fstat(src)
+            if not stat.S_ISREG(fst.st_mode) or (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
+                raise Refused("the file changed while it was being quarantined: " + path)
+            qid = secrets.token_hex(16)
+            dst = os.open(blob_path(qid), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                digest, size = copy_fd(src, dst)
+            except BaseException:
+                os.close(dst)
+                discard(qid)
+                raise
+            os.close(dst)
+        finally:
+            os.close(src)
+        owner, group = name_of(fst.st_uid, fst.st_gid)
+        meta = {
+            "id": qid, "original_path": path, "signature": clean_text(signature),
+            "size": size, "uid": fst.st_uid, "gid": fst.st_gid, "owner": owner, "group": group,
+            "mode": stat.S_IMODE(fst.st_mode), "atime_ns": fst.st_atime_ns, "mtime_ns": fst.st_mtime_ns,
+            "sha256": digest, "quarantined_at": now_iso(), "source": "panel",
+        }
+        # Recorded before the original goes, so a crash never loses the file.
+        write_meta(meta)
+        try:
+            again = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            same = (again.st_dev, again.st_ino) == (fst.st_dev, fst.st_ino)
+        except FileNotFoundError:
+            same = False
+        if not same:
+            discard(qid)
+            raise Refused("the file changed while it was being quarantined: " + path)
+        try:
+            os.unlink(name, dir_fd=parent)
+        except OSError as exc:
+            discard(qid)
+            raise Refused("could not remove " + path + ": " + (exc.strerror or str(exc)))
+    finally:
+        os.close(parent)
+    return meta
+
+
+def restore(qid):
+    meta = load(qid)
+    path = meta.get("original_path") or ""
+    parts = components(path)
+    name = parts[-1]
+    src = os.open(blob_path(qid), os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        parent = open_parent(parts)
+        try:
+            try:
+                os.stat(name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise Refused("a file is at " + path + " now; it was left as it is and nothing was restored")
+            folder = os.fstat(parent)
+            uid = int(meta.get("uid", -1))
+            gid = int(meta.get("gid", -1))
+            # An owner maldet named that no longer exists: the folder's owner.
+            if uid < 0:
+                uid = folder.st_uid
+            if gid < 0:
+                gid = folder.st_gid
+            # Plain permission bits only: a restore never hands a file setuid,
+            # setgid or sticky back (maldet's .info owner can be root).
+            mode = int(meta.get("mode", 0o644)) & 0o777
+            dst = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+            done = False
+            try:
+                digest, _size = copy_fd(src, dst)
+                if meta.get("sha256") and digest != meta["sha256"]:
+                    raise Refused("the quarantined copy does not match its checksum; nothing was restored")
+                os.fchown(dst, uid, gid)
+                os.fchmod(dst, mode)
+                if meta.get("mtime_ns"):
+                    os.utime(dst, ns=(int(meta.get("atime_ns") or meta["mtime_ns"]), int(meta["mtime_ns"])))
+                done = True
+            finally:
+                os.close(dst)
+                if not done:
+                    try:
+                        os.unlink(name, dir_fd=parent)
+                    except OSError:
+                        pass
+        finally:
+            os.close(parent)
+    finally:
+        os.close(src)
+    discard(qid)
+    return meta
+
+
+def drop(qid):
+    meta = load(qid)
+    discard(qid)
+    return meta
+
+
+def lmd_history():
+    """quarantine.hist: utime:signature:path:owner:group:hash:size:quarantined-as"""
+    found = {}
+    try:
+        with open(os.path.join(LMD_HOME, "sess", "quarantine.hist"), encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()[-20000:]
+    except OSError:
+        return found
+    for line in lines:
+        line = line.rstrip("\n")
+        head, sep, stored = line.rpartition(":")
+        bits = line.split(":", 2)
+        if sep and stored.startswith("/") and len(bits) == 3:
+            found[stored] = (bits[1], bits[0])
+    return found
+
+
+def lmd_info(text):
+    """owner:group:mode:size:hash:atime:mtime:ctime:path - the path may hold colons."""
+    for line in text.splitlines():
+        if not line.strip() or "#" in line.split(":", 1)[0]:
+            continue
+        bits = line.split(":", 8)
+        if len(bits) == 9 and bits[8].startswith("/"):
+            return bits
+        return None
+    return None
+
+
+def lmd_id(name, kind):
+    lookup = pwd.getpwnam if kind == "user" else grp.getgrnam
+    try:
+        entry = lookup(name)
+        return entry.pw_uid if kind == "user" else entry.gr_gid
+    except KeyError:
+        return int(name) if name.isdigit() else -1
+
+
+def adopt_lmd():
+    folder = os.path.join(LMD_HOME, "quarantine")
+    try:
+        if stat.S_ISLNK(os.lstat(folder).st_mode):
+            return
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return
+    history = None
+    now = time.time()
+    for info_name in names:
+        stored_name = info_name[:-5]
+        if not info_name.endswith(".info") or not stored_name:
+            continue
+        info_path = os.path.join(folder, info_name)
+        stored = os.path.join(folder, stored_name)
+        try:
+            info_st = os.lstat(info_path)
+            stored_st = os.lstat(stored)
+        except OSError:
+            continue
+        if not (stat.S_ISREG(info_st.st_mode) and stat.S_ISREG(stored_st.st_mode)):
+            continue
+        if now - info_st.st_mtime < LMD_SETTLE_SECONDS:
+            continue
+        try:
+            with open(info_path, encoding="utf-8", errors="replace") as handle:
+                bits = lmd_info(handle.read(65536))
+        except OSError:
+            continue
+        if not bits:
+            continue
+        owner, group, mode, _size, _hash, atime, mtime, _ctime, original = bits
+        if history is None:
+            history = lmd_history()
+        signature, stamp = history.get(stored, ("", ""))
+        qid = secrets.token_hex(16)
+        try:
+            os.rename(stored, blob_path(qid))
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                continue
+            src = os.open(stored, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                dst = os.open(blob_path(qid), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                try:
+                    copy_fd(src, dst)
+                finally:
+                    os.close(dst)
+            finally:
+                os.close(src)
+            os.unlink(stored)
+        os.chmod(blob_path(qid), 0o600)
+        digest = hashlib.sha256()
+        size = 0
+        with open(blob_path(qid), "rb") as handle:
+            for chunk in iter(lambda: handle.read(CHUNK), b""):
+                digest.update(chunk)
+                size += len(chunk)
+        meta = {
+            "id": qid, "original_path": original, "signature": clean_text(signature),
+            "size": size, "uid": lmd_id(owner, "user"), "gid": lmd_id(group, "group"),
+            "owner": clean_text(owner, 64), "group": clean_text(group, 64),
+            "mode": int(mode, 8) if re.match(r"^[0-7]{1,4}$", mode) else 0o644,
+            "sha256": digest.hexdigest(),
+            "quarantined_at": now_iso(int(stamp) if stamp.isdigit() else int(info_st.st_mtime)),
+            "source": "lmd", "lmd_path": stored,
+        }
+        if atime.isdigit() and mtime.isdigit():
+            meta["atime_ns"] = int(atime) * 1_000_000_000
+            meta["mtime_ns"] = int(mtime) * 1_000_000_000
+        write_meta(meta)
+        os.unlink(info_path)
+
+
+lock = os.open(os.path.join(STORE, ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+fcntl.flock(lock, fcntl.LOCK_EX)
+try:
+    if ACTION == "list":
+        adopt_lmd()
+        result = [public(meta) for meta in entries()]
+    elif ACTION == "add" and len(ARGS) in (1, 2):
+        result = public(add(ARGS[0], ARGS[1] if len(ARGS) > 1 else ""))
+    elif ACTION == "restore" and len(ARGS) == 1:
+        result = public(restore(ARGS[0]))
+    elif ACTION == "drop" and len(ARGS) == 1:
+        result = public(drop(ARGS[0]))
+    else:
+        die("usage: malware-quarantine <list|add PATH [SIGNATURE]|restore ID|drop ID>")
+except Refused as exc:
+    die(str(exc))
+json.dump(result, sys.stdout, indent=2, sort_keys=True)
+sys.stdout.write("\n")
+PY
 }
 
 # The PHP extensions the panel offers to install, one apt package each
@@ -5851,7 +6370,11 @@ firewall_blocklist_status() {
     total="$(sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | wc -l | tr -d '[:space:]')"
     shown=50
     echo "  ${total} network(s), showing first ${shown}:"
-    sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | head -n "$shown" | sed 's/^/  /'
+    # One awk that reads the whole file. `sed | head -n 50` let head exit
+    # while sed was still writing: sed died of SIGPIPE, pipefail made that
+    # exit 141, set -e stopped the helper mid-listing, and the Firewall page
+    # got a cut-off blocklist (1641 networks on .88, 2026-11-24).
+    awk -v n="$shown" 'NF && ++c <= n { print "  " $0 }' "$FIREWALL_BLOCKLIST_WORK"
     if (( total > shown )); then
       echo "  ... $((total - shown)) more"
     fi
@@ -7674,6 +8197,30 @@ sftp_account_mount_unit() {
   systemd-escape -p --suffix=mount "$1"
 }
 
+# Where a sub-account starts: inside its site folder, not at the chroot root.
+# The chroot root must be root's (sshd's rule for ChrootDirectory), so nothing
+# can be uploaded there, and a client that opened on it -- WinSCP does -- had
+# customers dropping files next to the site folder and getting "Permission
+# denied" (2026-11-23). sshd runs internal-sftp -d %d, so the start is the
+# passwd home: "/<site>", a path inside the chroot.
+#
+# usermod refuses to change the home or uid of an account that shares the
+# owner's uid -- the owner's PHP keeps that uid "in use" -- so an account whose
+# entry differs is made again: same name, the owner's uid and group, the SFTP
+# group, and the same password hash (a locked account stays locked).
+sftp_account_set_home() {
+  local sub="$1" uid="$2" gid="$3" home="$4" entry hash
+  entry="$(getent passwd "$sub")" || deny "SFTP sub-account does not exist: $sub"
+  [[ "$entry" == "$sub:x:$uid:$gid:"*":$home:/usr/sbin/nologin" ]] && return 0
+  hash="$(getent shadow "$sub" | cut -d: -f2)" || hash=""
+  userdel -f "$sub" 2>/dev/null || deny "could not update the SFTP sub-account $sub"
+  useradd -o -u "$uid" -g "$gid" -G "$BPANEL_SFTP_SITE_GROUP" -M -d "$home" -s /usr/sbin/nologin "$sub" \
+    || deny "could not re-create the SFTP sub-account $sub"
+  if [[ -n "$hash" ]]; then
+    printf '%s:%s\n' "$sub" "$hash" | chpasswd -e || deny "could not restore the password of $sub"
+  fi
+}
+
 # Bind the one website this account may reach into a root-owned chroot.
 #
 # The account shares the site owner's uid on purpose: files it uploads then
@@ -7707,12 +8254,13 @@ ensure_sftp_account() {
   owner_uid=$(id -u "$owner")
   owner_gid=$(id -g "$owner")
   if ! id -u "$sub" >/dev/null 2>&1; then
-    # -o: share the owner's uid. -M: no home of its own. -d /: the home inside
-    # the chroot is the chroot root. Created locked; a password arrives on the
-    # next verb.
-    useradd -o -u "$owner_uid" -g "$owner_gid" -M -d / -s /usr/sbin/nologin "$sub"
+    # -o: share the owner's uid. -M: no home of its own. -d /<site>: the home
+    # is the site folder inside the chroot, where the login starts (see
+    # sftp_account_set_home). Created locked; a password arrives on the next
+    # verb.
+    useradd -o -u "$owner_uid" -g "$owner_gid" -G "$BPANEL_SFTP_SITE_GROUP" -M -d "/$domain" -s /usr/sbin/nologin "$sub"
   else
-    usermod -o -u "$owner_uid" -g "$owner_gid" -d / -s /usr/sbin/nologin "$sub" 2>/dev/null || true
+    sftp_account_set_home "$sub" "$owner_uid" "$owner_gid" "/$domain"
   fi
   usermod -aG "$BPANEL_SFTP_SITE_GROUP" "$sub" 2>/dev/null || true
 
@@ -9870,6 +10418,41 @@ case "$cmd" in
     # maldet-progress <job-id>
     [[ $# -eq 1 ]] || deny "usage: maldet-progress <job-id>"
     maldet_scan_progress "$1"
+    ;;
+
+  malware-quarantine)
+    # malware-quarantine list | add <path> [signature] | restore <id> | drop <id>
+    [[ $# -ge 1 ]] || deny "usage: malware-quarantine <list|add|restore|drop> [args]"
+    case "$1" in
+      list) [[ $# -eq 1 ]] || deny "usage: malware-quarantine list" ;;
+      add) [[ $# -ge 2 && $# -le 3 ]] || deny "usage: malware-quarantine add <path> [signature]" ;;
+      restore|drop)
+        [[ $# -eq 2 ]] || deny "usage: malware-quarantine $1 <id>"
+        [[ "$2" =~ ^[0-9a-f]{32}$ ]] || deny "invalid quarantine id"
+        ;;
+      *) deny "usage: malware-quarantine <list|add|restore|drop> [args]" ;;
+    esac
+    malware_quarantine "$@"
+    ;;
+
+  malware-auto-quarantine)
+    # malware-auto-quarantine <on|off|status>: the panel's switch. Writes the
+    # marker, then conf.maldet's quarantine_hits from it (and restarts a running
+    # monitor so it holds at once).
+    [[ $# -eq 1 ]] || deny "usage: malware-auto-quarantine <on|off|status>"
+    case "$1" in
+      on) rm -f "$MALWARE_AUTO_QUARANTINE_OFF_MARKER" ;;
+      off)
+        install -d -o root -g bpanel -m 0750 /etc/bpanel
+        : >"$MALWARE_AUTO_QUARANTINE_OFF_MARKER"
+        chmod 0644 "$MALWARE_AUTO_QUARANTINE_OFF_MARKER"
+        ;;
+      status) ;;
+      *) deny "usage: malware-auto-quarantine <on|off|status>" ;;
+    esac
+    [[ "$1" == "status" ]] || maldet_write_conf
+    if malware_auto_quarantine_on; then echo "auto_quarantine=1"; else echo "auto_quarantine=0"; fi
+    echo "quarantine_hits=$(maldet_quarantine_hits)"
     ;;
 
   maldet-report)

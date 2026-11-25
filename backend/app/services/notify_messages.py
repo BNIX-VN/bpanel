@@ -133,15 +133,25 @@ def _backup_failed(p: dict, lang: str) -> tuple[str, list[str]]:
 
 
 def _malware_found(p: dict, lang: str) -> tuple[str, list[str]]:
-    lines = [f"{t['path']} ({t['signature']})" for t in p.get("threats") or []]
-    count = p.get("count", len(lines))
+    threats = p.get("threats") or []
+    count = p.get("count", len(threats))
+    moved = p.get("quarantined", sum(1 for t in threats if t.get("quarantined")))
     if lang == "vi":
+        lines = [f"{t['path']} ({t['signature']})" + (" - đã cách ly" if t.get("quarantined") else "")
+                 for t in threats]
+        closing = ("Tất cả đã được cách ly. Khôi phục file nhận nhầm trong trang Quét mã độc." if moved and moved >= count
+                   else f"{moved} file đã được cách ly; các file còn lại chưa xử lý, xem trang Quét mã độc." if moved
+                   else "Xem chi tiết trong trang Quét mã độc. File chưa bị xoá hay cách ly.")
         return (f"Phát hiện {count} file nghi nhiễm mã độc",
-                [*_listed(lines, "...và {n} file khác", "", lang),
-                 "Xem chi tiết trong trang Quét mã độc. File chưa bị xoá hay cách ly."])
+                [*_listed(lines, "...và {n} file khác", "", lang), closing])
+    lines = [f"{t['path']} ({t['signature']})" + (" - quarantined" if t.get("quarantined") else "")
+             for t in threats]
+    closing = ("All of them were moved to quarantine. Restore a false positive on the Malware scanner page."
+               if moved and moved >= count
+               else f"{moved} moved to quarantine; the rest are not handled yet, see the Malware scanner page."
+               if moved else "See the Malware scanner page. Nothing was deleted or quarantined.")
     return (f"{count} suspicious file(s) found",
-            [*_listed(lines, "", "...and {n} more", lang),
-             "See the Malware scanner page. Nothing was deleted or quarantined."])
+            [*_listed(lines, "", "...and {n} more", lang), closing])
 
 
 def _ssl_expiring(p: dict, lang: str) -> tuple[str, list[str]]:

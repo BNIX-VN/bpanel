@@ -18,8 +18,10 @@ export function attentionItems({ summary, isAdmin, currentUser, t }) {
     const stopped = summary.services?.stopped || [];
     if (stopped.length) need('bad', 'services', t('Stopped: {names}', { names: stopped.join(', ') }), 'services', t('Open'));
     if (summary.firewall?.enabled === false) need('bad', 'firewall', t('The firewall is off.'), 'firewall', t('Open'));
-    const infected = summary.malware?.last_scan?.infected;
-    if (infected) need('bad', 'malware', t('The last malware scan found {n} threat(s).', { n: infected }), 'malware', t('Open'));
+    // Only threats still in place: a quarantined one is dealt with.
+    const lastScan = summary.malware?.last_scan;
+    const openThreats = lastScan ? (lastScan.open ?? Math.max((lastScan.infected || 0) - (lastScan.quarantined || 0), 0)) : 0;
+    if (openThreats) need('bad', 'malware', t('The last malware scan found {n} threat(s).', { n: openThreats }), 'malware', t('Open'));
     if (summary.backups?.failed) need('bad', 'backups', t('{n} scheduled backup(s) failed on their last run.', { n: summary.backups.failed }), 'backups', t('Open'));
     if (summary.waf?.engine === 'off') need('warn', 'waf', t('The WAF engine is not installed.'), 'waf', t('Open'));
     // An addon that is off is not a fault: only the scanner's addon being on
