@@ -131,15 +131,47 @@ def _report_path(job_id: str) -> Path:
     return JOBS_DIR / f"{job_id}.maldet.report"
 
 
+def _threat(signature: str, path: str, quarantined_as: str = "") -> dict:
+    """One hit. maldet with quarantine_hits=1 (its real-time monitor's setting,
+    or a server set that way by hand) has already moved the file: say so."""
+    quarantined_as = (quarantined_as or "").strip()
+    if quarantined_as in ("", "-"):
+        return {"path": path, "signature": signature, "domain": "", "status": "open", "quarantine_path": ""}
+    return {"path": path, "signature": signature, "domain": "", "status": "quarantined",
+            "quarantine_path": quarantined_as}
+
+
+def _parse_tsv_report(text: str) -> tuple[int, list[dict]]:
+    """LMD 2.x's session.tsv.<id>: a "#LMD:v1" header (field 11 is the file
+    count), then one hit a line - signature, path, quarantined-as ("-" when it
+    was not), hit type and more."""
+    total_files = 0
+    threats: list[dict] = []
+    for number, raw in enumerate((text or "").splitlines()):
+        fields = raw.split("\t")
+        if number == 0 and fields[0].startswith("#LMD:"):
+            if len(fields) > 10 and fields[10].isdigit():
+                total_files = int(fields[10])
+            continue
+        if raw.startswith("#") or len(fields) < 3 or not fields[1].startswith("/"):
+            continue
+        threats.append(_threat(fields[0].strip(), fields[1], fields[2]))
+    return total_files, threats
+
+
 def parse_report_text(text: str) -> tuple[int, list[dict]]:
-    """(total_files, threats[]) from a maldet plain-text scan report."""
+    """(total_files, threats[]) from a maldet scan report: the plain-text
+    session file (1.x, and 2.x on a server that ran 1.x) or 2.x's TSV one."""
+    if (text or "").startswith("#LMD:"):
+        return _parse_tsv_report(text)
     total_files = 0
     threats: list[dict] = []
     in_hits = False
     for raw in (text or "").splitlines():
         line = raw.rstrip()
         low = line.lower()
-        if "total files" in low:
+        # 1.x says "TOTAL FILES: n", 2.x "FILES:       n".
+        if "total files" in low or (not in_hits and low.startswith("files:")):
             digits = re.findall(r"\d+", line)
             if digits:
                 total_files = int(digits[-1])
@@ -153,7 +185,9 @@ def parse_report_text(text: str) -> tuple[int, list[dict]]:
                 continue
             m = _HIT_LINE_RE.match(line)
             if m and m.group("path").startswith("/"):
-                threats.append({"path": m.group("path"), "signature": m.group("sig"), "domain": ""})
+                # "<sig> : <path> => <where maldet quarantined it>"
+                path, _, quarantined_as = m.group("path").partition(" => ")
+                threats.append(_threat(m.group("sig"), path.strip(), quarantined_as))
     return total_files, threats
 
 

@@ -1228,6 +1228,9 @@ function App() {
   const [incrementalDays, setIncrementalDays] = useState(2);
   // A run from the history, read as a sub-page of the scanner.
   const [malwareDetailJob, setMalwareDetailJob] = useState(null);
+  // Files moved out of their website: by a scan, the Quarantine button, or
+  // the real-time monitor.
+  const [malwareQuarantine, setMalwareQuarantine] = useState([]);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
@@ -2608,6 +2611,57 @@ function App() {
     const data = await request('/malware/scan-on-upload', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on scan-on-upload...' : 'Turning off...');
     if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Uploaded files are scanned.' : 'Uploaded files are no longer scanned.'); }
+  }
+
+  async function toggleMalwareAutoQuarantine(enabled) {
+    if (!enabled && !(await confirmDialog(t('Turn off auto-quarantine? Scans and real-time protection will only report what they find, and the files stay in the websites until someone moves them.')))) return;
+    const data = await request('/malware/auto-quarantine', { method: 'POST', body: JSON.stringify({ enabled }) },
+      t('Saving...'));
+    if (data) { setMalwareScanStatus(data); setNotice(t(enabled ? 'Detected malware is moved into quarantine automatically.' : 'Auto-quarantine is off: scans only report threats.')); }
+  }
+
+  async function loadMalwareQuarantine() {
+    const data = await request('/malware/quarantine', { silent: true }, '');
+    if (data && Array.isArray(data.entries)) setMalwareQuarantine(data.entries);
+  }
+
+  // A scan's record says what became of each threat; read it again after a
+  // file moved in or out of quarantine, and the bell with it.
+  async function refreshMalwareRecords() {
+    await loadMalwareScanJobs();
+    if (malwareDetailJob?.job_id) {
+      const job = await request(`/malware/jobs/${malwareDetailJob.job_id}`, { silent: true }, '');
+      if (job) setMalwareDetailJob(job);
+    }
+    loadDashboardSummary();
+  }
+
+  async function quarantineThreat(threat) {
+    if (!(await confirmDialog(t('Move this file out of the website into quarantine?\n\n{path}\n\nIt stops being served at once. Restore it from the Quarantine list if it was a false positive.', { path: threat.path })))) return;
+    const data = await request('/malware/quarantine', {
+      method: 'POST', body: JSON.stringify({ path: threat.path, signature: threat.signature || '' }),
+    }, t('Quarantining file...'));
+    if (data && Array.isArray(data.entries)) {
+      setMalwareQuarantine(data.entries);
+      setNotice(t('File moved to quarantine.'));
+      await refreshMalwareRecords();
+    }
+  }
+
+  async function restoreQuarantined(entry) {
+    if (!(await confirmDialog(t('Restore this file to where it was?\n\n{path}\n\nOnly if you are sure it is a false positive: the website serves it again, and the next scan may flag it again.', { path: entry.original_path })))) return;
+    const data = await request(`/malware/quarantine/${entry.id}/restore`, { method: 'POST' }, t('Restoring file...'));
+    if (data && Array.isArray(data.entries)) {
+      setMalwareQuarantine(data.entries);
+      setNotice(t('File restored to where it was.'));
+      await refreshMalwareRecords();
+    }
+  }
+
+  async function deleteQuarantined(entry) {
+    if (!(await confirmDialog(t('Delete this quarantined file for good?\n\n{path}\n\nThis cannot be undone.', { path: entry.original_path })))) return;
+    const data = await request(`/malware/quarantine/${entry.id}`, { method: 'DELETE' }, t('Deleting quarantined file...'));
+    if (data && Array.isArray(data.entries)) { setMalwareQuarantine(data.entries); setNotice(t('Quarantined file deleted.')); }
   }
 
   async function installLmd() {
@@ -5831,6 +5885,7 @@ function App() {
     loadMalwareScanJobs();
     loadLatestMalwareScanJob();
     loadMalwareSchedule();
+    loadMalwareQuarantine();
     if (websites.length === 0) loadWebsiteList('', false);
   }, [isAuthenticated, page, isAdmin, malwareAddonInstalled]);
 
@@ -6894,10 +6949,12 @@ function App() {
         tone: engine === 'on' ? 'ok' : engine === 'off' ? 'warn' : 'neutral' });
       const scanner = sum.malware;
       const lastScan = scanner?.last_scan;
+      // A quarantined threat is dealt with: only the open ones make the card red.
+      const lastOpen = lastScan ? (lastScan.open ?? Math.max((lastScan.infected || 0) - (lastScan.quarantined || 0), 0)) : 0;
       status.push({ key: 'malware', icon: Bug, label: t('Malware scanner'),
-        value: !scanner ? '—' : scanner.addon === false ? t('Off') : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
+        value: !scanner ? '—' : scanner.addon === false ? t('Off') : !scanner.installed ? t('Not installed') : lastOpen ? t('{n} threat(s)', { n: lastOpen }) : lastScan?.infected ? t('{n} quarantined', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
         detail: scanner?.addon === false ? t('Not installed') : scanner?.running ? t('Scanning...') : lastScan ? shortDate(lastScan.finished_at) : t('Last scan'),
-        tone: !scanner || scanner.addon === false ? 'neutral' : !scanner.installed ? 'warn' : lastScan?.infected ? 'bad' : lastScan ? 'ok' : 'neutral' });
+        tone: !scanner || scanner.addon === false ? 'neutral' : !scanner.installed ? 'warn' : lastOpen ? 'bad' : lastScan ? 'ok' : 'neutral' });
       const backups = sum.backups;
       status.push({ key: 'backups', icon: Archive, label: t('Backups'),
         value: backups?.last_run_at ? shortDate(backups.last_run_at) : '—',
@@ -12561,8 +12618,14 @@ function App() {
       scanned: job.scanned || 0, total: job.total_files || job.scanned || 0, infected: job.infected || 0, errors: job.errors || 0,
     });
     const scanJobMeta = job => `${scanJobStamp(job)} / ${scanJobDetail(job)}`;
+    // A run whose every threat was quarantined is dealt with: it reads
+    // "Quarantined", in green, rather than "Threats found".
+    const scanQuarantined = job => (Number(job.quarantined) || 0)
+      || (job.threats || []).filter(threat => threat.status === 'quarantined').length;
+    const scanAllQuarantined = job => job.status === 'infected' && (Number(job.infected) || 0) > 0
+      && scanQuarantined(job) >= (Number(job.infected) || 0);
     const scanJobBadgeClass = job => {
-      if (job.status === 'done') return 'badge ok';
+      if (job.status === 'done' || scanAllQuarantined(job)) return 'badge ok';
       if (job.status === 'infected') return 'badge danger';
       if (['error', 'interrupted'].includes(job.status)) return 'badge bad';
       return 'badge warn';
@@ -12573,6 +12636,7 @@ function App() {
     };
     // Translated here, not by each caller: two of the three forgot.
     const scanStatusLabel = status => (scanStatusLabels[status] ? t(scanStatusLabels[status]) : (status || '—'));
+    const scanJobLabel = job => (scanAllQuarantined(job) ? t('Quarantined') : scanStatusLabel(job.status));
     const fmtStamp = s => {
       if (!s) return '';
       const d = new Date(s);
@@ -12592,12 +12656,20 @@ function App() {
     };
     // The scanner's stage messages are fixed sentences in the dictionary; one
     // that is not (an older job's) shows as it was written.
+    // The helper's rule: a file inside a website folder, or in a temp dir the
+    // real-time monitor watches. Anything else is dealt with over SSH.
+    const quarantinable = path => /^(\/home\/[a-z_][a-z0-9_-]{2,31}\/(apps\/[a-z0-9][a-z0-9_-]*|[a-z0-9-]+(\.[a-z0-9-]+)+)|\/tmp|\/var\/tmp|\/dev\/shm)\/[^/]/.test(path || '')
+      && !/(^|\/)\.\.?(\/|$)/.test(path || '');
     const renderThreats = job => <>
       <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
       <div className="scan-threat-list">
         {job.threats.map((threat, i) => <div key={i} className="scan-threat-item">
-          <strong>{threat.signature}</strong>
+          <strong>{threat.signature} {threat.status === 'quarantined'
+            ? <span className="badge ok">{t('Quarantined')}</span>
+            : <span className="badge danger">{t('Not handled')}</span>}</strong>
           <span>{threat.domain ? `${threat.domain}: ` : ''}{threat.path}</span>
+          {threat.status !== 'quarantined' && quarantinable(threat.path) && <button type="button" className="secondary-light mini"
+            disabled={!!loading} onClick={() => quarantineThreat(threat)}><ShieldAlert size={13}/> {t('Quarantine')}</button>}
         </div>)}
       </div>
     </>;
@@ -12612,11 +12684,12 @@ function App() {
       return <>
         <PageHeader breadcrumbs={[{ label: t('Malware scanner'), onClick: () => setMalwareDetailJob(null) }, { label: scanJobTitle(job) }]}
           title={scanJobTitle(job)} subtitle={scanJobStamp(job)}
-          actions={<span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>}/>
+          actions={<span className={scanJobBadgeClass(job)}>{scanJobLabel(job)}</span>}/>
         <section className="section scan-detail">
         <div className="scan-detail-stats">
           <div><small>{t('Files scanned')}</small><strong>{job.scanned || 0}{job.total_files ? ` / ${job.total_files}` : ''}</strong></div>
-          <div><small>{t('Threats found')}</small><strong className={job.infected > 0 ? 'text-danger' : ''}>{job.infected || 0}</strong></div>
+          <div><small>{t('Threats found')}</small><strong className={job.infected > 0 && !scanAllQuarantined(job) ? 'text-danger' : ''}>{job.infected || 0}</strong></div>
+          {scanQuarantined(job) > 0 && <div><small>{t('Quarantined')}</small><strong>{scanQuarantined(job)}</strong></div>}
           <div><small>{t('Errors')}</small><strong>{job.errors || 0}</strong></div>
           <div><small>{t('Duration')}</small><strong>{duration}</strong></div>
         </div>
@@ -12643,7 +12716,7 @@ function App() {
     };
     return <>
       <PageHeader subtitle={t('Scans the websites, and the whole server, with Linux Malware Detect and ClamAV.')}
-        onRefresh={() => { loadMalwareScanStatus(); loadMalwareSchedule(); }} refreshDisabled={!!loading}/>
+        onRefresh={() => { loadMalwareScanStatus(); loadMalwareSchedule(); loadMalwareQuarantine(); }} refreshDisabled={!!loading}/>
       <section className="section">
         <div className="section-title">
           <div>
@@ -12763,7 +12836,7 @@ function App() {
                   <strong>{scanJobTitle(job)}</strong>
                   <small>{scanJobMeta(job)}</small>
                 </span>
-                <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>
+                <span className={scanJobBadgeClass(job)}>{scanJobLabel(job)}</span>
               </button>)}
             </div>
           </div>}
@@ -12788,6 +12861,48 @@ function App() {
           </div>}
         </div>}
       </section>
+
+      {/* Files moved out of their website, by a scan, the Quarantine button
+          or real-time protection; each can go back, or go for good. */}
+      {mwInstalled && <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('Quarantine')} {malwareQuarantine.length > 0 && <span className="badge">{malwareQuarantine.length}</span>}</h2>
+            <p className="hint">{mw.auto_quarantine
+              ? t('A file a scan or real-time protection flags is moved here at once and stops being served. Restore anything that was a false positive.')
+              : t('Auto-quarantine is off: scans only report threats. Turn it on, or press Quarantine on a threat to move that file here.')}</p>
+          </div>
+          <Switch checked={!!mw.auto_quarantine} disabled={!!loading} onChange={on => toggleMalwareAutoQuarantine(on)}
+            label={t('Auto-quarantine')}><span>{t('Auto-quarantine')}: {mw.auto_quarantine ? t('On') : t('Off')}</span></Switch>
+        </div>
+        {malwareQuarantine.length === 0
+          ? <div className="quarantine-empty"><CheckCircle size={16}/> {t('Nothing in quarantine.')}</div>
+          : <div className="quarantine-list">
+            {malwareQuarantine.map(entry => {
+              const site = /^\/home\/[^/]+\/([^/]+)\//.exec(entry.original_path || '');
+              return <div key={entry.id} className="quarantine-item">
+                <div className="quarantine-info">
+                  <div className="quarantine-line">
+                    <span className="badge danger">{entry.signature || t('Flagged file')}</span>
+                    {site && site[1] !== 'apps' && <span className="quarantine-site">{site[1]}</span>}
+                    <span className="quarantine-meta">
+                      {scanJobStamp({ finished_at: entry.quarantined_at })} · {formatBytes(entry.size || 0)}
+                      {entry.source === 'lmd' ? ` · ${t('Real-time protection')}` : ''}
+                    </span>
+                  </div>
+                  <code className="quarantine-path" title={entry.original_path}>{entry.original_path}</code>
+                </div>
+                <div className="quarantine-actions">
+                  <button type="button" className="secondary-light" disabled={!!loading || !entry.restorable}
+                    title={entry.restorable ? undefined : t('Outside the website folders: restore it over SSH.')}
+                    onClick={() => restoreQuarantined(entry)}><RotateCcw size={13}/> {t('Restore')}</button>
+                  <button type="button" className="danger-light" disabled={!!loading}
+                    onClick={() => deleteQuarantined(entry)}><Trash2 size={13}/> {t('Delete')}</button>
+                </div>
+              </div>;
+            })}
+          </div>}
+      </section>}
 
       {/* Weekly, and shown in Vietnam time: the API holds weekday and hour in
           UTC, and utcScheduleToVn / vnScheduleToUtc convert at the form. */}

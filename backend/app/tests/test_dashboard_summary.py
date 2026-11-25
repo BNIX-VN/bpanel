@@ -139,8 +139,23 @@ def test_the_malware_card_reports_the_last_scan_that_finished(monkeypatch):
         {"status": "done", "infected": 0, "finished_at": "2026-09-06T14:32:53"},
     ])
     result = dashboard._malware()
-    assert result["last_scan"] == {"status": "infected", "infected": 2, "finished_at": "2026-09-13T14:06:39"}
+    assert result["last_scan"] == {"status": "infected", "infected": 2, "quarantined": 0, "open": 2,
+                                   "finished_at": "2026-09-13T14:06:39"}
     assert result["installed"] is True and result["running"] is False
+
+
+def test_a_quarantined_threat_is_no_longer_open(monkeypatch):
+    """The bell counts only threats still in place (operator, 2026-11-25: once
+    quarantined, the header bell must stop warning about it)."""
+    monkeypatch.setattr(dashboard.maldet, "installed", lambda: True)
+    threats = [{"path": "/home/u/a.test/public_html/x.php", "signature": "{HEX}php.x", "status": "quarantined"},
+               {"path": "/home/u/a.test/public_html/y.php", "signature": "{HEX}php.y"}]
+    monkeypatch.setattr(dashboard.panel_settings, "list_malware_scan_jobs", lambda limit=20: [
+        {"status": "infected", "infected": 2, "threats": threats, "finished_at": "2026-11-25T07:17:51"}])
+    assert dashboard._malware()["last_scan"]["open"] == 1
+    threats[1]["status"] = "quarantined"
+    assert dashboard._malware()["last_scan"] == {"status": "infected", "infected": 2, "quarantined": 2, "open": 0,
+                                                 "finished_at": "2026-11-25T07:17:51"}
 
 
 @pytest.mark.parametrize("output,expected", [

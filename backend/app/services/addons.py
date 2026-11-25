@@ -191,7 +191,7 @@ CATALOGUE: dict[str, dict] = {
         "details": [
             "Scans a website, every website or the whole server on demand, and on a weekly schedule.",
             "Optional real-time monitoring of the websites (Level 2) and a scan of each uploaded file.",
-            "Suspicious files are listed with their signature; nothing is deleted or quarantined without you.",
+            "A file a scan or the real-time monitor flags is moved into quarantine at once (on by default, a switch on the Malware scanner page), from where it can be restored or deleted.",
         ],
         "notes": [
             "Installing it installs LMD and the ClamAV engine if they are not there yet (1-3 minutes).",
