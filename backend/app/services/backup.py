@@ -790,9 +790,79 @@ def read_backup_manifest(backup_file: str) -> dict:
         return json.loads(source.read().decode("utf-8"))
 
 
+# An archive the running restore has unpacked once: archive -> (folder, the
+# prefixes already handed out). A .tar.gz is read front to back, and taking a
+# site's files, then its database, then the next site's, each started over from
+# the top - getmembers(), then a seek back. An account of 14 sites in a 2.7 GB
+# archive was decompressed some forty times: hours (36.50.27.11 -> 163.61.73.40,
+# 2026-11-25). Now it is read once; whatever is odd falls back to the old way.
+_UNPACKED: dict[str, tuple[Path, set[str]]] = {}
+UNPACK_DISK_RESERVE = 1024 * 1024 * 1024
+
+
+class _CannotUnpack(Exception):
+    pass
+
+
+def _member_prefix(name: str) -> str:
+    """The folder a restore takes as a whole: sites/<domain>/site and
+    mail/<domain>/<local>; any other member stands alone."""
+    parts = name.split("/")
+    if parts[0] in {"sites", "mail"} and len(parts) > 3:
+        return "/".join(parts[:3])
+    return name
+
+
+def _unpack_archive(archive: Path, destination: Path) -> Optional[Path]:
+    """Every member of ``archive`` under ``destination``, in one pass, by the
+    rules _safe_extract_prefix keeps: no hard links, nothing outside, and a
+    symlink only inside its own site or mailbox. None - and nothing left on
+    disk - when the disk cannot take it or a member is not what a backup holds;
+    the restore then reads the archive member by member as it always did."""
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            for member in tar:
+                if member.islnk():
+                    continue
+                if member.issym():
+                    prefix = _member_prefix(member.name)
+                    target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
+                    if member.linkname.startswith("/") or not (target == prefix or target.startswith(prefix + "/")):
+                        raise _CannotUnpack(f"link {member.name} leaves its folder")
+                if member.isfile() and shutil.disk_usage(root).free < member.size + UNPACK_DISK_RESERVE:
+                    raise _CannotUnpack("not enough disk space to unpack the archive once")
+                try:
+                    tar.extract(member, path=str(root), filter="data")
+                except TypeError:
+                    raise _CannotUnpack("this Python cannot filter archive members") from None
+                except (tarfile.TarError, ValueError, OSError) as exc:
+                    raise _CannotUnpack(f"{member.name}: {exc}") from exc
+    except _CannotUnpack as exc:
+        logger.warning("Restoring %s member by member: %s", archive.name, exc)
+        shutil.rmtree(destination, ignore_errors=True)
+        return None
+    return root
+
+
+def _unpacked(archive: Path) -> Optional[tuple[Path, set[str]]]:
+    entry = _UNPACKED.get(str(archive))
+    return entry if entry and entry[0].is_dir() else None
+
+
 def _safe_extract_prefix(archive: Path, prefix: str, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     prefix = prefix.strip("/")
+    entry = _unpacked(archive)
+    if entry is not None and prefix not in entry[1]:
+        root, taken = entry
+        taken.add(prefix)
+        source = root / prefix
+        if source.is_dir() and not source.is_symlink():
+            for child in source.iterdir():
+                os.replace(child, destination / child.name)
+        return
     with tarfile.open(archive, "r:gz") as tar:
         for original in tar.getmembers():
             if original.name == prefix:
@@ -824,6 +894,17 @@ def _safe_extract_prefix(archive: Path, prefix: str, destination: Path) -> None:
 
 
 def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -> Optional[Path]:
+    entry = _unpacked(archive)
+    if entry is not None and member_name and not member_name.startswith("/") and ".." not in member_name.split("/"):
+        path = entry[0] / member_name
+        if not os.path.lexists(path):
+            return None
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_UPLOAD_BYTES:
+            raise ValueError("Invalid SQL backup member")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        target = output_dir / Path(member_name).name
+        shutil.copyfile(path, target)
+        return target
     with tarfile.open(archive, "r:gz") as tar:
         try:
             member = tar.getmember(member_name)
@@ -1079,6 +1160,13 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
         # just before its site's vhost is written, below.
         restored_certificates: list = []
         ssl_warnings: list = []
+        # The archive, unpacked once for every site, database and mailbox below
+        # (it goes with tmp_dir); None reads it member by member as before.
+        unpacked_root = _unpack_archive(archive, tmp_dir / "unpacked")
+        if unpacked_root is not None:
+            _UNPACKED[str(archive)] = (unpacked_root, set())
+        else:
+            _UNPACKED.pop(str(archive), None)
         try:
             certificate_members = _read_certificate_members(archive, _wanted_certificate_members(manifest))
         except (OSError, EOFError, tarfile.TarError) as exc:
@@ -1121,6 +1209,8 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
             site_stage = tmp_dir / "site" / domain
             _safe_extract_prefix(archive, f"sites/{domain}/site", site_stage)
             site_users.import_site_files(root_path, linux_user, str(site_stage))
+            # In place now: the staged copy only doubles the disk it takes.
+            shutil.rmtree(site_stage, ignore_errors=True)
             # Backups from older BPanel releases may contain public/. Normalize
             # the document root after extraction before rewriting the vhost.
             site_users.ensure_site_runtime(domain, root_path, runtime_php_version, linux_user)
@@ -1367,6 +1457,7 @@ def restore_user_backup(backup_file: str, db, operator_is_admin: bool = False,
 
         restored_mail = mail.restore_manifest(db, user, manifest.get("mail") or {}, stage_mail)
 
+    _UNPACKED.pop(str(archive), None)
     db.commit()
     # DNS Manager: the restored domains get their zones, owned by the account.
     from app.services import dns
