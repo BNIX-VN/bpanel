@@ -833,8 +833,9 @@ for d in "$H"/data/www/*/; do
   [ -f "$conf" ] || continue
   names=$(grep -hE '^\s*server_name\s' "$conf" | head -n 1 | sed -E 's/^\s*server_name\s+//; s/;.*$//')
   printf '%s\t%s\n' "$dom" "$names" >> "$P/bpanel/aliases.tsv"
-  crt=$(grep -hE '^\s*ssl_certificate\s' "$conf" | head -n 1 | awk '{print $2}' | tr -d ';')
-  key=$(grep -hE '^\s*ssl_certificate_key\s' "$conf" | head -n 1 | awk '{print $2}' | tr -d ';')
+  # FastPanel writes the paths in quotes: ssl_certificate "/var/www/httpd-cert/<site>.crt";
+  crt=$(grep -hE '^\s*ssl_certificate\s' "$conf" | head -n 1 | awk '{print $2}' | tr -d "\";'")
+  key=$(grep -hE '^\s*ssl_certificate_key\s' "$conf" | head -n 1 | awk '{print $2}' | tr -d "\";'")
   if [ -n "$crt" ] && [ -n "$key" ] && [ -f "$crt" ] && [ -f "$key" ]; then
     mkdir -p "$P/backup/$dom"; cp "$crt" "$P/backup/$dom/domain.cert"; cp "$key" "$P/backup/$dom/domain.key"
   fi
@@ -855,7 +856,12 @@ if [ "$mysql_ok" = 1 ]; then
 else
   echo "MySQL could not be read as root: the account is packed without its databases" >&2
 fi
-tar -C / -czf "$W/fastpanel-$U.tar.gz" "${transforms[@]}" "${paths[@]}" -C "$P" backup mysql bpanel
+# The sites are live: tar exits 1 when a file changes or goes while it is read
+# (a cache, an upload). The archive is still whole; only 2 and up are failures.
+rc=0
+tar -C / --warning=no-file-changed --warning=no-file-removed -czf "$W/fastpanel-$U.tar.gz" \
+  "${transforms[@]}" "${paths[@]}" -C "$P" backup mysql bpanel || rc=$?
+[ "$rc" -le 1 ] || exit "$rc"
 echo "fastpanel-$U.tar.gz"
 """
 
