@@ -17,6 +17,8 @@ import hashlib
 import io
 import json
 import re
+import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -507,6 +509,37 @@ def test_the_fastpanel_pack_script_puts_only_checked_names_in_commands():
     assert "grep -Eq '^[A-Za-z0-9_]{1,64}$'" in script and "--transform=s#^var/www/$U/data/www/" in script
     assert "--single-transaction" in script and 'echo "fastpanel-$U.tar.gz"' in script
     assert "bpanel/aliases.tsv" in script and "opanel/" not in script
+
+
+def _bash(script: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", "-c", script, "bash", *args], capture_output=True, text=True, timeout=30)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.parametrize("tar_exit, packed", [(0, True), (1, True), (2, False)])
+def test_a_live_fastpanel_site_still_packs(tar_exit, packed):
+    """A site in use changes under tar ("file changed as we read it", exit 1);
+    the archive is whole and must not fail the import (36.50.27.11,
+    2026-11-25). Exit 2 and up are real failures."""
+    end = migrate_ssh._FASTPANEL_PACK.split("\nrc=0\n", 1)[1]
+    script = ("set -eu\nU=bob W=/w P=/p\ntransforms=(--x); paths=(var/www/bob/data/www/bob.test)\n"
+              f"tar() {{ return {tar_exit}; }}\nrc=0\n" + end)
+    run = _bash(script)
+    assert (run.returncode == 0) is packed
+    assert (run.stdout.strip() == "fastpanel-bob.tar.gz") is packed
+    assert "--warning=no-file-changed" in end and '[ "$rc" -le 1 ] || exit "$rc"' in end
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_the_fastpanel_pack_reads_the_quoted_certificate_paths(tmp_path):
+    """FastPanel quotes them: ssl_certificate "/var/www/httpd-cert/<site>.crt";"""
+    conf = tmp_path / "bob.test.conf"
+    conf.write_bytes(b'server {\n    ssl_certificate "/var/www/httpd-cert/bob.test_1.crt";\n'
+                     b"    ssl_certificate_key '/var/www/httpd-cert/bob.test_1.key';\n}\n")
+    lines = [line for line in migrate_ssh._FASTPANEL_PACK.splitlines() if line.strip().startswith(("crt=", "key="))]
+    assert len(lines) == 2
+    run = _bash('conf="$1"\n' + "\n".join(lines) + '\nprintf "%s|%s" "$crt" "$key"', conf.as_posix())
+    assert run.stdout == "/var/www/httpd-cert/bob.test_1.crt|/var/www/httpd-cert/bob.test_1.key", run.stderr
 
 
 def test_the_root_login_is_never_written_anywhere():
