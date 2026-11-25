@@ -1091,6 +1091,10 @@ class MalwareScanThreat(BaseModel):
     path: str
     signature: str
     domain: Optional[str] = None
+    # "open" until the file is dealt with; "quarantined" once it was moved out
+    # of the site (the panel then says so, and the bell stops counting it).
+    status: str = "open"
+    quarantine_path: str = ""
 
 
 class MalwareScanResult(BaseModel):
@@ -1116,6 +1120,7 @@ class MalwareScanJob(BaseModel):
     total_files: int = 0
     scanned: int = 0
     infected: int = 0
+    quarantined: int = 0
     errors: int = 0
     skipped: int = 0
     threats: list[MalwareScanThreat] = []

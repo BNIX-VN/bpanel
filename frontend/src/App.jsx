@@ -6894,10 +6894,12 @@ function App() {
         tone: engine === 'on' ? 'ok' : engine === 'off' ? 'warn' : 'neutral' });
       const scanner = sum.malware;
       const lastScan = scanner?.last_scan;
+      // A quarantined threat is dealt with: only the open ones make the card red.
+      const lastOpen = lastScan ? (lastScan.open ?? Math.max((lastScan.infected || 0) - (lastScan.quarantined || 0), 0)) : 0;
       status.push({ key: 'malware', icon: Bug, label: t('Malware scanner'),
-        value: !scanner ? '—' : scanner.addon === false ? t('Off') : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
+        value: !scanner ? '—' : scanner.addon === false ? t('Off') : !scanner.installed ? t('Not installed') : lastOpen ? t('{n} threat(s)', { n: lastOpen }) : lastScan?.infected ? t('{n} quarantined', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
         detail: scanner?.addon === false ? t('Not installed') : scanner?.running ? t('Scanning...') : lastScan ? shortDate(lastScan.finished_at) : t('Last scan'),
-        tone: !scanner || scanner.addon === false ? 'neutral' : !scanner.installed ? 'warn' : lastScan?.infected ? 'bad' : lastScan ? 'ok' : 'neutral' });
+        tone: !scanner || scanner.addon === false ? 'neutral' : !scanner.installed ? 'warn' : lastOpen ? 'bad' : lastScan ? 'ok' : 'neutral' });
       const backups = sum.backups;
       status.push({ key: 'backups', icon: Archive, label: t('Backups'),
         value: backups?.last_run_at ? shortDate(backups.last_run_at) : '—',
@@ -12561,8 +12563,14 @@ function App() {
       scanned: job.scanned || 0, total: job.total_files || job.scanned || 0, infected: job.infected || 0, errors: job.errors || 0,
     });
     const scanJobMeta = job => `${scanJobStamp(job)} / ${scanJobDetail(job)}`;
+    // A run whose every threat was quarantined is dealt with: it reads
+    // "Quarantined", in green, rather than "Threats found".
+    const scanQuarantined = job => (Number(job.quarantined) || 0)
+      || (job.threats || []).filter(threat => threat.status === 'quarantined').length;
+    const scanAllQuarantined = job => job.status === 'infected' && (Number(job.infected) || 0) > 0
+      && scanQuarantined(job) >= (Number(job.infected) || 0);
     const scanJobBadgeClass = job => {
-      if (job.status === 'done') return 'badge ok';
+      if (job.status === 'done' || scanAllQuarantined(job)) return 'badge ok';
       if (job.status === 'infected') return 'badge danger';
       if (['error', 'interrupted'].includes(job.status)) return 'badge bad';
       return 'badge warn';
@@ -12573,6 +12581,7 @@ function App() {
     };
     // Translated here, not by each caller: two of the three forgot.
     const scanStatusLabel = status => (scanStatusLabels[status] ? t(scanStatusLabels[status]) : (status || '—'));
+    const scanJobLabel = job => (scanAllQuarantined(job) ? t('Quarantined') : scanStatusLabel(job.status));
     const fmtStamp = s => {
       if (!s) return '';
       const d = new Date(s);
@@ -12596,7 +12605,9 @@ function App() {
       <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
       <div className="scan-threat-list">
         {job.threats.map((threat, i) => <div key={i} className="scan-threat-item">
-          <strong>{threat.signature}</strong>
+          <strong>{threat.signature} {threat.status === 'quarantined'
+            ? <span className="badge ok">{t('Quarantined')}</span>
+            : <span className="badge danger">{t('Not handled')}</span>}</strong>
           <span>{threat.domain ? `${threat.domain}: ` : ''}{threat.path}</span>
         </div>)}
       </div>
@@ -12612,11 +12623,12 @@ function App() {
       return <>
         <PageHeader breadcrumbs={[{ label: t('Malware scanner'), onClick: () => setMalwareDetailJob(null) }, { label: scanJobTitle(job) }]}
           title={scanJobTitle(job)} subtitle={scanJobStamp(job)}
-          actions={<span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>}/>
+          actions={<span className={scanJobBadgeClass(job)}>{scanJobLabel(job)}</span>}/>
         <section className="section scan-detail">
         <div className="scan-detail-stats">
           <div><small>{t('Files scanned')}</small><strong>{job.scanned || 0}{job.total_files ? ` / ${job.total_files}` : ''}</strong></div>
-          <div><small>{t('Threats found')}</small><strong className={job.infected > 0 ? 'text-danger' : ''}>{job.infected || 0}</strong></div>
+          <div><small>{t('Threats found')}</small><strong className={job.infected > 0 && !scanAllQuarantined(job) ? 'text-danger' : ''}>{job.infected || 0}</strong></div>
+          {scanQuarantined(job) > 0 && <div><small>{t('Quarantined')}</small><strong>{scanQuarantined(job)}</strong></div>}
           <div><small>{t('Errors')}</small><strong>{job.errors || 0}</strong></div>
           <div><small>{t('Duration')}</small><strong>{duration}</strong></div>
         </div>
@@ -12763,7 +12775,7 @@ function App() {
                   <strong>{scanJobTitle(job)}</strong>
                   <small>{scanJobMeta(job)}</small>
                 </span>
-                <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>
+                <span className={scanJobBadgeClass(job)}>{scanJobLabel(job)}</span>
               </button>)}
             </div>
           </div>}

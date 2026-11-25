@@ -61,6 +61,22 @@ def _waf_engine() -> str:
     return "on" if "installed" in output else "unknown"
 
 
+def _last_scan(job: dict) -> dict:
+    """The last finished scan, with what is still open: a threat that was
+    quarantined is dealt with, and the bell only counts the rest."""
+    infected = int(job.get("infected") or 0)
+    quarantined = int(job.get("quarantined") or 0) or sum(
+        1 for threat in job.get("threats") or [] if isinstance(threat, dict) and threat.get("status") == "quarantined")
+    quarantined = min(quarantined, infected)
+    return {
+        "status": job.get("status"),
+        "infected": infected,
+        "quarantined": quarantined,
+        "open": infected - quarantined,
+        "finished_at": job.get("finished_at") or job.get("updated_at") or job.get("started_at"),
+    }
+
+
 def _malware() -> dict:
     jobs = panel_settings.list_malware_scan_jobs(limit=20)
     last = next((job for job in jobs if job.get("status") in FINISHED_SCANS), None)
@@ -70,11 +86,7 @@ def _malware() -> dict:
         "addon": addons.is_installed(addons.MALWARE),
         "installed": bool(maldet.installed() or malware_scan.clamav_installed()),
         "running": any(job.get("status") in {"queued", "running"} for job in jobs),
-        "last_scan": {
-            "status": last.get("status"),
-            "infected": int(last.get("infected") or 0),
-            "finished_at": last.get("finished_at") or last.get("updated_at") or last.get("started_at"),
-        } if last else None,
+        "last_scan": _last_scan(last) if last else None,
     }
 
 
