@@ -757,6 +757,42 @@ def test_a_database_keeps_its_name_and_a_renamed_one_is_written_into_the_site_by
     assert "'shop_db'" in written[0][3] and "'fp-pw'" not in written[0][3]
 
 
+@pytest.mark.parametrize("compressed", [False, True])
+def test_a_dump_reaches_mariadb_byte_for_byte(tmp_path, compressed):
+    """jackcao (36.50.27.11, 2026-11-25): Wordfence keeps IPs in BINARY(16).
+    Read as UTF-8 "with replace", distinct IPs became one key and MariaDB
+    stopped at COMMIT (ERROR 1180). Latin1 text is not UTF-8 either."""
+    import gzip
+
+    row = b"('\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\xff\xff\xb4\x9a4F','VN',1,20772,'manual'),\n"
+    body = (b"USE `other`;\n"
+            b"CREATE DEFINER=`root`@`localhost` TRIGGER t BEFORE INSERT ON x FOR EACH ROW SET @a=1;\n"
+            b"INSERT INTO `wp_wfblockediplog` VALUES\n" + row + b"('caf\xe9',1);\n")
+    dump = tmp_path / ("bob_wp.sql.gz" if compressed else "bob_wp.sql")
+    dump.write_bytes(gzip.compress(body) if compressed else body)
+    out = da_import._temporary_sql_file(dump)
+    data = out.read_bytes()
+    out.unlink()
+    assert b"USE `other`" not in data and b"DEFINER" not in data
+    assert row in data and b"('caf\xe9',1);" in data
+
+
+def test_a_wp_config_value_is_read_and_written_as_php_reads_it(tmp_path):
+    """life.velroxa.com (36.50.27.11, 2026-11-25): its password has a
+    backslash. Taken as written, the database user got another password than
+    the one PHP hands MariaDB: "Access denied"."""
+    config = tmp_path / "wp-config.php"
+    config.write_bytes(b"<?php\ndefine( 'DB_NAME', 'life_velroxa' );\n"
+                       b"define( 'DB_PASSWORD', 'ab\\\\cd\\'e' );\n"
+                       b'define( "DB_USER", "u\\$er" );\n')
+    found = da_import._parse_wp_config(tmp_path)
+    assert (found["DB_NAME"], found["DB_USER"], found["DB_PASSWORD"]) == ("life_velroxa", "u$er", "ab\\cd'e")
+    text = da_import._replace_define(config.read_bytes().decode(), "DB_PASSWORD", "x\\y'z")
+    assert text.count("DB_PASSWORD") == 1
+    config.write_bytes(text.encode())
+    assert da_import._parse_wp_config(tmp_path)["DB_PASSWORD"] == "x\\y'z"
+
+
 def test_only_an_invalid_database_name_is_changed():
     assert da_import._normalize_db_identifier("pet_velroxa_", "x", set()) == "pet_velroxa_"
     assert da_import._normalize_db_identifier("Shop-DB", "x", set()) == "shop_db"

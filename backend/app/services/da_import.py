@@ -83,6 +83,18 @@ SQL_DEFINER_RE = re.compile(
     r"DEFINER\s*=\s*(?:`[^`]*`|'[^']*'|\"[^\"]*\"|[^\s*/]+)\s*@\s*(?:`[^`]*`|'[^']*'|\"[^\"]*\"|[^\s*/]+)",
     re.IGNORECASE,
 )
+# The same, for a dump read as bytes. A dump is not UTF-8 text: binary columns
+# (Wordfence keeps IPs in BINARY(16)) and latin1 tables hold other bytes, and
+# decoding them "with replace" made distinct keys equal (36.50.27.11,
+# 2026-11-25: "ERROR 1180 ... Got error 1 "Operation not permitted" during COMMIT").
+_SQL_DATABASE_DIRECTIVE_BYTES_RE = re.compile(SQL_DATABASE_DIRECTIVE_RE.pattern.encode(), re.IGNORECASE)
+_SQL_DEFINER_BYTES_RE = re.compile(SQL_DEFINER_RE.pattern.encode(), re.IGNORECASE)
+
+# A PHP string literal: '...' (only \\ and \' are escapes) or "..." (C-like).
+_PHP_STRING = r"""(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")"""
+_PHP_STRING_ANY = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
+_PHP_DOUBLE_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "v": "\v", "e": "\x1b", "f": "\f",
+                       "\\": "\\", "$": "$", '"': '"'}
 
 
 # The default lives under /home/admin, which is root-owned and not writable by
@@ -789,7 +801,9 @@ def _discover_sql_files(root: Path) -> dict[str, Path]:
 
 def _temporary_sql_file(sql_file: Path) -> Path:
     lower = sql_file.name.lower()
-    tmp = Path(tempfile.mkstemp(prefix="bpanel-da-", suffix=".sql")[1])
+    handle, name = tempfile.mkstemp(prefix="bpanel-da-", suffix=".sql")
+    os.close(handle)
+    tmp = Path(name)
     if lower.endswith(".sql"):
         opener = open
     elif lower.endswith(".gz"):
@@ -802,30 +816,33 @@ def _temporary_sql_file(sql_file: Path) -> Path:
             tmp.unlink(missing_ok=True)
             raise RuntimeError("zstd is required to import .sql.zst files. Install package: zstd")
         args = [zstd, str(sql_file)] if Path(zstd).name == "zstdcat" else [zstd, "-dc", str(sql_file)]
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
-            with tmp.open("w", encoding="utf-8") as target:
+            with tmp.open("wb") as target:
                 assert proc.stdout is not None
-                for line in proc.stdout:
-                    if SQL_DATABASE_DIRECTIVE_RE.match(line):
-                        continue
-                    target.write(SQL_DEFINER_RE.sub("", line))
+                _copy_sql_lines(proc.stdout, target)
             _, stderr = proc.communicate(timeout=30)
             if proc.returncode != 0:
                 tmp.unlink(missing_ok=True)
-                raise RuntimeError(stderr.strip() or "zstd SQL decompression failed")
+                raise RuntimeError(stderr.decode("utf-8", "replace").strip() or "zstd SQL decompression failed")
             return tmp
         finally:
             if proc.poll() is None:
                 proc.kill()
     else:
         raise RuntimeError(f"Unsupported SQL compression: {sql_file}")
-    with opener(sql_file, "rt", encoding="utf-8", errors="replace") as source, tmp.open("w", encoding="utf-8") as target:
-        for line in source:
-            if SQL_DATABASE_DIRECTIVE_RE.match(line):
-                continue
-            target.write(SQL_DEFINER_RE.sub("", line))
+    with opener(sql_file, "rb") as source, tmp.open("wb") as target:
+        _copy_sql_lines(source, target)
     return tmp
+
+
+def _copy_sql_lines(source, target) -> None:
+    """The dump, byte for byte, without the lines that pick or make another
+    database and without DEFINER clauses."""
+    for line in source:
+        if _SQL_DATABASE_DIRECTIVE_BYTES_RE.match(line):
+            continue
+        target.write(_SQL_DEFINER_BYTES_RE.sub(b"", line))
 
 
 # ---------------------------------------------------------------------------
@@ -839,10 +856,23 @@ def _parse_wp_config(path: Path) -> dict[str, str]:
     text = config.read_text(encoding="utf-8", errors="ignore")
     found: dict[str, str] = {}
     for key in ("DB_NAME", "DB_USER", "DB_PASSWORD", "DB_HOST"):
-        match = re.search(r"define\s*\(\s*['\"]" + key + r"['\"]\s*,\s*['\"]([^'\"]*)['\"]\s*\)", text)
+        match = re.search(r"define\s*\(\s*['\"]" + key + r"['\"]\s*,\s*" + _PHP_STRING + r"\s*\)", text)
         if match:
-            found[key] = match.group(1)
+            found[key] = _php_string_value(match.group(1), match.group(2))
     return found
+
+
+def _php_string_value(single: Optional[str], double: Optional[str]) -> str:
+    """What PHP makes of the literal. 'ab\\\\cd' in wp-config.php is ab\\cd, and
+    that is the password the site signs in with (36.50.27.11, 2026-11-25: taken
+    as written, the database user got the other one - "Access denied")."""
+    if single is not None:
+        return re.sub(r"\\([\\'])", r"\1", single)
+    return re.sub(r'\\([ntrvef\\$"])', lambda m: _PHP_DOUBLE_ESCAPES[m.group(1)], double or "")
+
+
+def _php_single_quoted(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def _parse_dotenv_config(path: Path) -> dict[str, str]:
@@ -899,10 +929,11 @@ def _parse_app_db_config(path: Path) -> dict[str, str]:
 
 
 def _replace_define(text: str, key: str, value: str) -> str:
-    pattern = re.compile(r"(define\s*\(\s*['\"]" + key + r"['\"]\s*,\s*)['\"][^'\"]*['\"](\s*\)\s*;)")
+    pattern = re.compile(r"(define\s*\(\s*['\"]" + key + r"['\"]\s*,\s*)" + _PHP_STRING_ANY + r"(\s*\)\s*;)")
+    literal = _php_single_quoted(value)
     if pattern.search(text):
-        return pattern.sub(lambda m: f"{m.group(1)}'{value}'{m.group(2)}", text, count=1)
-    return text + f"\ndefine('{key}', '{value}');\n"
+        return pattern.sub(lambda m: f"{m.group(1)}{literal}{m.group(2)}", text, count=1)
+    return text + f"\ndefine('{key}', {literal});\n"
 
 
 def _update_app_db_config(public: Path, db_name: str, db_user: str, db_password: str, *,
