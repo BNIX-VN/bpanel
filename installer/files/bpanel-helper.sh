@@ -4935,7 +4935,9 @@ def restore(qid):
                 uid = folder.st_uid
             if gid < 0:
                 gid = folder.st_gid
-            mode = int(meta.get("mode", 0o644)) & 0o7777
+            # Plain permission bits only: a restore never hands a file setuid,
+            # setgid or sticky back (maldet's .info owner can be root).
+            mode = int(meta.get("mode", 0o644)) & 0o777
             dst = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
             done = False
             try:
