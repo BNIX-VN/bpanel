@@ -1095,6 +1095,40 @@ class MalwareScanThreat(BaseModel):
     # of the site (the panel then says so, and the bell stops counting it).
     status: str = "open"
     quarantine_path: str = ""
+    # The quarantine entry it went into, for Restore to find it again.
+    quarantine_id: str = ""
+
+
+class MalwareAutoQuarantineToggle(BaseModel):
+    enabled: bool = True
+
+
+class QuarantineRequest(BaseModel):
+    path: str
+    signature: str = ""
+
+
+class QuarantineEntry(BaseModel):
+    id: str
+    original_path: str = ""
+    signature: str = ""
+    size: int = 0
+    uid: int = -1
+    gid: int = -1
+    owner: str = ""
+    group: str = ""
+    mode: int = 0
+    sha256: str = ""
+    quarantined_at: str = ""
+    # "panel": a panel scan or the Quarantine button; "lmd": maldet's
+    # real-time monitor quarantined it and the panel adopted it.
+    source: str = "panel"
+    # False outside a website folder and the temp dirs: delete only.
+    restorable: bool = True
+
+
+class QuarantineList(BaseModel):
+    entries: list[QuarantineEntry] = []
 
 
 class MalwareScanResult(BaseModel):
@@ -1146,6 +1180,8 @@ class MalwareScanStatus(BaseModel):
     lmd_sig_version: str = ""
     lmd_updated_at: str = ""
     realtime_enabled: bool = False
+    # Detected files move into quarantine on their own (default on).
+    auto_quarantine: bool = True
     scan_on_upload: bool = False
     scan_on_upload_is_cheap: bool = False
     # The clam-juice filter: "on" while clamscan and clamd load the filtered

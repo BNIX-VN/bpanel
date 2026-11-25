@@ -549,6 +549,7 @@ def install_panel_ssl(email: str | None = None, panel_hostname: str | None = Non
 # --------------------------------------------------------------------------
 import threading
 
+from app.services import malware_quarantine as _malware_quarantine
 from app.services import malware_scan as _malware_scan
 
 MALWARE_JOBS: dict[str, dict] = {}
@@ -629,6 +630,15 @@ def set_malware_realtime(enabled: bool) -> dict:
             maldet.monitor_stop()
     except RuntimeError as exc:
         raise RuntimeError(str(exc)) from exc
+    return malware_scan_status()
+
+
+def set_malware_auto_quarantine(enabled: bool) -> dict:
+    """Whether a detected file is moved into quarantine on its own: by every
+    scan the panel runs, and by the real-time monitor (maldet's
+    quarantine_hits follows it). On unless turned off. The switch lives in a
+    root-written marker, so an update never resets it."""
+    _malware_quarantine.set_auto_quarantine(bool(enabled))
     return malware_scan_status()
 
 
@@ -961,8 +971,10 @@ class _ServerScanProgress:
             return
         self.scanned += 1
         if status == "infected":
-            self.threats.append({"path": path, "signature": detail, "domain": ""})
+            threat = {"path": path, "signature": detail, "domain": "", "status": "open", "quarantine_path": ""}
             _append_malware_log(self.job_id, f"INFECTED {path}: {detail}")
+            _malware_quarantine.handle_threats(self.job_id, [threat], _append_malware_log)
+            self.threats.append(threat)
         elif status == "error":
             self.errors += 1
             if self.errors <= 50:  # a log of 150,000 unreadable sockets helps nobody
@@ -975,6 +987,7 @@ class _ServerScanProgress:
             total_files=self.total,
             scanned=self.scanned,
             infected=len(self.threats),
+            quarantined=_malware_quarantine.quarantined_count(self.threats),
             errors=self.errors,
             threats=self.threats,
             progress_percent=min(percent, 99),
@@ -1041,6 +1054,7 @@ def _run_server_scan_job(job_id: str) -> None:
             total_files=progress.total,
             scanned=progress.scanned,
             infected=len(progress.threats),
+            quarantined=_malware_quarantine.quarantined_count(progress.threats),
             errors=progress.errors,
             threats=progress.threats,
             message=(
@@ -1051,6 +1065,7 @@ def _run_server_scan_job(job_id: str) -> None:
         )
         _append_malware_log(job_id, "Scan finished")
         _notify_threats(job_id, progress.threats)
+        _settle_quarantine_records(job_id, progress.threats)
     except Exception as exc:  # noqa: BLE001 - a failed scan is reported, not raised
         stop.set()
         _update_malware_job(
@@ -1084,6 +1099,14 @@ def _domain_from_path(path: str) -> str:
     return m.group(1) if m else ""
 
 
+def _settle_quarantine_records(job_id: str, threats: list[dict]) -> None:
+    """Older scans that found a file this one quarantined say so too."""
+    try:
+        _malware_quarantine.settle_other_records(job_id, threats)
+    except Exception:  # noqa: BLE001 - the scan's own record is already right
+        logging.getLogger("bpanel.panel_settings").exception("scan %s: older records not updated", job_id)
+
+
 def _notify_threats(job_id: str, threats: list[dict]) -> None:
     """Administrators hear about every find (customers get no notifications)."""
     if not threats:
@@ -1091,9 +1114,12 @@ def _notify_threats(job_id: str, threats: list[dict]) -> None:
     try:
         from app.services import notifications
 
-        brief = [{"path": t.get("path", ""), "signature": t.get("signature", "")} for t in threats]
-        notifications.notify("malware_found_admin", {"threats": brief, "count": len(brief)}, admins=True,
-                             dedupe_key=f"malware:{job_id}")
+        brief = [{"path": t.get("path", ""), "signature": t.get("signature", ""),
+                  "quarantined": t.get("status") == "quarantined"} for t in threats]
+        notifications.notify("malware_found_admin",
+                             {"threats": brief, "count": len(brief),
+                              "quarantined": sum(1 for t in brief if t["quarantined"])},
+                             admins=True, dedupe_key=f"malware:{job_id}")
     except Exception:  # noqa: BLE001 - the scan's own record already holds the result
         pass
 
@@ -1165,15 +1191,20 @@ def _run_maldet_job(job_id: str, target: str, *, recent_days: int | None = None)
         # maldet exit: 0 ok, 2 malware found, 1 error running.
         if result["exit"] not in (0, 2) and not threats:
             raise RuntimeError((result.get("raw") or "maldet scan failed").strip()[-400:])
+        # Auto-quarantine (on unless turned off): each file moves out of the
+        # site now, and its threat says so.
+        _malware_quarantine.handle_threats(job_id, threats, _append_malware_log)
         _update_malware_job(
             job_id, status=status, progress_percent=100,
             total_files=total, scanned=total, infected=len(threats),
+            quarantined=_malware_quarantine.quarantined_count(threats),
             threats=threats, scanid=result["scanid"],
             message="Scan finished.",
             finished_at=_now_iso(),
         )
         _append_malware_log(job_id, "maldet scan finished")
         _notify_threats(job_id, threats)
+        _settle_quarantine_records(job_id, threats)
     except Exception as exc:  # noqa: BLE001 - a failed scan is reported, not raised
         _update_malware_job(
             job_id, status="error", message="Scan failed", error=str(exc), finished_at=_now_iso(),
@@ -1189,7 +1220,7 @@ def _new_malware_job(**overrides) -> dict:
         "job_id": uuid.uuid4().hex, "status": "queued", "scope": "website",
         "website_id": None, "domains": [], "message": "Queued", "engine": "",
         "progress_percent": 0, "total_files": 0, "scanned": 0, "infected": 0,
-        "errors": 0, "skipped": 0, "threats": [], "log": [],
+        "quarantined": 0, "errors": 0, "skipped": 0, "threats": [], "log": [],
         "created_at": _now_iso(), "started_at": "", "finished_at": "", "updated_at": _now_iso(),
     }
     job.update(overrides)
@@ -1273,9 +1304,11 @@ def _run_scan_job(job_id: str, targets: list[dict]) -> None:
             scanned += 1
             status = result["status"]
             if status == "infected":
-                threat = {"path": file_path, "signature": result["signature"], "domain": target["domain"]}
-                threats.append(threat)
+                threat = {"path": file_path, "signature": result["signature"], "domain": target["domain"],
+                          "status": "open", "quarantine_path": ""}
                 _append_malware_log(job_id, f"INFECTED {target['domain']} {file_path}: {result['signature']}")
+                _malware_quarantine.handle_threats(job_id, [threat], _append_malware_log)
+                threats.append(threat)
             elif status == "error":
                 errors += 1
                 _append_malware_log(job_id, f"ERROR {target['domain']} {file_path}: {result['detail']}")
@@ -1288,6 +1321,7 @@ def _run_scan_job(job_id: str, targets: list[dict]) -> None:
                 job_id,
                 scanned=scanned,
                 infected=len(threats),
+                quarantined=_malware_quarantine.quarantined_count(threats),
                 errors=errors,
                 skipped=skipped,
                 threats=threats,
@@ -1302,6 +1336,7 @@ def _run_scan_job(job_id: str, targets: list[dict]) -> None:
             progress_percent=100,
             scanned=scanned,
             infected=len(threats),
+            quarantined=_malware_quarantine.quarantined_count(threats),
             errors=errors,
             skipped=skipped,
             threats=threats,
@@ -1310,6 +1345,7 @@ def _run_scan_job(job_id: str, targets: list[dict]) -> None:
         )
         _append_malware_log(job_id, "Scan finished")
         _notify_threats(job_id, threats)
+        _settle_quarantine_records(job_id, threats)
     except Exception as exc:  # noqa: BLE001 - scan jobs should report errors, not crash the API
         _update_malware_job(
             job_id,
