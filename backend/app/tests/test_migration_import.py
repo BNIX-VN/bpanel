@@ -730,6 +730,39 @@ def test_a_packed_fastpanel_account_comes_over_with_its_aliases(importer, folder
     assert result["credentials"][0] == "# BPanel FastPanel import credentials"
 
 
+def test_a_database_keeps_its_name_and_a_renamed_one_is_written_into_the_site_by_the_helper(
+        importer, folders, monkeypatch):
+    """36.50.27.11, 2026-11-25: FastPanel's 'pet_velroxa_' was trimmed to
+    'pet_velroxa', so the import rewrote wp-config.php - as the panel, which
+    cannot write a site's files: "[Errno 13] Permission denied". A valid name
+    now stays as it is; a name that has to change is written by the helper."""
+    written = []
+    monkeypatch.setattr(site_users, "import_site_files",
+                        lambda root_path, linux_user, staged: shutil.copytree(staged, root_path, dirs_exist_ok=True))
+    monkeypatch.setattr(site_users, "write_site_file",
+                        lambda root, user, rel, text, mode="0640": written.append((Path(root).name, user, rel, text)))
+    config = ("<?php define('DB_NAME', '{0}'); define('DB_USER', '{0}');"
+              " define('DB_PASSWORD', 'fp-pw'); define('DB_HOST', 'localhost');")
+    _tar(folders.fastpanel / "fastpanel-bob.tar.gz", {
+        "backup/user.conf": "username=bob\nemail=\n",
+        "backup/domains.list": "pet.test\nshop.test\n",
+        "domains/pet.test/public_html/wp-config.php": config.format("pet_velroxa_"),
+        "domains/shop.test/public_html/wp-config.php": config.format("shop-db"),
+        "mysql/pet_velroxa_.sql": "CREATE TABLE t (id int);",
+        "mysql/shop-db.sql": "CREATE TABLE t (id int);",
+    })
+    fastpanel_import.import_fastpanel_backup("fastpanel-bob.tar.gz", replace_own=True)
+    assert ("pet_velroxa_", "pet_velroxa_", "fp-pw") in importer.databases
+    assert [(site, user, rel) for site, user, rel, _ in written] == [("shop.test", "bob", "public_html/wp-config.php")]
+    assert "'shop_db'" in written[0][3] and "'fp-pw'" not in written[0][3]
+
+
+def test_only_an_invalid_database_name_is_changed():
+    assert da_import._normalize_db_identifier("pet_velroxa_", "x", set()) == "pet_velroxa_"
+    assert da_import._normalize_db_identifier("Shop-DB", "x", set()) == "shop_db"
+    assert da_import._normalize_db_identifier("pet_velroxa_", "x", {"pet_velroxa_"}) != "pet_velroxa_"
+
+
 def test_the_restore_job_hands_each_kind_to_its_importer(monkeypatch):
     calls = []
     for module, name in ((cpanel_import, "import_cpanel_backup"), (fastpanel_import, "import_fastpanel_backup"),

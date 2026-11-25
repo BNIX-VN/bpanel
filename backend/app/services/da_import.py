@@ -381,7 +381,10 @@ def _normalize_domain(value: str) -> Optional[str]:
 
 def _normalize_db_identifier(raw: str, fallback: str, existing: set[str]) -> str:
     value = (raw or fallback).strip().lower()
-    value = re.sub(r"[^a-z0-9_]+", "_", value).strip("_")
+    # A name that is valid already stays as it is ('pet_velroxa_' on FastPanel):
+    # renaming it changes the site's credentials and its config for nothing.
+    if not DB_RE.fullmatch(value):
+        value = re.sub(r"[^a-z0-9_]+", "_", value).strip("_")
     if not value:
         value = fallback
     if not re.match(r"^[a-z0-9_]+$", value):
@@ -902,16 +905,34 @@ def _replace_define(text: str, key: str, value: str) -> str:
     return text + f"\ndefine('{key}', '{value}');\n"
 
 
-def _update_app_db_config(public: Path, db_name: str, db_user: str, db_password: str) -> None:
+def _update_app_db_config(public: Path, db_name: str, db_user: str, db_password: str, *,
+                          root_path: Optional[str] = None, linux_user: Optional[str] = None) -> None:
     # A site's config is not always at the top of the document root - WordPress
     # allows wp-config.php one level up, and subfolder installs keep everything
     # deeper. Rewrite every recognised config file across the same directories
     # the credentials were discovered in.
+    write = _config_writer(root_path, linux_user)
     for directory in _candidate_config_dirs(public):
-        _update_config_dir(directory, db_name, db_user, db_password)
+        _update_config_dir(directory, db_name, db_user, db_password, write)
 
 
-def _update_config_dir(public: Path, db_name: str, db_user: str, db_password: str) -> None:
+def _config_writer(root_path: Optional[str], linux_user: Optional[str]):
+    """How a rewritten config goes back into the site. An imported site's
+    files are its Linux user's (wp-config.php 0640): the panel can read them
+    but not write them (36.50.27.11, 2026-11-25: "[Errno 13] Permission
+    denied: .../public_html/wp-config.php"), so the helper writes them."""
+    if not (root_path and linux_user):
+        return lambda path, text: path.write_text(text, encoding="utf-8")
+    root = Path(root_path)
+
+    def write(path: Path, text: str) -> None:
+        site_users.write_site_file(str(root), linux_user, path.relative_to(root).as_posix(), text)
+
+    return write
+
+
+def _update_config_dir(public: Path, db_name: str, db_user: str, db_password: str, write=None) -> None:
+    write = write or (lambda path, text: path.write_text(text, encoding="utf-8"))
     wp = public / "wp-config.php"
     if wp.exists():
         text = wp.read_text(encoding="utf-8", errors="ignore")
@@ -919,7 +940,7 @@ def _update_config_dir(public: Path, db_name: str, db_user: str, db_password: st
         text = _replace_define(text, "DB_USER", db_user)
         text = _replace_define(text, "DB_PASSWORD", db_password)
         text = _replace_define(text, "DB_HOST", "localhost")
-        wp.write_text(text, encoding="utf-8")
+        write(wp, text)
 
     env_file = public / ".env"
     if env_file.exists():
@@ -946,7 +967,7 @@ def _update_config_dir(public: Path, db_name: str, db_user: str, db_password: st
         for env_key, env_val in replacements.items():
             if env_key not in seen:
                 out.append(f"{env_key}={env_val}")
-        env_file.write_text("\n".join(out) + "\n", encoding="utf-8")
+        write(env_file, "\n".join(out) + "\n")
 
     config_php = public / "configuration.php"
     if config_php.exists():
@@ -961,7 +982,7 @@ def _update_config_dir(public: Path, db_name: str, db_user: str, db_password: st
                 r"(public\s+\$?" + re.escape(key) + r"\s*=\s*)['\"][^'\"]*['\"](\s*;)",
                 rf"\1'{value}'\2", text, count=1,
             )
-        config_php.write_text(text, encoding="utf-8")
+        write(config_php, text)
 
 
 # ---------------------------------------------------------------------------
@@ -1821,7 +1842,8 @@ def import_laid_out(path: Path, lay_out, *, force: bool = False, replace_own: bo
                     # secret (reused), leave it alone; only rewrite when the
                     # panel changed the password.
                     if not reused:
-                        _update_app_db_config(public, db_name, db_user, db_password)
+                        _update_app_db_config(public, db_name, db_user, db_password,
+                                              root_path=website.root_path, linux_user=website.linux_user)
                     site_users.fix_site_permissions(website.root_path, website.linux_user)
                     item_summary["databases"].append({
                         "domain": domain, "source": str(matched_sql), "db_name": db_name,
